@@ -53,8 +53,10 @@ Assess whether the issue is large before doing anything else. It is large if any
 
    **If the task file has `status: approved`:** skip directly to Step 3.
 
-3. **Create branch**: `gh issue develop $ISSUE_NUMBER -c --base master`
-   Naming convention: `feat/<scope>-<issue-number>` or `fix/<scope>-<issue-number>`.
+3. **Create branch**: Derive the branch name from the issue's conventional commit prefix and number: `feat/<scope>-<issue-number>` or `fix/<scope>-<issue-number>` (e.g. `fix/start-issue-12`). The scope is the parenthetical from the issue title (e.g. `fix(start-issue): ...` → scope is `start-issue`). Then run:
+   ```
+   gh issue develop $ISSUE_NUMBER -c --base master --name <branch-name>
+   ```
    After creating the branch, record the branch name in `.claude/tasks/$ISSUE_NUMBER.md`.
 
 4. **Implement**: Follow the approved plan from `.claude/tasks/$ISSUE_NUMBER.md` (and the corresponding issue comment) step by step. Do not deviate without checking with the user first. Work through acceptance criteria checkboxes, checking each off in the issue body as it passes.
