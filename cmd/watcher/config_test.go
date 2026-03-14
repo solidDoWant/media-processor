@@ -57,11 +57,9 @@ watches:
 			cfg, err := loadConfig(path)
 			errFunc(t, err)
 
-			if err != nil {
-				return
+			if err == nil {
+				assert.Equal(t, tt.expected, *cfg)
 			}
-
-			assert.Equal(t, tt.expected, *cfg)
 		})
 	}
 }

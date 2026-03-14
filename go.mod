@@ -1,6 +1,6 @@
 module github.com/solidDoWant/media-processor
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/hatchet-dev/hatchet v0.79.43
