@@ -30,15 +30,47 @@ Assess whether the issue is large before doing anything else. It is large if any
 6. Label the parent: `gh issue edit $ISSUE_NUMBER --add-label "status:decomposed"`
 7. **Stop.** Present the decomposition to the user for review. Do not implement.
 
-**If small → proceed with steps 1–5 below.**
+**If small → proceed with steps 1–6 below.**
 
 ---
 
-## Steps 1–5: Implementation
+## Steps 1–6: Implementation
 
 1. **Self-assign**: `gh issue edit $ISSUE_NUMBER --add-label "status:in-progress"`. Also remove `status:todo` if it exists.
-2. **Post plan**: Use planning mode to draft a brief implementation plan covering approach, files to change, and how each acceptance criterion will be satisfied. Post it as an issue comment. Write the plan and current state to `.claude/tasks/$ISSUE_NUMBER.md`. Then **stop and ask the user (in the chat) to review the plan and approve it before you proceed**. Do not write any code until the user explicitly approves. On re-invocation, if a plan is already recorded in `.claude/tasks/$ISSUE_NUMBER.md` and no approval is noted, re-present the plan and ask again.
-3. **Create branch**: `gh issue develop $ISSUE_NUMBER -c --base main`
-   Naming convention: `feat/<scope>-<issue-number>` or `fix/<scope>-<issue-number>`.
+
+2. **Post plan**: Use planning mode to draft a brief implementation plan covering approach, files to change, and how each acceptance criterion will be satisfied. Then follow this approval loop:
+
+   **If no plan exists yet in the task file:**
+   - Post the plan as an issue comment.
+   - Write the plan to `.claude/tasks/$ISSUE_NUMBER.md` with `status: pending-approval`.
+   - Stop and ask the user (in the chat) to review the plan. Do not write any code until approved.
+
+   **If a plan exists with `status: pending-approval`:**
+   - Read all issue comments posted after the plan comment.
+   - **Check for explicit approval**: a comment counts as approval only if it clearly and unconditionally says to proceed — e.g. "approved", "lgtm", "looks good, proceed", "go ahead". When in doubt, treat it as feedback, not approval.
+   - If the latest relevant comment is explicit approval (and no subsequent comment adds new feedback): update the task file to `status: approved` and proceed to Step 3.
+   - Otherwise (comment contains questions, change requests, or ambiguous language — or there are no new comments): treat as feedback. Revise the plan to address each piece of feedback, post the revised plan as a **new** issue comment, overwrite the plan in the task file (keeping `status: pending-approval`), and stop — ask the user to review the updated plan.
+
+   **If the task file has `status: approved`:** skip directly to Step 3.
+
+3. **Create branch**: Derive the branch name from the issue's conventional commit prefix and number: `feat/<scope>-<issue-number>` or `fix/<scope>-<issue-number>` (e.g. `fix/start-issue-12`). The scope is the parenthetical from the issue title (e.g. `fix(start-issue): ...` → scope is `start-issue`). Then run:
+   ```
+   gh issue develop $ISSUE_NUMBER -c --base master --name <branch-name>
+   ```
+   After creating the branch, record the branch name in `.claude/tasks/$ISSUE_NUMBER.md`.
+
 4. **Implement**: Follow the approved plan from `.claude/tasks/$ISSUE_NUMBER.md` (and the corresponding issue comment) step by step. Do not deviate without checking with the user first. Work through acceptance criteria checkboxes, checking each off in the issue body as it passes.
+
 5. **Open PR**: `gh pr create -t "<type>(<scope>): <title>" -b "Fixes #$ISSUE_NUMBER"`
+   After creating the PR, record the PR number in `.claude/tasks/$ISSUE_NUMBER.md`.
+
+6. **PR feedback loop**: On re-invocation after a PR is open, check for reviewer feedback:
+   - Look up the PR using the PR number stored in the task file, or via `gh pr list --head <branch> --json number,state`.
+   - Fetch review comments and threads: `gh pr view <PR_NUMBER> --json reviews,comments,reviewThreads`.
+   - For each unresolved review thread or comment that has not yet been replied to by this agent:
+     1. Make the necessary code change(s) to address the comment.
+     2. Commit the change with a descriptive message.
+     3. Reply to the specific thread on the PR using `gh api repos/{owner}/{repo}/pulls/{PR_NUMBER}/comments` with `in_reply_to` set to the comment ID, briefly describing what was changed.
+   - After addressing all comments, push the updated branch.
+   - If all threads are resolved or there are no unaddressed comments, report status to the user and stop.
+   - **On merge**: delete the task file: `rm .claude/tasks/$ISSUE_NUMBER.md`.

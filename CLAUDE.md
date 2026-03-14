@@ -71,3 +71,11 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - When context is running low (watch for token-budget warnings), write current state — progress, decisions, blockers — to `.claude/tasks/$ISSUE_NUMBER.md` before the session ends.
 - Post significant decisions and progress as issue comments so they persist across sessions.
 - Start a fresh session for each new work item rather than continuing across unrelated tasks.
+
+## Task File Lifecycle
+
+Task files (`.claude/tasks/$ISSUE_NUMBER.md`) are local scratch — they are gitignored and must never be committed or pushed.
+
+- **On merge**: delete the task file as the final step of issue closure (`rm .claude/tasks/$ISSUE_NUMBER.md`).
+- **On session start**: if a task file exists for an issue that is already closed/merged, delete it before proceeding.
+- Rationale: task files may contain intermediate state or partial outputs that should not enter repo history.
