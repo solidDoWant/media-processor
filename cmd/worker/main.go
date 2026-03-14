@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -13,13 +14,23 @@ import (
 )
 
 func main() {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := run(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		log.Fatal("HATCHET_CLIENT_TOKEN is not set")
+		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
 
 	client, err := hatchet.NewClient()
 	if err != nil {
-		log.Fatalf("failed to create Hatchet client: %v", err)
+		return fmt.Errorf("create Hatchet client: %w", err)
 	}
 
 	worker, err := client.NewWorker(
@@ -27,15 +38,14 @@ func main() {
 		hatchet.WithWorkflows(workflows.NewPlaceholder(client)),
 	)
 	if err != nil {
-		log.Fatalf("failed to create Hatchet worker: %v", err)
+		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
 	log.Println("connected to Hatchet, starting worker")
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
 	if err := worker.StartBlocking(ctx); err != nil {
-		log.Fatalf("worker stopped with error: %v", err)
+		return fmt.Errorf("worker stopped: %w", err)
 	}
+
+	return nil
 }

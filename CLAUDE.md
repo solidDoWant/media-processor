@@ -3,7 +3,7 @@
 - If you're unsure about a decision, or need more information, stop and ask.
 
 ## Tech Stack
-- Go 1.24, PostgreSQL, Hatchet (workflow orchestration)
+- Go 1.26, PostgreSQL, Hatchet (workflow orchestration)
 - `fsnotify` for filesystem watching; `golangci-lint` for static analysis
 - Nix (flake.nix) for reproducible dev environments
 
@@ -55,6 +55,12 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - **Never mark a task complete** without running the acceptance tests and confirming all pass.
 - Check off each acceptance criterion in the issue body only after the corresponding test passes.
 - When generating acceptance tests: verify observable behavior through public interfaces only. Never mock the component under test. Every test must be capable of failing if the criterion is violated.
+
+## Testing Style
+
+- Use `github.com/stretchr/testify` (`require` and `assert` packages) for all test assertions.
+- Prefer table-driven tests (`tests := []struct{...}`) for cases that share the same logic with varying inputs/outputs.
+- Separate test cases that require fundamentally different setup into their own test functions.
 
 ## Quality Rules
 
