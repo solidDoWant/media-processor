@@ -3,33 +3,43 @@
 - If you're unsure about a decision, or need more information, stop and ask.
 
 ## Tech Stack
-- <!-- e.g. Go 1.22, gRPC, PostgreSQL 16, Redis -->
-- <!-- e.g. Protobuf for service definitions, sqlc for queries -->
+- Go 1.24, PostgreSQL, Hatchet (workflow orchestration)
+- `fsnotify` for filesystem watching; `golangci-lint` for static analysis
+- Nix (flake.nix) for reproducible dev environments
 
 ## Project Structure
 ```
-project-root/
+media-processor/
 ├── CLAUDE.md
 ├── SPEC.md
+├── flake.nix                  # Nix dev environment
+├── Makefile
+├── go.mod
+├── .golangci.yml
 ├── .claude/
 │   ├── settings.json          # Hooks and permission rules
 │   ├── commands/              # Slash commands
 │   └── tasks/                 # Per-issue working files (gitignored)
 ├── .github/
 │   └── ISSUE_TEMPLATE/
-├── pkg/lib/                   # Shared library
-├── services/
-│   ├── service-a/
-│   └── service-b/
-└── docs/
+├── cmd/
+│   ├── watcher/               # fsnotify + Hatchet job submission binary
+│   └── worker/                # Hatchet worker + workflow handlers binary
+├── pkg/
+│   ├── ffmpeg/                # ffmpeg CLI wrapper
+│   ├── ffprobe/               # ffprobe CLI wrapper
+│   ├── medialib/              # Higher-level media processing abstractions
+│   └── webhook/               # Inbound webhook HTTP handler utilities
+├── workflows/                 # Hatchet workflow definitions
+└── deploy/
+    └── k8s/                   # Kubernetes manifests
 ```
-<!-- Replace the above with your actual directory layout. -->
 
 ## Commands
-- Build: `<!-- e.g. make build -->`
-- Test: `<!-- e.g. go test ./... -race -count=1 -->`
-- Lint: `<!-- e.g. golangci-lint run -->`
-- Other: `<!-- e.g. make proto -->`
+- Build: `make build` (outputs `bin/watcher` and `bin/worker`)
+- Test: `make test`
+- Lint: `make lint`
+- Fmt: `make fmt`
 
 ## Acceptance Criteria Rules
 
