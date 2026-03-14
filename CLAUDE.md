@@ -41,6 +41,13 @@ media-processor/
 - Lint: `make lint`
 - Fmt: `make fmt`
 
+## Dev Tools
+
+All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If a tool is missing from `PATH`:
+
+- **Normal environments**: run `nix develop` to enter the dev shell. If nix is also unavailable, stop and inform the user — do not attempt to install tools manually.
+- **Isolated dev environment** (current user is `coder`): you may install missing tools directly or update `flake.nix` as needed without asking the user first.
+
 ## Acceptance Criteria Rules
 
 - Acceptance criteria use Given/When/Then format and describe observable behavior, not implementation details.
