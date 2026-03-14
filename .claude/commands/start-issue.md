@@ -38,7 +38,7 @@ Assess whether the issue is large before doing anything else. It is large if any
 
 1. **Self-assign**: `gh issue edit $ISSUE_NUMBER --add-label "status:in-progress"`. Also remove `status:todo` if it exists.
 
-2. **Post plan**: Use planning mode to draft a brief implementation plan covering approach, files to change, and how each acceptance criterion will be satisfied. Then follow this approval loop:
+2. **Post plan**: Draft a brief written implementation plan covering: approach, files to change, and how each acceptance criterion will be satisfied. Do not use plan mode or take any action yet — just think and write. Then follow this approval loop:
 
    **If no plan exists yet in the task file:**
    - Post the plan as an issue comment.
