@@ -38,7 +38,7 @@ Assess whether the issue is large before doing anything else. It is large if any
 
 1. **Self-assign**: `gh issue edit $ISSUE_NUMBER --add-label "status:in-progress"`. Also remove `status:todo` if it exists.
 2. **Post plan**: Use planning mode to draft a brief implementation plan covering approach, files to change, and how each acceptance criterion will be satisfied. Post it as an issue comment. Write the plan and current state to `.claude/tasks/$ISSUE_NUMBER.md`. Then **stop and ask the user (in the chat) to review the plan and approve it before you proceed**. Do not write any code until the user explicitly approves. On re-invocation, if a plan is already recorded in `.claude/tasks/$ISSUE_NUMBER.md` and no approval is noted, re-present the plan and ask again.
-3. **Create branch**: `gh issue develop $ISSUE_NUMBER -c --base main`
+3. **Create branch**: `gh issue develop $ISSUE_NUMBER -c --base master`
    Naming convention: `feat/<scope>-<issue-number>` or `fix/<scope>-<issue-number>`.
 4. **Implement**: Follow the approved plan from `.claude/tasks/$ISSUE_NUMBER.md` (and the corresponding issue comment) step by step. Do not deviate without checking with the user first. Work through acceptance criteria checkboxes, checking each off in the issue body as it passes.
 5. **Open PR**: `gh pr create -t "<type>(<scope>): <title>" -b "Fixes #$ISSUE_NUMBER"`
