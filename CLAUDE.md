@@ -1,3 +1,7 @@
+## Things to remember
+- If you hit a wall that can reasonably easily be solved by a human, stop and inform them.
+- If you're unsure about a decision, or need more information, stop and ask.
+
 ## Tech Stack
 - <!-- e.g. Go 1.22, gRPC, PostgreSQL 16, Redis -->
 - <!-- e.g. Protobuf for service definitions, sqlc for queries -->
