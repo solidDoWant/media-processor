@@ -48,3 +48,43 @@ $(BIN_DIR)/worker: $(GO_SOURCE_FILES)
 
 .PHONY: build
 build: $(BIN_DIR)/watcher $(BIN_DIR)/worker ## Build all binaries.
+
+##@ Local Dev
+
+HATCHET_ENV_FILE := .env.hatchet
+
+.PHONY: hatchet-up
+hatchet-up: ## Start Hatchet local dev server and generate API token (written to .env.hatchet).
+	docker compose up -d
+	@echo "Waiting for Hatchet setup-config to complete..."
+	@docker compose wait setup-config
+	@if [ ! -f $(HATCHET_ENV_FILE) ]; then $(MAKE) hatchet-token; fi
+	@echo "Hatchet is ready. Dashboard: http://localhost:8080 (admin@example.com / Admin123!!)"
+	@echo "Run 'source $(HATCHET_ENV_FILE)' to load HATCHET_CLIENT_TOKEN into your current shell."
+
+.PHONY: hatchet-down
+hatchet-down: ## Stop Hatchet local dev server.
+	docker compose down
+
+.PHONY: hatchet-token
+hatchet-token: ## Generate a new Hatchet API token and write it to .env.hatchet.
+	@echo "Generating Hatchet API token..."
+	@TENANT_ID=$$(docker compose exec -T postgres \
+		psql -U hatchet -d hatchet -t -c \
+		"SELECT id FROM \"Tenant\" WHERE slug = 'default' LIMIT 1" \
+		2>/dev/null | tr -d ' \n'); \
+	if [ -z "$$TENANT_ID" ]; then \
+		echo "Error: could not query tenant ID — is Hatchet running? Try: make hatchet-up" >&2; \
+		exit 1; \
+	fi; \
+	TOKEN=$$(docker compose run --no-deps --rm -T setup-config \
+		/hatchet/hatchet-admin token create \
+		--config /hatchet/config \
+		--tenant-id "$$TENANT_ID" \
+		2>/dev/null | tr -d '\r\n'); \
+	if [ -z "$$TOKEN" ]; then \
+		echo "Error: token generation failed" >&2; \
+		exit 1; \
+	fi; \
+	printf 'HATCHET_CLIENT_TOKEN=%s\n' "$$TOKEN" > $(HATCHET_ENV_FILE); \
+	echo "Token written to $(HATCHET_ENV_FILE)"
