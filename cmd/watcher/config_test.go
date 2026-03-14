@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadConfig covers AC3 (valid config loads without error) and
-// AC4 (invalid/missing config causes a descriptive error).
+// TestLoadConfig verifies that the watcher correctly parses its YAML config file,
+// loading directory-to-workflow mappings for valid input and returning a descriptive
+// error for invalid or missing files.
 func TestLoadConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		content   string     // empty string → missing file test
-		wantErr   bool
-		wantLen   int
-		wantFirst WatchEntry
+		name     string
+		content  string
+		errFunc  require.ErrorAssertionFunc // defaults to require.NoError
+		expected Config
 	}{
 		{
 			name: "valid config with two entries",
@@ -30,13 +30,17 @@ watches:
   - path: /watch/shows
     workflow: ShowWorkflow
 `,
-			wantLen:   2,
-			wantFirst: WatchEntry{Path: "/watch/movies", Workflow: "MovieWorkflow"},
+			expected: Config{
+				Watches: []WatchEntry{
+					{Path: "/watch/movies", Workflow: "MovieWorkflow"},
+					{Path: "/watch/shows", Workflow: "ShowWorkflow"},
+				},
+			},
 		},
 		{
-			name:    "invalid YAML",
+			name:    "invalid YAML returns error",
 			content: "{ this is: [not valid yaml",
-			wantErr: true,
+			errFunc: require.Error,
 		},
 	}
 
@@ -44,27 +48,27 @@ watches:
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			errFunc := tt.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
 			path := writeTempConfig(t, tt.content)
-
 			cfg, err := loadConfig(path)
+			errFunc(t, err)
 
-			if tt.wantErr {
-				require.Error(t, err)
+			if err != nil {
 				return
 			}
 
-			require.NoError(t, err)
-			assert.Len(t, cfg.Watches, tt.wantLen)
-			if tt.wantLen > 0 {
-				assert.Equal(t, tt.wantFirst, cfg.Watches[0])
-			}
+			assert.Equal(t, tt.expected, *cfg)
 		})
 	}
 }
 
+// TestLoadConfig_MissingFile verifies that loadConfig returns a descriptive error
+// when the specified config file does not exist.
 func TestLoadConfig_MissingFile(t *testing.T) {
-	t.Parallel()
-	// AC4: missing file path → descriptive error.
 	_, err := loadConfig("/nonexistent/path/config.yaml")
 	require.Error(t, err)
 }

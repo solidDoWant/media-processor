@@ -60,7 +60,11 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 
 - Use `github.com/stretchr/testify` (`require` and `assert` packages) for all test assertions.
 - Prefer table-driven tests (`tests := []struct{...}`) for cases that share the same logic with varying inputs/outputs.
+- In table test structs, use `require.ErrorAssertionFunc` (e.g. `errFunc require.ErrorAssertionFunc`) for the error check field. Default it to `require.NoError` inside the loop when nil. This allows setting it to `require.Error` or `assert.Error` per case without a `wantErr bool`.
+- For non-error fields in table tests, use the concrete expected type (e.g. `expected Config`) and assert with `assert.Equal`.
+- Do not reference acceptance criteria IDs (e.g. "AC3", "AC4") in test comments or names — they are only meaningful within the issue/PR context. Write descriptions of the actual behavior being verified instead.
 - Separate test cases that require fundamentally different setup into their own test functions.
+- Integration tests that require external services (e.g. a running Hatchet server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
 
 ## Quality Rules
 

@@ -1,25 +1,20 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestRun_MissingToken covers AC5: given HATCHET_CLIENT_TOKEN is not set,
-// when mediaprocessor-watcher starts, it exits non-zero with a descriptive error.
+// TestRun_MissingToken verifies that the watcher exits with a descriptive error
+// when HATCHET_CLIENT_TOKEN is not set, even when the config file is valid.
 func TestRun_MissingToken(t *testing.T) {
 	t.Setenv("HATCHET_CLIENT_TOKEN", "")
 
-	// Provide a valid config so the error is specifically about the missing token.
-	cfgPath := writeTempConfig(t, `watches:
-  - path: /watch/movies
-    workflow: MovieWorkflow
-`)
+	cfgPath := writeTempConfig(t, "watches: []")
 
-	err := run(context.Background(), cfgPath)
+	err := run(t.Context(), cfgPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HATCHET_CLIENT_TOKEN")
 }

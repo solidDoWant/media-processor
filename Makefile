@@ -28,6 +28,10 @@ vet: ## Run go vet against code.
 test: fmt vet ## Run tests.
 	go test -race -count=1 ./...
 
+.PHONY: test-integration
+test-integration: hatchet-up ## Run integration tests against a local Hatchet server (starts server, generates token).
+	env $$(cat $(HATCHET_ENV_FILE)) go test -v -race -count=1 -tags=integration ./...
+
 .PHONY: lint
 lint: ## Run golangci-lint.
 	golangci-lint run ./...
