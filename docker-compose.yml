@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15.6
+    image: postgres:18
     command: postgres -c 'max_connections=1000'
     restart: always
     hostname: postgres
@@ -75,6 +75,10 @@ services:
         condition: service_completed_successfully
 
   hatchet-dashboard:
+    # Default admin credentials (created by setup-config quickstart):
+    #   URL:      http://localhost:8080
+    #   Email:    admin@example.com
+    #   Password: Admin123!!
     image: ghcr.io/hatchet-dev/hatchet/hatchet-dashboard:latest
     command: sh ./entrypoint.sh --config /hatchet/config
     restart: on-failure
