@@ -42,6 +42,9 @@ lint-fix: ## Run golangci-lint and perform fixes.
 
 ##@ Build
 
+# Note: CGO is required. FFmpeg 8 development headers must be available via pkg-config.
+# Run 'nix develop' to enter the dev shell with all required dependencies.
+
 $(BIN_DIR)/watcher: $(GO_SOURCE_FILES)
 	@mkdir -p "$(BIN_DIR)"
 	go build -o "$@" ./cmd/watcher

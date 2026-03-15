@@ -18,6 +18,11 @@
             pkgs.gnumake
             pkgs.docker
             pkgs.docker-compose
+            pkgs.pkg-config
+            pkgs.ffmpeg
+          ];
+          buildInputs = [
+            pkgs.ffmpeg.dev
           ];
           shellHook = ''
             if [ -f .env.hatchet ]; then
