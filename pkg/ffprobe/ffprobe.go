@@ -10,40 +10,58 @@ import (
 	"github.com/asticode/go-astiav"
 )
 
-// MediaInfo holds the top-level metadata for a media container.
+// CodecType identifies the kind of media carried by a stream.
+type CodecType string
+
+const (
+	CodecTypeUnknown    CodecType = ""
+	CodecTypeVideo      CodecType = "video"
+	CodecTypeAudio      CodecType = "audio"
+	CodecTypeData       CodecType = "data"
+	CodecTypeSubtitle   CodecType = "subtitle"
+	CodecTypeAttachment CodecType = "attachment"
+)
+
+// MediaInfo holds top-level metadata for a media container.
 type MediaInfo struct {
-	Format   string
-	Duration time.Duration
-	BitRate  int64
-	Streams  []StreamInfo
+	Format               string
+	Duration             time.Duration
+	BitRateBitsPerSecond int64
+	Tags                 map[string]string
+	Streams              []StreamInfo
 }
 
 // StreamInfo holds per-stream metadata.
 type StreamInfo struct {
-	CodecName string
-	CodecType string  // "video", "audio", "subtitle", etc.
-	Width     int     // non-zero for video streams
-	Height    int     // non-zero for video streams
-	FrameRate float64 // non-zero for video streams
+	CodecName            string
+	CodecType            CodecType
+	BitRateBitsPerSecond int64
+	// Video-only fields (zero for non-video streams).
+	WidthPixels     int
+	HeightPixels    int
+	FramesPerSecond float64
+	// Audio-only fields (zero for non-audio streams).
+	AudioSampleRateHz int
+	AudioChannelCount int
 }
 
 // Probe opens the media file at path, reads its container and stream metadata,
 // and returns a populated MediaInfo. It returns a non-nil error if the file
 // does not exist, is not a recognized media format, or if ctx is cancelled.
-func Probe(ctx context.Context, path string) (MediaInfo, error) {
+func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 	// Allocate format context.
-	fc := astiav.AllocFormatContext()
-	if fc == nil {
-		return MediaInfo{}, errors.New("ffprobe: failed to allocate format context")
+	formatContext := astiav.AllocFormatContext()
+	if formatContext == nil {
+		return nil, errors.New("ffprobe: failed to allocate format context")
 	}
-	defer fc.Free()
+	defer formatContext.Free()
 
 	// Set up IO interrupter so FFmpeg respects context cancellation.
+	// Free() is called from the goroutine after it exits to avoid a race
+	// between Interrupt() and Free().
 	interrupter := astiav.NewIOInterrupter()
-	defer interrupter.Free()
-	fc.SetIOInterrupter(interrupter)
+	formatContext.SetIOInterrupter(interrupter)
 
-	// Watch for context cancellation in the background.
 	watchDone := make(chan struct{})
 	defer close(watchDone)
 	go func() {
@@ -52,52 +70,73 @@ func Probe(ctx context.Context, path string) (MediaInfo, error) {
 			interrupter.Interrupt()
 		case <-watchDone:
 		}
+		interrupter.Free()
 	}()
 
-	// Bail early if context is already cancelled.
-	if err := ctx.Err(); err != nil {
-		return MediaInfo{}, err
-	}
-
 	// Open input file.
-	if err := fc.OpenInput(path, nil, nil); err != nil {
+	if err := formatContext.OpenInput(path, nil, nil); err != nil {
 		if interrupter.Interrupted() {
-			return MediaInfo{}, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return MediaInfo{}, fmt.Errorf("ffprobe: opening %q: %w", path, err)
+		return nil, fmt.Errorf("ffprobe: opening %q: %w", path, err)
 	}
-	defer fc.CloseInput()
+	defer formatContext.CloseInput()
 
 	// Populate stream info from container headers.
-	if err := fc.FindStreamInfo(nil); err != nil {
+	if err := formatContext.FindStreamInfo(nil); err != nil {
 		if interrupter.Interrupted() {
-			return MediaInfo{}, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return MediaInfo{}, fmt.Errorf("ffprobe: finding stream info for %q: %w", path, err)
+		return nil, fmt.Errorf("ffprobe: finding stream info for %q: %w", path, err)
 	}
 
 	info := MediaInfo{
-		Duration: time.Duration(fc.Duration()) * time.Microsecond,
-		BitRate:  fc.BitRate(),
+		Duration:             time.Duration(formatContext.Duration()) * time.Microsecond,
+		BitRateBitsPerSecond: formatContext.BitRate(),
+		Tags:                 dictionaryToMap(formatContext.Metadata()),
 	}
 
-	if f := fc.InputFormat(); f != nil {
-		info.Format = f.Name()
+	if inputFormat := formatContext.InputFormat(); inputFormat != nil {
+		info.Format = inputFormat.Name()
 	}
 
-	for _, s := range fc.Streams() {
-		cp := s.CodecParameters()
-		si := StreamInfo{
-			CodecName: cp.CodecID().Name(),
-			CodecType: cp.MediaType().String(),
+	for _, stream := range formatContext.Streams() {
+		codecParams := stream.CodecParameters()
+		streamInfo := StreamInfo{
+			CodecName:            codecParams.CodecID().Name(),
+			CodecType:            CodecType(codecParams.MediaType().String()),
+			BitRateBitsPerSecond: codecParams.BitRate(),
 		}
-		if cp.MediaType() == astiav.MediaTypeVideo {
-			si.Width = cp.Width()
-			si.Height = cp.Height()
-			si.FrameRate = s.AvgFrameRate().Float64()
+		switch codecParams.MediaType() {
+		case astiav.MediaTypeVideo:
+			streamInfo.WidthPixels = codecParams.Width()
+			streamInfo.HeightPixels = codecParams.Height()
+			streamInfo.FramesPerSecond = stream.AvgFrameRate().Float64()
+		case astiav.MediaTypeAudio:
+			streamInfo.AudioSampleRateHz = codecParams.SampleRate()
+			streamInfo.AudioChannelCount = codecParams.ChannelLayout().Channels()
 		}
-		info.Streams = append(info.Streams, si)
+		info.Streams = append(info.Streams, streamInfo)
 	}
 
-	return info, nil
+	return &info, nil
+}
+
+// dictionaryToMap converts an astiav Dictionary into a Go map. Returns nil if
+// the dictionary is nil.
+func dictionaryToMap(dict *astiav.Dictionary) map[string]string {
+	if dict == nil {
+		return nil
+	}
+	result := make(map[string]string)
+	var prev *astiav.DictionaryEntry
+	for {
+		entry := dict.Get("", prev, astiav.NewDictionaryFlags(astiav.DictionaryFlagIgnoreSuffix))
+		if entry == nil {
+			break
+		}
+		result[entry.Key()] = entry.Value()
+		prev = entry
+	}
+	return result
 }
