@@ -1,9 +1,10 @@
 ## Things to remember
 - If you hit a wall that can reasonably easily be solved by a human, stop and inform them.
 - If you're unsure about a decision, or need more information, stop and ask.
+- **When skipping a verification step** (e.g. tests that can't run in this environment): always post a specific, actionable explanation — name the exact constraint (e.g. "Docker daemon can't start: iptables unavailable in nested container") and what the human needs to do to unblock it. Never silently skip without explaining why.
 
 ## Tech Stack
-- Go 1.24, PostgreSQL, Hatchet (workflow orchestration)
+- Go 1.26, PostgreSQL, Hatchet (workflow orchestration)
 - `fsnotify` for filesystem watching; `golangci-lint` for static analysis
 - Nix (flake.nix) for reproducible dev environments
 
@@ -55,6 +56,16 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - **Never mark a task complete** without running the acceptance tests and confirming all pass.
 - Check off each acceptance criterion in the issue body only after the corresponding test passes.
 - When generating acceptance tests: verify observable behavior through public interfaces only. Never mock the component under test. Every test must be capable of failing if the criterion is violated.
+
+## Testing Style
+
+- Use `github.com/stretchr/testify` (`require` and `assert` packages) for all test assertions.
+- Prefer table-driven tests (`tests := []struct{...}`) for cases that share the same logic with varying inputs/outputs.
+- In table test structs, use `require.ErrorAssertionFunc` (e.g. `errFunc require.ErrorAssertionFunc`) for the error check field. Default it to `require.NoError` inside the loop when nil. This allows setting it to `require.Error` or `assert.Error` per case without a `wantErr bool`.
+- For non-error fields in table tests, use the concrete expected type (e.g. `expected Config`) and assert with `assert.Equal`.
+- Do not reference acceptance criteria IDs (e.g. "AC3", "AC4") in test comments or names — they are only meaningful within the issue/PR context. Write descriptions of the actual behavior being verified instead.
+- Separate test cases that require fundamentally different setup into their own test functions.
+- Integration tests that require external services (e.g. a running Hatchet server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
 
 ## Quality Rules
 
