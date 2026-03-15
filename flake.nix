@@ -26,23 +26,22 @@
             fi
 
             # Start Docker daemon if not already running
-            if ! docker info &>/dev/null 2>&1; then
+            DOCKER_SOCK="$HOME/.docker.sock"
+            export DOCKER_HOST="unix://$DOCKER_SOCK"
+            if [ ! -S "$DOCKER_SOCK" ]; then
               echo "Docker daemon not running — starting dockerd..."
-              sudo mkdir -p /tmp/docker-nix
-              sudo chown root:997 /tmp/docker-nix
-              sudo chmod 775 /tmp/docker-nix
-              sudo sh -c 'dockerd --data-root /tmp/docker-nix &>/tmp/docker-nix/dockerd.log &'
-              # Wait up to 10 seconds for the daemon to become ready
+              sudo sh -c "dockerd --data-root $HOME/.docker-data --host unix://$DOCKER_SOCK --storage-driver vfs &>$HOME/.dockerd.log &"
               for i in $(seq 1 10); do
-                if docker info &>/dev/null 2>&1; then
-                  echo "Docker daemon started."
-                  break
-                fi
+                [ -S "$DOCKER_SOCK" ] && break
                 sleep 1
               done
-              if ! docker info &>/dev/null 2>&1; then
-                echo "Warning: Docker daemon did not start in time. Check /tmp/docker-nix/dockerd.log for details." >&2
+              if [ ! -S "$DOCKER_SOCK" ]; then
+                echo "Warning: Docker daemon did not start in time. Check $HOME/.dockerd.log for details." >&2
               fi
+            fi
+            # Ensure socket is accessible by current user
+            if [ -S "$DOCKER_SOCK" ]; then
+              sudo chmod 666 "$DOCKER_SOCK"
             fi
           '';
         };
