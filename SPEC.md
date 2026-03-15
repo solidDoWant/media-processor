@@ -8,6 +8,7 @@
 | Workflow orchestration | [Hatchet](https://hatchet.run) |
 | Database | PostgreSQL |
 | Filesystem watching | `fsnotify` |
+| Media processing | `github.com/asticode/go-astiav` (FFmpeg 8 Cgo bindings) |
 | Static analysis | `golangci-lint` |
 | Dev environment | Nix (flake.nix) |
 
@@ -37,18 +38,18 @@ Responsibilities:
 
 ### `pkg/ffmpeg`
 
-Wraps invocation of the `ffmpeg` command-line tool.
+Wraps `libavcodec`, `libavformat`, and related libraries via `github.com/asticode/go-astiav` for in-process media transcoding.
 
-- Accepts an arbitrary argument list and an optional working directory
-- Returns combined stdout/stderr output and exit code
-- Does not interpret output — callers are responsible for parsing
+- Exposes a builder API: `NewTranscode(in, out).VideoCodec(...).AudioCodec(...).Container(...).HardwareAccel(...).Build().Run(ctx)`
+- Hardware encoder availability is determined in-process via `astiav.FindEncoderByName` — no subprocess probe
+- No external binary required; CGO must be enabled and FFmpeg 8 shared libraries must be present at runtime
 
 ### `pkg/ffprobe`
 
-Wraps invocation of the `ffprobe` command-line tool for media file inspection.
+Wraps `libavformat` and `libavcodec` via `github.com/asticode/go-astiav` for in-process media file inspection.
 
-- Accepts a file path and returns structured metadata (codec, duration, streams, etc.)
-- Output is parsed from ffprobe's JSON mode
+- Accepts a file path and context; returns structured `MediaInfo` (container format, duration, overall bitrate, streams)
+- No external binary required; context cancellation is honoured via `astiav.IOInterrupter`
 
 ### `pkg/medialib`
 
