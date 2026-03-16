@@ -1,15 +1,19 @@
 package ffmpeg
 
-// Codec identifies an output video or audio codec.
-type Codec string
+import "github.com/asticode/go-astiav"
+
+// Codec is an alias for astiav.CodecID, identifying a video or audio codec.
+// Using a type alias keeps Codec values directly usable in libavcodec calls
+// without explicit conversions.
+type Codec = astiav.CodecID
 
 const (
 	// CodecH264 encodes video as H.264 (libx264 for software, or hardware variant).
-	CodecH264 Codec = "h264"
+	CodecH264 Codec = astiav.CodecIDH264
 	// CodecH265 encodes video as H.265/HEVC (libx265 for software, or hardware variant).
-	CodecH265 Codec = "hevc"
+	CodecH265 Codec = astiav.CodecIDH265
 	// CodecCopy copies the stream without re-encoding.
-	CodecCopy Codec = "copy"
+	CodecCopy Codec = astiav.CodecIDNone
 )
 
 // Container identifies an output container format.

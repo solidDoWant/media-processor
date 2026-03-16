@@ -87,28 +87,16 @@ var hwProfiles = map[HWAccel]hwProfile{
 	},
 }
 
-// codecToCodecID converts an output Codec to the corresponding astiav.CodecID.
-// Returns astiav.CodecIDNone for codecs with no direct mapping (e.g. CodecCopy).
-func codecToCodecID(codec Codec) astiav.CodecID {
-	switch codec {
-	case CodecH264:
-		return astiav.CodecIDH264
-	case CodecH265:
-		return astiav.CodecIDH265
-	}
-	return astiav.CodecIDNone
-}
-
-// hwEncoderNameForCodec returns the hardware encoder name for the given output
-// Codec in the given hardware profile. Returns "" if the codec has no HW
-// encoder in this profile.
+// hwEncoderNameForCodec returns the hardware encoder name for the given codec
+// in the given hardware profile. Returns "" if the codec has no HW encoder in
+// this profile.
 func hwEncoderNameForCodec(codec Codec, p hwProfile) string {
-	return p.encoders[codecToCodecID(codec)]
+	return p.encoders[codec]
 }
 
-// hwDecoderNameForCodecID returns the hardware decoder name for the given
-// codec ID in the given hardware profile. Returns "" if the codec has no HW
-// decoder in this profile.
-func hwDecoderNameForCodecID(codecID astiav.CodecID, p hwProfile) string {
-	return p.decoders[codecID]
+// hwDecoderNameForCodec returns the hardware decoder name for the given codec
+// in the given hardware profile. Returns "" if the codec has no HW decoder in
+// this profile.
+func hwDecoderNameForCodec(codec Codec, p hwProfile) string {
+	return p.decoders[codec]
 }

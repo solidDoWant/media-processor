@@ -137,7 +137,7 @@ func (t *Transcoder) resolveHWAccel() HWAccel {
 	if t.hwAccel != HWAccelAuto {
 		return t.hwAccel
 	}
-	return GetHardwareEncoder(t.videoCodec, HWAccelNone)
+	return GetHardwareEncoder(t.videoCodec, HWAccelAuto)
 }
 
 // openInputContext opens the input file and arms the IOInterrupter so that a
@@ -204,19 +204,19 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		var s stream
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			vs := &videoStreamState{copyStreamState: base, outputCodec: t.videoCodec}
-			if err := vs.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
+			videoState := &videoStreamState{copyStreamState: base, outputCodec: t.videoCodec}
+			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
-			s = vs
+			s = videoState
 		case mediaType == astiav.MediaTypeAudio && t.audioCodec != CodecCopy:
-			as := &audioStreamState{copyStreamState: base, outputCodec: t.audioCodec}
-			if err := as.setupDecoder(inStream); err != nil {
+			audioState := &audioStreamState{copyStreamState: base, outputCodec: t.audioCodec}
+			if err := audioState.setupDecoder(inStream); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
-			s = as
+			s = audioState
 		default:
 			s = &copyStreamState{inStream: inStream}
 		}

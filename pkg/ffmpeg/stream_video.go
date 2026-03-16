@@ -94,7 +94,7 @@ func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astia
 	var codec *astiav.Codec
 
 	if profile, ok := hwProfiles[hwAccel]; ok {
-		hwDecName := hwDecoderNameForCodecID(inStream.CodecParameters().CodecID(), profile)
+		hwDecName := hwDecoderNameForCodec(inStream.CodecParameters().CodecID(), profile)
 		if hwDecName != "" {
 			if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
 				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
@@ -188,7 +188,8 @@ func (s *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.Forma
 // selectVideoEncoder chooses a hardware or software encoder. On hardware
 // selection failure it transparently falls back to software.
 func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
-	if p, hasProfile := hwProfiles[hwAccel]; hasProfile {
+	effective := GetHardwareEncoder(s.outputCodec, hwAccel)
+	if p, hasProfile := hwProfiles[effective]; hasProfile {
 		hwEncName := hwEncoderNameForCodec(s.outputCodec, p)
 		if hwEncName != "" && astiav.FindEncoderByName(hwEncName) != nil {
 			// Reuse the hardware device context from the HW decoder if one was
@@ -216,16 +217,9 @@ func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Code
 	// Software fallback: only unreachable if libavcodec was compiled without the
 	// requested encoder (e.g. without libx264/libx265), which should not occur
 	// in normal deployments but is checked here as a safety net.
-	switch s.outputCodec {
-	case CodecH264:
-		enc = astiav.FindEncoder(astiav.CodecIDH264)
-	case CodecH265:
-		enc = astiav.FindEncoder(astiav.CodecIDH265)
-	default:
-		return nil, hwProfile{}, false, fmt.Errorf("unsupported video codec: %s", s.outputCodec)
-	}
+	enc = astiav.FindEncoder(s.outputCodec)
 	if enc == nil {
-		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %s", s.outputCodec)
+		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %v", s.outputCodec)
 	}
 
 	return enc, hwProfile{}, false, nil
