@@ -48,8 +48,9 @@ func TestTranscode_H265_MKV(t *testing.T) {
 }
 
 // TestTranscode_DefaultSettings verifies that calling NewTranscode with no
-// additional options (copy-all defaults) produces a valid output whose codec
-// and stream properties match the input file.
+// additional options (copy-all defaults) produces a valid output whose codec,
+// resolution, frame rate, sample rate, channel count, and bitrate all match
+// the input file.
 func TestTranscode_DefaultSettings(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mp4")
 
@@ -67,18 +68,33 @@ func TestTranscode_DefaultSettings(t *testing.T) {
 	outputInfo, err := ffprobe.Probe(t.Context(), output)
 	require.NoError(t, err)
 
-	// The output should have the same number of streams as the input.
-	assert.Equal(t, len(inputInfo.Streams), len(outputInfo.Streams), "stream count must match")
+	require.Equal(t, len(inputInfo.Streams), len(outputInfo.Streams), "stream count must match")
 
-	// Each output stream should have the same codec as the corresponding input stream.
 	for i, inStream := range inputInfo.Streams {
-		if i >= len(outputInfo.Streams) {
-			break
+		outStream := outputInfo.Streams[i]
+
+		assert.Equal(t, inStream.CodecName, outStream.CodecName,
+			"stream %d: codec name must match", i)
+		assert.Equal(t, inStream.CodecType, outStream.CodecType,
+			"stream %d: codec type must match", i)
+		assert.Equal(t, inStream.BitsPerSecond, outStream.BitsPerSecond,
+			"stream %d: bitrate must match", i)
+
+		if inStream.CodecType == ffprobe.CodecTypeVideo {
+			assert.Equal(t, inStream.WidthPixels, outStream.WidthPixels,
+				"stream %d: width must match", i)
+			assert.Equal(t, inStream.HeightPixels, outStream.HeightPixels,
+				"stream %d: height must match", i)
+			assert.InDelta(t, inStream.FramesPerSecond, outStream.FramesPerSecond, 0.01,
+				"stream %d: frame rate must match", i)
 		}
-		assert.Equal(t, inStream.CodecName, outputInfo.Streams[i].CodecName,
-			"stream %d codec must match input", i)
-		assert.Equal(t, inStream.CodecType, outputInfo.Streams[i].CodecType,
-			"stream %d codec type must match input", i)
+
+		if inStream.CodecType == ffprobe.CodecTypeAudio {
+			assert.Equal(t, inStream.AudioSampleRateHz, outStream.AudioSampleRateHz,
+				"stream %d: audio sample rate must match", i)
+			assert.Equal(t, inStream.AudioChannelCount, outStream.AudioChannelCount,
+				"stream %d: audio channel count must match", i)
+		}
 	}
 }
 
