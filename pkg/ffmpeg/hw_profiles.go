@@ -8,10 +8,10 @@ import "github.com/asticode/go-astiav"
 // changing the struct definition.
 type hwProfile struct {
 	deviceType astiav.HardwareDeviceType
-	hwPixFmt   astiav.PixelFormat            // pixel format used inside the hardware
-	swPixFmt   astiav.PixelFormat            // software pixel format for upload/download (e.g. NV12)
-	encoders   map[astiav.CodecID]string     // codec ID → hardware encoder name
-	decoders   map[astiav.CodecID]string     // codec ID → hardware decoder name
+	hwPixFmt   astiav.PixelFormat        // pixel format used inside the hardware
+	swPixFmt   astiav.PixelFormat        // software pixel format for upload/download (e.g. NV12)
+	encoders   map[astiav.CodecID]string // codec ID → hardware encoder name
+	decoders   map[astiav.CodecID]string // codec ID → hardware decoder name
 }
 
 // hwAccelPriority defines the order in which hardware accelerators are
