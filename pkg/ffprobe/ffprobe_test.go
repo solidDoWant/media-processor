@@ -21,7 +21,7 @@ func TestProbe_ValidFile(t *testing.T) {
 	// (first ~5s of Big Buck Bunny, re-encoded at 320x180).
 	assert.Equal(t, "mov,mp4,m4a,3gp,3g2,mj2", info.Format)
 	assert.Equal(t, 5013333*time.Microsecond, info.Duration)
-	assert.Equal(t, int64(607664), info.BitRateBitsPerSecond)
+	assert.Equal(t, int64(607664), info.BitsPerSecond)
 
 	// Container tags.
 	assert.Equal(t, "Big Buck Bunny", info.Tags["title"])
@@ -33,7 +33,7 @@ func TestProbe_ValidFile(t *testing.T) {
 	video := info.Streams[0]
 	assert.Equal(t, "h264", video.CodecName)
 	assert.Equal(t, ffprobe.CodecTypeVideo, video.CodecType)
-	assert.Equal(t, int64(441324), video.BitRateBitsPerSecond)
+	assert.Equal(t, int64(441324), video.BitsPerSecond)
 	assert.Equal(t, 320, video.WidthPixels)
 	assert.Equal(t, 180, video.HeightPixels)
 	assert.Equal(t, 24.0, video.FramesPerSecond)
@@ -43,7 +43,7 @@ func TestProbe_ValidFile(t *testing.T) {
 	audio := info.Streams[1]
 	assert.Equal(t, "aac", audio.CodecName)
 	assert.Equal(t, ffprobe.CodecTypeAudio, audio.CodecType)
-	assert.Equal(t, int64(161052), audio.BitRateBitsPerSecond)
+	assert.Equal(t, int64(161052), audio.BitsPerSecond)
 	assert.Zero(t, audio.WidthPixels)
 	assert.Zero(t, audio.HeightPixels)
 	assert.Zero(t, audio.FramesPerSecond)

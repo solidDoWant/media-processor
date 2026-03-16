@@ -24,18 +24,18 @@ const (
 
 // MediaInfo holds top-level metadata for a media container.
 type MediaInfo struct {
-	Format               string
-	Duration             time.Duration
-	BitRateBitsPerSecond int64
-	Tags                 map[string]string
-	Streams              []StreamInfo
+	Format        string
+	Duration      time.Duration
+	BitsPerSecond int64
+	Tags          map[string]string
+	Streams       []StreamInfo
 }
 
 // StreamInfo holds per-stream metadata.
 type StreamInfo struct {
-	CodecName            string
-	CodecType            CodecType
-	BitRateBitsPerSecond int64
+	CodecName     string
+	CodecType     CodecType
+	BitsPerSecond int64
 	// Video-only fields (zero for non-video streams).
 	WidthPixels     int
 	HeightPixels    int
@@ -90,10 +90,10 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 		return nil, fmt.Errorf("ffprobe: finding stream info for %q: %w", path, err)
 	}
 
-	info := MediaInfo{
-		Duration:             time.Duration(formatContext.Duration()) * time.Microsecond,
-		BitRateBitsPerSecond: formatContext.BitRate(),
-		Tags:                 dictionaryToMap(formatContext.Metadata()),
+	info := &MediaInfo{
+		Duration:      time.Duration(formatContext.Duration()) * time.Microsecond,
+		BitsPerSecond: formatContext.BitRate(),
+		Tags:          dictionaryToMap(formatContext.Metadata()),
 	}
 
 	if inputFormat := formatContext.InputFormat(); inputFormat != nil {
@@ -103,9 +103,9 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 	for _, stream := range formatContext.Streams() {
 		codecParams := stream.CodecParameters()
 		streamInfo := StreamInfo{
-			CodecName:            codecParams.CodecID().Name(),
-			CodecType:            CodecType(codecParams.MediaType().String()),
-			BitRateBitsPerSecond: codecParams.BitRate(),
+			CodecName:     codecParams.CodecID().Name(),
+			CodecType:     CodecType(codecParams.MediaType().String()),
+			BitsPerSecond: codecParams.BitRate(),
 		}
 		switch codecParams.MediaType() {
 		case astiav.MediaTypeVideo:
@@ -119,7 +119,7 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 		info.Streams = append(info.Streams, streamInfo)
 	}
 
-	return &info, nil
+	return info, nil
 }
 
 // dictionaryToMap converts an astiav Dictionary into a Go map. Returns nil if
