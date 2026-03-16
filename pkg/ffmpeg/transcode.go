@@ -4,70 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/asticode/go-astiav"
 )
-
-// Encoder names for hardware-accelerated variants, used in hwProfiles and
-// in hardware decoder lookup.
-const (
-	encoderNameH264QSV   = "h264_qsv"
-	encoderNameH265QSV   = "hevc_qsv"
-	encoderNameH264NVENC = "h264_nvenc"
-	encoderNameH265NVENC = "hevc_nvenc"
-	encoderNameH264VAAPI = "h264_vaapi"
-	encoderNameH265VAAPI = "hevc_vaapi"
-
-	decoderNameH264QSV   = "h264_qsv"
-	decoderNameH265QSV   = "hevc_qsv"
-	decoderNameH264NVENC = "h264_cuvid"
-	decoderNameH265NVENC = "hevc_cuvid"
-	decoderNameH264VAAPI = "h264_vaapi"
-	decoderNameH265VAAPI = "hevc_vaapi"
-)
-
-// hwProfile holds hardware-specific codec configuration.
-// Device types come from libavutil/hwcontext.h and pixel formats from
-// libavutil/pixfmt.h via the go-astiav bindings.
-type hwProfile struct {
-	deviceType  astiav.HardwareDeviceType
-	hwPixFmt    astiav.PixelFormat // pixel format used inside the hardware
-	swPixFmt    astiav.PixelFormat // software pixel format for upload/download (e.g. NV12)
-	h264Encoder string
-	h265Encoder string
-	h264Decoder string
-	h265Decoder string
-}
-
-var hwProfiles = map[HWAccel]hwProfile{
-	HWAccelQSV: {
-		deviceType:  astiav.HardwareDeviceTypeQSV,
-		hwPixFmt:    astiav.PixelFormatQsv,
-		swPixFmt:    astiav.PixelFormatNv12,
-		h264Encoder: encoderNameH264QSV,
-		h265Encoder: encoderNameH265QSV,
-		h264Decoder: decoderNameH264QSV,
-		h265Decoder: decoderNameH265QSV,
-	},
-	HWAccelNVENC: {
-		deviceType:  astiav.HardwareDeviceTypeCUDA,
-		hwPixFmt:    astiav.PixelFormatCuda,
-		swPixFmt:    astiav.PixelFormatNv12,
-		h264Encoder: encoderNameH264NVENC,
-		h265Encoder: encoderNameH265NVENC,
-		h264Decoder: decoderNameH264NVENC,
-		h265Decoder: decoderNameH265NVENC,
-	},
-	HWAccelVAAPI: {
-		deviceType:  astiav.HardwareDeviceTypeVAAPI,
-		hwPixFmt:    astiav.PixelFormatVaapi,
-		swPixFmt:    astiav.PixelFormatNv12,
-		h264Encoder: encoderNameH264VAAPI,
-		h265Encoder: encoderNameH265VAAPI,
-		h264Decoder: decoderNameH264VAAPI,
-		h265Decoder: decoderNameH265VAAPI,
-	},
-}
 
 // streamDecoder holds resources for the decoder side of a stream.
 type streamDecoder struct {
@@ -213,7 +153,7 @@ func (state *streamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav
 	// For video streams with a hardware profile, attempt hardware decoding.
 	if state.isVideo {
 		if profile, ok := hwProfiles[hwAccel]; ok {
-			hwDecName := state.hwDecoderName(inStream, profile)
+			hwDecName := hwDecoderNameForCodecID(inStream.CodecParameters().CodecID(), profile)
 			if hwDecName != "" {
 				if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
 					hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
@@ -280,17 +220,6 @@ func (state *streamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav
 	return nil
 }
 
-// hwDecoderName returns the hardware decoder codec name for the input stream's
-// codec ID, given the hardware profile. Returns "" if no HW decoder is mapped.
-func (state *streamState) hwDecoderName(inStream *astiav.Stream, profile hwProfile) string {
-	switch inStream.CodecParameters().CodecID() {
-	case astiav.CodecIDH264:
-		return profile.h264Decoder
-	case astiav.CodecIDH265:
-		return profile.h265Decoder
-	}
-	return ""
-}
 
 // setupVideoEncoder initialises the encoder for a video stream. If a hardware
 // encoder is requested but the hardware device cannot be opened, it silently
@@ -325,7 +254,7 @@ func (state *streamState) setupVideoEncoder(outputCodec Codec, hwAccel HWAccel, 
 func (state *streamState) selectVideoEncoder(outputCodec Codec, hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
 	p, hasProfile := hwProfiles[hwAccel]
 	if hasProfile {
-		hwEncName := state.hwEncoderName(outputCodec, p)
+		hwEncName := hwEncoderNameForCodec(outputCodec, p)
 		if hwEncName != "" && astiav.FindEncoderByName(hwEncName) != nil {
 			// Reuse the hardware device context from the HW decoder if one was
 			// set up, otherwise create a new one. This enables the zero-copy
@@ -373,18 +302,6 @@ func (state *streamState) selectVideoEncoder(outputCodec Codec, hwAccel HWAccel)
 	return enc, hwProfile{}, false, nil
 }
 
-// hwEncoderName returns the hardware encoder name for the requested output
-// codec given a hardware profile.
-func (state *streamState) hwEncoderName(outputCodec Codec, profile hwProfile) string {
-	switch outputCodec {
-	case CodecH264:
-		return profile.h264Encoder
-	case CodecH265:
-		return profile.h265Encoder
-	}
-	return ""
-}
-
 // openVideoEncoderContext allocates, configures, and opens the encoder codec
 // context. For hardware paths it also sets up the hardware frames context.
 func (state *streamState) openVideoEncoderContext(enc *astiav.Codec, profile hwProfile, useHW bool, outputFmt *astiav.FormatContext) error {
@@ -425,11 +342,9 @@ func (state *streamState) openVideoEncoderContext(enc *astiav.Codec, profile hwP
 		// Software path: prefer YUV420P; fall back to the encoder's first
 		// supported format if it does not support YUV420P.
 		encPixFmt := astiav.PixelFormatYuv420P
-		for _, f := range enc.SupportedPixelFormats() {
-			if f == astiav.PixelFormatYuv420P {
-				encPixFmt = astiav.PixelFormatYuv420P
-				break
-			}
+		fmts := enc.SupportedPixelFormats()
+		if len(fmts) > 0 && !slices.Contains(fmts, astiav.PixelFormatYuv420P) {
+			encPixFmt = fmts[0]
 		}
 		state.videoEnc.codecContext.SetPixelFormat(encPixFmt)
 	}
@@ -726,12 +641,13 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	return outputFmt.WriteTrailer()
 }
 
-// resolveHWAccel resolves HWAccelAuto to a concrete value.
+// resolveHWAccel resolves HWAccelAuto to a concrete value by checking for a
+// hardware encoder for the configured video codec.
 func (t *Transcoder) resolveHWAccel() HWAccel {
 	if t.hwAccel != HWAccelAuto {
 		return t.hwAccel
 	}
-	hw, _ := DetectHardwareEncoder()
+	hw, _ := DetectHardwareEncoder(t.videoCodec)
 	return hw
 }
 

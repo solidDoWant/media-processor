@@ -200,19 +200,20 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 	}
 }
 
-// TestDetectHardwareEncoder_NoHardware verifies that DetectHardwareEncoder
-// returns HWAccelNone without error when no hardware encoder is available.
-// This test is self-adapting: on machines with hardware it still passes because
+// TestDetectHardwareEncoder_ValidResult verifies that DetectHardwareEncoder
+// returns a valid HWAccel constant for each supported codec. The test is
+// self-adapting: it passes whether or not hardware is present because
 // DetectHardwareEncoder always returns a valid value without error.
-func TestDetectHardwareEncoder_NoHardware(t *testing.T) {
-	hw, err := ffmpeg.DetectHardwareEncoder()
-	require.NoError(t, err)
-	// The result must be one of the valid constants.
+func TestDetectHardwareEncoder_ValidResult(t *testing.T) {
 	validValues := []ffmpeg.HWAccel{
 		ffmpeg.HWAccelNone,
 		ffmpeg.HWAccelNVENC,
 		ffmpeg.HWAccelVAAPI,
 		ffmpeg.HWAccelQSV,
 	}
-	assert.Contains(t, validValues, hw, "DetectHardwareEncoder must return a valid HWAccel constant")
+	for _, codec := range []ffmpeg.Codec{ffmpeg.CodecH264, ffmpeg.CodecH265} {
+		hw, err := ffmpeg.DetectHardwareEncoder(codec)
+		require.NoError(t, err)
+		assert.Contains(t, validValues, hw, "DetectHardwareEncoder(%v) must return a valid HWAccel constant", codec)
+	}
 }

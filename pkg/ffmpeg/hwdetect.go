@@ -1,34 +1,42 @@
 package ffmpeg
 
-import (
-	"strings"
+import "github.com/asticode/go-astiav"
 
-	"github.com/asticode/go-astiav"
-)
-
-// DetectHardwareEncoder probes the linked libavcodec for available hardware
-// encoders and returns the highest-priority one found. It asks libavcodec for
-// the default encoder for H.265 and H.264 (in that preference order) and
-// checks whether the returned encoder's name indicates a hardware backend.
+// DetectHardwareEncoder checks whether a hardware encoder is available for the
+// given output codec. It probes libavcodec directly — no device is opened, only
+// codec registration is checked.
 //
-// Note: only encoding hardware is detected here. Hardware decoding is a
-// separate capability. This function returns the HWAccel type that can be
-// used for encoding; the matching hardware decoder is selected per-stream
-// during transcode setup.
-func DetectHardwareEncoder() (HWAccel, error) {
-	for _, codecID := range []astiav.CodecID{astiav.CodecIDH265, astiav.CodecIDH264} {
-		enc := astiav.FindEncoder(codecID)
-		if enc == nil {
-			continue
+// Hardware encode and decode capabilities are independent: a hardware
+// accelerator may support encoding a codec without supporting decoding it, or
+// vice versa. Use DetectHardwareDecoder to check decode-side availability.
+func DetectHardwareEncoder(codec Codec) (HWAccel, error) {
+	for hw, profile := range hwProfiles {
+		name := hwEncoderNameForCodec(codec, profile)
+		if name != "" && astiav.FindEncoderByName(name) != nil {
+			return hw, nil
 		}
-		name := enc.Name()
-		switch {
-		case strings.Contains(name, "qsv"):
-			return HWAccelQSV, nil
-		case strings.Contains(name, "nvenc"):
-			return HWAccelNVENC, nil
-		case strings.Contains(name, "vaapi"):
-			return HWAccelVAAPI, nil
+	}
+	return HWAccelNone, nil
+}
+
+// DetectHardwareDecoder checks whether a hardware decoder is available for the
+// given input codec. See DetectHardwareEncoder for the distinction between
+// encode and decode capability.
+func DetectHardwareDecoder(codec Codec) (HWAccel, error) {
+	var codecID astiav.CodecID
+	switch codec {
+	case CodecH264:
+		codecID = astiav.CodecIDH264
+	case CodecH265:
+		codecID = astiav.CodecIDH265
+	default:
+		return HWAccelNone, nil
+	}
+
+	for hw, profile := range hwProfiles {
+		name := hwDecoderNameForCodecID(codecID, profile)
+		if name != "" && astiav.FindDecoderByName(name) != nil {
+			return hw, nil
 		}
 	}
 	return HWAccelNone, nil
