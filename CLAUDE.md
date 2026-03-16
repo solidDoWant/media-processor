@@ -66,6 +66,7 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - Do not reference acceptance criteria IDs (e.g. "AC3", "AC4") in test comments or names — they are only meaningful within the issue/PR context. Write descriptions of the actual behavior being verified instead.
 - Separate test cases that require fundamentally different setup into their own test functions.
 - Integration tests that require external services (e.g. a running Hatchet server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
+- Always use `t.Context()` (not `context.Background()`) when a test needs a context. It is automatically cancelled when the test finishes, preventing resource leaks.
 
 ## Quality Rules
 

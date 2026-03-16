@@ -1,3 +1,4 @@
 /bin/
 .claude/tasks/
 .env.hatchet
+.direnv

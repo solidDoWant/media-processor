@@ -20,6 +20,8 @@
             pkgs.docker-compose
             pkgs.pkg-config
             pkgs.ffmpeg
+            pkgs.direnv
+            pkgs.nix-direnv
           ];
           buildInputs = [
             pkgs.ffmpeg.dev

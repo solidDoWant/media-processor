@@ -3,6 +3,7 @@ module github.com/solidDoWant/media-processor
 go 1.26
 
 require (
+	github.com/asticode/go-astiav v0.40.0
 	github.com/hatchet-dev/hatchet v0.79.43
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -13,7 +14,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
-	github.com/asticode/go-astiav v0.40.0 // indirect
 	github.com/asticode/go-astikit v0.42.0 // indirect
 	github.com/cockroachdb/errors v1.12.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
