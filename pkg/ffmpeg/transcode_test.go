@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +45,41 @@ func TestTranscode_H265_MKV(t *testing.T) {
 		}
 	}
 	assert.True(t, foundH265, "output must contain an H.265 video stream")
+}
+
+// TestTranscode_DefaultSettings verifies that calling NewTranscode with no
+// additional options (copy-all defaults) produces a valid output whose codec
+// and stream properties match the input file.
+func TestTranscode_DefaultSettings(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mp4")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(output)
+	require.NoError(t, statErr, "output file must exist")
+
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	// The output should have the same number of streams as the input.
+	assert.Equal(t, len(inputInfo.Streams), len(outputInfo.Streams), "stream count must match")
+
+	// Each output stream should have the same codec as the corresponding input stream.
+	for i, inStream := range inputInfo.Streams {
+		if i >= len(outputInfo.Streams) {
+			break
+		}
+		assert.Equal(t, inStream.CodecName, outputInfo.Streams[i].CodecName,
+			"stream %d codec must match input", i)
+		assert.Equal(t, inStream.CodecType, outputInfo.Streams[i].CodecType,
+			"stream %d codec type must match input", i)
+	}
 }
 
 // TestTranscode_HWAccelAuto runs with HWAccelAuto and expects either hardware
@@ -123,7 +157,9 @@ func TestTranscode_CancelledContext(t *testing.T) {
 }
 
 // TestTranscode_CancelDuringRun verifies that cancellation mid-transcode
-// returns promptly (within a generous deadline).
+// returns promptly (within a generous deadline). A WithStartHook is used to
+// cancel the context at a deterministic point — after setup is complete but
+// before the first packet is read — avoiding a flaky time.Sleep.
 func TestTranscode_CancelDuringRun(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -134,19 +170,16 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 			ToVideoCodec(ffmpeg.CodecH265).
 			ToAudioCodec(ffmpeg.CodecCopy).
 			ToContainer(ffmpeg.ContainerMKV).
+			WithStartHook(cancel).
 			Build().
 			Run(ctx)
 	}()
-
-	// Cancel after a short delay to allow the transcode to start.
-	time.Sleep(50 * time.Millisecond)
-	cancel()
 
 	select {
 	case err := <-done:
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-t.Context().Done():
 		t.Fatal("Run did not return promptly after context cancellation")
 	}
 }

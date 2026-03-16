@@ -16,9 +16,10 @@ import (
 )
 
 // TestDetectHardwareEncoder_HardwarePresent verifies that DetectHardwareEncoder
-// returns the correct HWAccel constant when hardware is available. This test
-// only runs when the hwtest build tag is set (i.e. when make test detects
-// hardware via ffmpeg -encoders).
+// returns a non-None value when hardware is available. This test only runs when
+// the hwtest build tag is set (i.e. when make test detects hardware via
+// ffmpeg -encoders). Detecting no hardware with the hwtest tag active is a
+// likely bug — the test fails rather than skips in that case.
 func TestDetectHardwareEncoder_HardwarePresent(t *testing.T) {
 	hw, err := ffmpeg.DetectHardwareEncoder()
 	require.NoError(t, err)
@@ -27,7 +28,7 @@ func TestDetectHardwareEncoder_HardwarePresent(t *testing.T) {
 }
 
 // TestTranscode_QSVPerformanceMatchesFFmpegCLI verifies that our QSV transcode
-// implementation performs within 2× of the ffmpeg CLI with identical QSV
+// implementation performs within 1.25× of the ffmpeg CLI with identical QSV
 // parameters. This guards against accidentally falling back to software
 // encoding (which would be 5–10× slower).
 func TestTranscode_QSVPerformanceMatchesFFmpegCLI(t *testing.T) {
@@ -90,11 +91,11 @@ func TestTranscode_QSVPerformanceMatchesFFmpegCLI(t *testing.T) {
 	}
 	assert.True(t, ourHasH265, "our output must contain H.265")
 
-	// Assert our implementation is within 2× of the CLI baseline.
-	// A factor > 2× strongly suggests software fallback.
-	maxAllowed := cliDuration * 2
+	// Assert our implementation is within 1.25× of the CLI baseline.
+	// A factor > 1.25× strongly suggests software fallback or excessive overhead.
+	maxAllowed := time.Duration(float64(cliDuration) * 1.25)
 	assert.LessOrEqual(t, ourDuration, maxAllowed,
-		"our QSV transcode (%v) must be within 2× of ffmpeg CLI (%v); "+
+		"our QSV transcode (%v) must be within 1.25× of ffmpeg CLI (%v); "+
 			"a slower result suggests software fallback", ourDuration, cliDuration)
 
 	t.Logf("ffmpeg CLI QSV duration: %v; our QSV duration: %v (ratio: %.2f×)",
