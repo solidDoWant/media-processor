@@ -24,48 +24,48 @@ type audioStreamState struct {
 	outputCodec Codec
 }
 
-func (s *audioStreamState) encoderContext() *astiav.CodecContext { return s.encCodecContext }
+func (ass *audioStreamState) encoderContext() *astiav.CodecContext { return ass.encCodecContext }
 
-func (s *audioStreamState) free() {
-	s.dec.free()
-	if s.encCodecContext != nil {
-		s.encCodecContext.Free()
+func (ass *audioStreamState) free() {
+	ass.dec.free()
+	if ass.encCodecContext != nil {
+		ass.encCodecContext.Free()
 	}
-	if s.encPkt != nil {
-		s.encPkt.Free()
+	if ass.encPkt != nil {
+		ass.encPkt.Free()
 	}
-	if s.swrCtx != nil {
-		s.swrCtx.Free()
+	if ass.swrCtx != nil {
+		ass.swrCtx.Free()
 	}
-	if s.audioFrame != nil {
-		s.audioFrame.Free()
+	if ass.audioFrame != nil {
+		ass.audioFrame.Free()
 	}
 }
 
 // setupDecoder initialises the software decoder codec context for the audio stream.
-func (s *audioStreamState) setupDecoder(inStream *astiav.Stream) error {
+func (ass *audioStreamState) setupDecoder(inStream *astiav.Stream) error {
 	codec := astiav.FindDecoder(inStream.CodecParameters().CodecID())
 	if codec == nil {
 		return fmt.Errorf("no decoder for codec ID %v", inStream.CodecParameters().CodecID())
 	}
-	s.dec.codec = codec
+	ass.dec.codec = codec
 
-	s.dec.codecContext = astiav.AllocCodecContext(codec)
-	if s.dec.codecContext == nil {
+	ass.dec.codecContext = astiav.AllocCodecContext(codec)
+	if ass.dec.codecContext == nil {
 		return errors.New("failed to allocate decoder codec context")
 	}
 
-	if err := inStream.CodecParameters().ToCodecContext(s.dec.codecContext); err != nil {
+	if err := inStream.CodecParameters().ToCodecContext(ass.dec.codecContext); err != nil {
 		return fmt.Errorf("copying codec parameters to context: %w", err)
 	}
 
-	if err := s.dec.codecContext.Open(codec, nil); err != nil {
+	if err := ass.dec.codecContext.Open(codec, nil); err != nil {
 		return fmt.Errorf("opening decoder: %w", err)
 	}
-	s.dec.codecContext.SetTimeBase(inStream.TimeBase())
+	ass.dec.codecContext.SetTimeBase(inStream.TimeBase())
 
-	s.dec.frame = astiav.AllocFrame()
-	if s.dec.frame == nil {
+	ass.dec.frame = astiav.AllocFrame()
+	if ass.dec.frame == nil {
 		return errors.New("failed to allocate decoder frame")
 	}
 
@@ -73,79 +73,90 @@ func (s *audioStreamState) setupDecoder(inStream *astiav.Stream) error {
 }
 
 // setupEncoder implements the stream interface for audio.
-func (s *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatContext) error {
-	switch s.outputCodec {
+func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatContext) error {
+	switch ass.outputCodec {
 	case CodecH264, CodecH265:
-		return fmt.Errorf("unsupported audio codec: %s", s.outputCodec)
+		return fmt.Errorf("unsupported audio codec: %s", ass.outputCodec)
 	}
 
 	// Re-encode using the same codec as the input (transcode → same format,
 	// potentially with a different container).
-	enc := astiav.FindEncoder(s.dec.codecContext.CodecID())
+	enc := astiav.FindEncoder(ass.dec.codecContext.CodecID())
 	if enc == nil {
-		return fmt.Errorf("no encoder found for audio codec ID %v", s.dec.codecContext.CodecID())
+		return fmt.Errorf("no encoder found for audio codec ID %v", ass.dec.codecContext.CodecID())
 	}
-	s.encCodec = enc
+	ass.encCodec = enc
 
-	s.encCodecContext = astiav.AllocCodecContext(enc)
-	if s.encCodecContext == nil {
+	ass.encCodecContext = astiav.AllocCodecContext(enc)
+	if ass.encCodecContext == nil {
 		return errors.New("failed to allocate audio encoder codec context")
 	}
 
 	// Preserve sample rate and channel layout.
-	s.encCodecContext.SetSampleRate(s.dec.codecContext.SampleRate())
+	ass.encCodecContext.SetSampleRate(ass.dec.codecContext.SampleRate())
 
-	channelLayout := s.dec.codecContext.ChannelLayout()
+	// Prefer the decoder's channel layout if the encoder supports it;
+	// fall back to the encoder's first supported layout otherwise.
+	channelLayout := ass.dec.codecContext.ChannelLayout()
 	if layouts := enc.SupportedChannelLayouts(); len(layouts) > 0 {
-		channelLayout = layouts[0]
+		supported := false
+		for _, l := range layouts {
+			if l.Channels() == channelLayout.Channels() {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			channelLayout = layouts[0]
+		}
 	}
-	s.encCodecContext.SetChannelLayout(channelLayout)
+	ass.encCodecContext.SetChannelLayout(channelLayout)
 
-	sampleFmt := s.dec.codecContext.SampleFormat()
+	sampleFmt := ass.dec.codecContext.SampleFormat()
 	if fmts := enc.SupportedSampleFormats(); len(fmts) > 0 {
 		sampleFmt = fmts[0]
 	}
-	s.encCodecContext.SetSampleFormat(sampleFmt)
+	ass.encCodecContext.SetSampleFormat(sampleFmt)
 
-	s.encCodecContext.SetTimeBase(astiav.NewRational(1, s.encCodecContext.SampleRate()))
+	ass.encCodecContext.SetTimeBase(astiav.NewRational(1, ass.encCodecContext.SampleRate()))
 
 	if outputFmt.OutputFormat().Flags().Has(astiav.IOFormatFlagGlobalheader) {
-		s.encCodecContext.SetFlags(s.encCodecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
+		ass.encCodecContext.SetFlags(ass.encCodecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := s.encCodecContext.Open(s.encCodec, nil); err != nil {
+	if err := ass.encCodecContext.Open(ass.encCodec, nil); err != nil {
 		return fmt.Errorf("opening audio encoder: %w", err)
 	}
 
 	// Set up resampler if sample format, channel layout, or sample rate differs.
-	needResample := s.dec.codecContext.SampleFormat() != s.encCodecContext.SampleFormat() ||
-		s.dec.codecContext.ChannelLayout().Channels() != s.encCodecContext.ChannelLayout().Channels() ||
-		s.dec.codecContext.SampleRate() != s.encCodecContext.SampleRate()
+	needResample := ass.dec.codecContext.SampleFormat() != ass.encCodecContext.SampleFormat() ||
+		ass.dec.codecContext.ChannelLayout().Channels() != ass.encCodecContext.ChannelLayout().Channels() ||
+		ass.dec.codecContext.SampleRate() != ass.encCodecContext.SampleRate()
 
 	if needResample {
-		s.swrCtx = astiav.AllocSoftwareResampleContext()
-		if s.swrCtx == nil {
+		ass.swrCtx = astiav.AllocSoftwareResampleContext()
+		if ass.swrCtx == nil {
 			return errors.New("failed to allocate software resample context")
 		}
 
-		s.audioFrame = astiav.AllocFrame()
-		if s.audioFrame == nil {
+		ass.audioFrame = astiav.AllocFrame()
+		if ass.audioFrame == nil {
 			return errors.New("failed to allocate audio resample frame")
 		}
-		s.audioFrame.SetChannelLayout(s.encCodecContext.ChannelLayout())
-		s.audioFrame.SetSampleFormat(s.encCodecContext.SampleFormat())
-		s.audioFrame.SetSampleRate(s.encCodecContext.SampleRate())
-		s.audioFrame.SetNbSamples(s.dec.codecContext.FrameSize())
-		if s.audioFrame.NbSamples() <= 0 {
-			s.audioFrame.SetNbSamples(1024)
+		ass.audioFrame.SetChannelLayout(ass.encCodecContext.ChannelLayout())
+		ass.audioFrame.SetSampleFormat(ass.encCodecContext.SampleFormat())
+		ass.audioFrame.SetSampleRate(ass.encCodecContext.SampleRate())
+		ass.audioFrame.SetNbSamples(ass.dec.codecContext.FrameSize())
+		if ass.audioFrame.NbSamples() <= 0 {
+			ass.audioFrame.SetNbSamples(1024)
 		}
-		if err := s.audioFrame.AllocBuffer(0); err != nil {
+		if err := ass.audioFrame.AllocBuffer(0); err != nil {
 			return fmt.Errorf("allocating audio resample frame buffer: %w", err)
 		}
 	}
 
-	s.encPkt = astiav.AllocPacket()
-	if s.encPkt == nil {
+	ass.encPkt = astiav.AllocPacket()
+	if ass.encPkt == nil {
 		return errors.New("failed to allocate encoder packet")
 	}
 
@@ -154,52 +165,52 @@ func (s *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatConte
 
 // processPacket implements the stream interface for audio. It decodes the
 // packet and re-encodes each decoded frame.
-func (s *audioStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	pkt.RescaleTs(s.inStream.TimeBase(), s.dec.codecContext.TimeBase())
+func (ass *audioStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	packet.RescaleTs(ass.inStream.TimeBase(), ass.dec.codecContext.TimeBase())
 
-	if err := s.dec.codecContext.SendPacket(pkt); err != nil {
+	if err := ass.dec.codecContext.SendPacket(packet); err != nil {
 		return fmt.Errorf("ffmpeg: sending audio packet to decoder: %w", err)
 	}
 
 	for {
-		if err := s.dec.codecContext.ReceiveFrame(s.dec.frame); err != nil {
+		if err := ass.dec.codecContext.ReceiveFrame(ass.dec.frame); err != nil {
 			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
 				return nil
 			}
 			return fmt.Errorf("ffmpeg: receiving decoded audio frame: %w", err)
 		}
-		if err := s.encodeAudioFrame(s.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
-			s.dec.frame.Unref()
+		if err := ass.encodeAudioFrame(ass.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			ass.dec.frame.Unref()
 			return err
 		}
-		s.dec.frame.Unref()
+		ass.dec.frame.Unref()
 	}
 }
 
 // encodeAudioFrame resamples (if needed) and encodes a single decoded audio frame.
-func (s *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	encFrame := frame
 
-	if s.swrCtx != nil {
-		if err := s.swrCtx.ConvertFrame(frame, s.audioFrame); err != nil {
+	if ass.swrCtx != nil {
+		if err := ass.swrCtx.ConvertFrame(frame, ass.audioFrame); err != nil {
 			return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
 		}
-		s.audioFrame.SetPts(frame.Pts())
-		encFrame = s.audioFrame
+		ass.audioFrame.SetPts(frame.Pts())
+		encFrame = ass.audioFrame
 	}
 
-	if err := s.encCodecContext.SendFrame(encFrame); err != nil {
+	if err := ass.encCodecContext.SendFrame(encFrame); err != nil {
 		return fmt.Errorf("ffmpeg: sending audio frame to encoder: %w", err)
 	}
 
-	return s.receiveAndWritePackets(s.encCodecContext, s.encPkt, outputFmt, progressCh, totalDuration)
+	return ass.receiveAndWritePackets(ass.encCodecContext, ass.encPkt, outputFmt, progressCh, totalDuration)
 }
 
 // flush implements the stream interface for audio. It drains buffered frames
 // from the encoder.
-func (s *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	if err := s.encCodecContext.SendFrame(nil); err != nil {
+func (ass *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if err := ass.encCodecContext.SendFrame(nil); err != nil {
 		return fmt.Errorf("ffmpeg: flushing audio encoder: %w", err)
 	}
-	return s.receiveAndWritePackets(s.encCodecContext, s.encPkt, outputFmt, progressCh, totalDuration)
+	return ass.receiveAndWritePackets(ass.encCodecContext, ass.encPkt, outputFmt, progressCh, totalDuration)
 }

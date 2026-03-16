@@ -299,11 +299,11 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 
 // readAllPackets is the main decode/encode loop.
 func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
-	pkt := astiav.AllocPacket()
-	defer pkt.Free()
+	packet := astiav.AllocPacket()
+	defer packet.Free()
 
 	for {
-		if err := inputFmt.ReadFrame(pkt); err != nil {
+		if err := inputFmt.ReadFrame(packet); err != nil {
 			if errors.Is(err, astiav.ErrEof) {
 				return nil
 			}
@@ -313,14 +313,14 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 			return fmt.Errorf("ffmpeg: reading frame: %w", err)
 		}
 
-		s, ok := streams[pkt.StreamIndex()]
+		s, ok := streams[packet.StreamIndex()]
 		if !ok {
-			pkt.Unref()
+			packet.Unref()
 			continue
 		}
 
-		err := s.processPacket(pkt, outputFmt, t.progressCh, totalDuration)
-		pkt.Unref()
+		err := s.processPacket(packet, outputFmt, t.progressCh, totalDuration)
+		packet.Unref()
 
 		if err != nil {
 			if interrupter.Interrupted() {

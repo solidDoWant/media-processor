@@ -21,15 +21,15 @@ type streamDecoder struct {
 	hwPixFmt astiav.PixelFormat // expected HW pixel format from the HW decoder
 }
 
-func (d *streamDecoder) free() {
-	if d.codecContext != nil {
-		d.codecContext.Free()
+func (sd *streamDecoder) free() {
+	if sd.codecContext != nil {
+		sd.codecContext.Free()
 	}
-	if d.frame != nil {
-		d.frame.Free()
+	if sd.frame != nil {
+		sd.frame.Free()
 	}
-	if d.hwDevCtx != nil {
-		d.hwDevCtx.Free()
+	if sd.hwDevCtx != nil {
+		sd.hwDevCtx.Free()
 	}
 }
 
@@ -62,27 +62,27 @@ type videoStreamState struct {
 	outputCodec Codec
 }
 
-func (s *videoStreamState) encoderContext() *astiav.CodecContext { return s.encCodecContext }
+func (vss *videoStreamState) encoderContext() *astiav.CodecContext { return vss.encCodecContext }
 
-func (s *videoStreamState) free() {
-	s.dec.free()
-	if s.encCodecContext != nil {
-		s.encCodecContext.Free()
+func (vss *videoStreamState) free() {
+	vss.dec.free()
+	if vss.encCodecContext != nil {
+		vss.encCodecContext.Free()
 	}
-	if s.encPkt != nil {
-		s.encPkt.Free()
+	if vss.encPkt != nil {
+		vss.encPkt.Free()
 	}
-	if s.swsCtx != nil {
-		s.swsCtx.Free()
+	if vss.swsCtx != nil {
+		vss.swsCtx.Free()
 	}
-	if s.scaledFrame != nil {
-		s.scaledFrame.Free()
+	if vss.scaledFrame != nil {
+		vss.scaledFrame.Free()
 	}
-	if s.hwFrame != nil {
-		s.hwFrame.Free()
+	if vss.hwFrame != nil {
+		vss.hwFrame.Free()
 	}
-	if s.hwFramesCtx != nil {
-		s.hwFramesCtx.Free()
+	if vss.hwFramesCtx != nil {
+		vss.hwFramesCtx.Free()
 	}
 }
 
@@ -90,7 +90,7 @@ func (s *videoStreamState) free() {
 // For non-None hwAccel it attempts hardware decoding so that decoded frames
 // remain in GPU memory, enabling a zero-copy decode→encode pipeline.
 // Falls back silently to software decoding if HW decode is unavailable.
-func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
+func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
 	var codec *astiav.Codec
 
 	if profile, ok := hwProfiles[hwAccel]; ok {
@@ -99,8 +99,8 @@ func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astia
 			if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
 				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
 				if err == nil {
-					s.dec.hwDevCtx = hwDevCtx
-					s.dec.hwPixFmt = profile.hwPixFmt
+					vss.dec.hwDevCtx = hwDevCtx
+					vss.dec.hwPixFmt = profile.hwPixFmt
 					codec = hwDec
 				} else {
 					slog.Debug("ffmpeg: hardware decoder setup failed, falling back to software",
@@ -116,23 +116,23 @@ func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astia
 			return fmt.Errorf("no decoder for codec ID %v", inStream.CodecParameters().CodecID())
 		}
 	}
-	s.dec.codec = codec
+	vss.dec.codec = codec
 
-	s.dec.codecContext = astiav.AllocCodecContext(codec)
-	if s.dec.codecContext == nil {
+	vss.dec.codecContext = astiav.AllocCodecContext(codec)
+	if vss.dec.codecContext == nil {
 		return errors.New("failed to allocate decoder codec context")
 	}
 
-	if err := inStream.CodecParameters().ToCodecContext(s.dec.codecContext); err != nil {
+	if err := inStream.CodecParameters().ToCodecContext(vss.dec.codecContext); err != nil {
 		return fmt.Errorf("copying codec parameters to context: %w", err)
 	}
 
-	s.dec.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
+	vss.dec.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
 
-	if s.dec.hwDevCtx != nil {
-		s.dec.codecContext.SetHardwareDeviceContext(s.dec.hwDevCtx)
-		hwPixFmt := s.dec.hwPixFmt
-		s.dec.codecContext.SetPixelFormatCallback(func(pfs []astiav.PixelFormat) astiav.PixelFormat {
+	if vss.dec.hwDevCtx != nil {
+		vss.dec.codecContext.SetHardwareDeviceContext(vss.dec.hwDevCtx)
+		hwPixFmt := vss.dec.hwPixFmt
+		vss.dec.codecContext.SetPixelFormatCallback(func(pfs []astiav.PixelFormat) astiav.PixelFormat {
 			for _, pf := range pfs {
 				if pf == hwPixFmt {
 					return pf
@@ -140,19 +140,21 @@ func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astia
 			}
 			// HW pixel format not offered — fall back to the first available format.
 			if len(pfs) > 0 {
+				slog.Debug("ffmpeg: preferred hardware pixel format not offered by decoder, using fallback",
+					"preferred", hwPixFmt, "fallback", pfs[0])
 				return pfs[0]
 			}
 			return astiav.PixelFormatNone
 		})
 	}
 
-	if err := s.dec.codecContext.Open(codec, nil); err != nil {
+	if err := vss.dec.codecContext.Open(codec, nil); err != nil {
 		return fmt.Errorf("opening decoder: %w", err)
 	}
-	s.dec.codecContext.SetTimeBase(inStream.TimeBase())
+	vss.dec.codecContext.SetTimeBase(inStream.TimeBase())
 
-	s.dec.frame = astiav.AllocFrame()
-	if s.dec.frame == nil {
+	vss.dec.frame = astiav.AllocFrame()
+	if vss.dec.frame == nil {
 		return errors.New("failed to allocate decoder frame")
 	}
 
@@ -161,24 +163,24 @@ func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astia
 
 // setupEncoder implements the stream interface for video. If a hardware encoder
 // is requested but unavailable, it falls back to software encoding transparently.
-func (s *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.FormatContext) error {
-	enc, profile, useHW, err := s.selectVideoEncoder(hwAccel)
+func (vss *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.FormatContext) error {
+	enc, profile, useHW, err := vss.selectVideoEncoder(hwAccel)
 	if err != nil {
 		return err
 	}
-	s.encCodec = enc
-	s.isHWEncode = useHW
+	vss.encCodec = enc
+	vss.isHWEncode = useHW
 
-	if err := s.openVideoEncoderContext(enc, profile, useHW, outputFmt); err != nil {
+	if err := vss.openVideoEncoderContext(enc, profile, useHW, outputFmt); err != nil {
 		return err
 	}
 
-	if err := s.setupVideoConversion(profile); err != nil {
+	if err := vss.setupVideoConversion(profile); err != nil {
 		return err
 	}
 
-	s.encPkt = astiav.AllocPacket()
-	if s.encPkt == nil {
+	vss.encPkt = astiav.AllocPacket()
+	if vss.encPkt == nil {
 		return errors.New("failed to allocate encoder packet")
 	}
 
@@ -187,15 +189,15 @@ func (s *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.Forma
 
 // selectVideoEncoder chooses a hardware or software encoder. On hardware
 // selection failure it transparently falls back to software.
-func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
-	effective := GetHardwareEncoder(s.outputCodec, hwAccel)
+func (vss *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
+	effective := GetHardwareEncoder(vss.outputCodec, hwAccel)
 	if p, hasProfile := hwProfiles[effective]; hasProfile {
-		hwEncName := hwEncoderNameForCodec(s.outputCodec, p)
+		hwEncName := hwEncoderNameForCodec(vss.outputCodec, p)
 		if hwEncName != "" && astiav.FindEncoderByName(hwEncName) != nil {
 			// Reuse the hardware device context from the HW decoder if one was
 			// set up, otherwise create a new one. This enables the zero-copy
 			// decode→encode path when both sides use the same hardware.
-			hwDevCtx := s.dec.hwDevCtx
+			hwDevCtx := vss.dec.hwDevCtx
 			if hwDevCtx == nil {
 				hwDevCtx, err = astiav.CreateHardwareDeviceContext(p.deviceType, "", nil, 0)
 				if err != nil {
@@ -205,9 +207,9 @@ func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Code
 				}
 			}
 			if hwDevCtx != nil {
-				if s.dec.hwDevCtx == nil {
+				if vss.dec.hwDevCtx == nil {
 					// Newly created — store so free() releases it via dec.free().
-					s.dec.hwDevCtx = hwDevCtx
+					vss.dec.hwDevCtx = hwDevCtx
 				}
 				return astiav.FindEncoderByName(hwEncName), p, true, nil
 			}
@@ -217,9 +219,9 @@ func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Code
 	// Software fallback: only unreachable if libavcodec was compiled without the
 	// requested encoder (e.g. without libx264/libx265), which should not occur
 	// in normal deployments but is checked here as a safety net.
-	enc = astiav.FindEncoder(s.outputCodec)
+	enc = astiav.FindEncoder(vss.outputCodec)
 	if enc == nil {
-		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %v", s.outputCodec)
+		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %v", vss.outputCodec)
 	}
 
 	return enc, hwProfile{}, false, nil
@@ -227,33 +229,33 @@ func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Code
 
 // openVideoEncoderContext allocates, configures, and opens the encoder codec
 // context. For hardware paths it also sets up the hardware frames context.
-func (s *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile hwProfile, useHW bool, outputFmt *astiav.FormatContext) error {
-	s.encCodecContext = astiav.AllocCodecContext(enc)
-	if s.encCodecContext == nil {
+func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile hwProfile, useHW bool, outputFmt *astiav.FormatContext) error {
+	vss.encCodecContext = astiav.AllocCodecContext(enc)
+	if vss.encCodecContext == nil {
 		return errors.New("failed to allocate encoder codec context")
 	}
 
-	s.encCodecContext.SetWidth(s.dec.codecContext.Width())
-	s.encCodecContext.SetHeight(s.dec.codecContext.Height())
-	s.encCodecContext.SetSampleAspectRatio(s.dec.codecContext.SampleAspectRatio())
-	s.encCodecContext.SetTimeBase(s.dec.codecContext.TimeBase())
-	s.encCodecContext.SetFramerate(s.dec.codecContext.Framerate())
+	vss.encCodecContext.SetWidth(vss.dec.codecContext.Width())
+	vss.encCodecContext.SetHeight(vss.dec.codecContext.Height())
+	vss.encCodecContext.SetSampleAspectRatio(vss.dec.codecContext.SampleAspectRatio())
+	vss.encCodecContext.SetTimeBase(vss.dec.codecContext.TimeBase())
+	vss.encCodecContext.SetFramerate(vss.dec.codecContext.Framerate())
 
 	// Preserve HDR and color metadata.
-	s.encCodecContext.SetColorPrimaries(s.dec.codecContext.ColorPrimaries())
-	s.encCodecContext.SetColorTransferCharacteristic(s.dec.codecContext.ColorTransferCharacteristic())
-	s.encCodecContext.SetColorSpace(s.dec.codecContext.ColorSpace())
-	s.encCodecContext.SetColorRange(s.dec.codecContext.ColorRange())
+	vss.encCodecContext.SetColorPrimaries(vss.dec.codecContext.ColorPrimaries())
+	vss.encCodecContext.SetColorTransferCharacteristic(vss.dec.codecContext.ColorTransferCharacteristic())
+	vss.encCodecContext.SetColorSpace(vss.dec.codecContext.ColorSpace())
+	vss.encCodecContext.SetColorRange(vss.dec.codecContext.ColorRange())
 
-	if err := s.configureEncoderPixelFormat(enc, profile, useHW); err != nil {
+	if err := vss.configureEncoderPixelFormat(enc, profile, useHW); err != nil {
 		return err
 	}
 
 	if outputFmt.OutputFormat().Flags().Has(astiav.IOFormatFlagGlobalheader) {
-		s.encCodecContext.SetFlags(s.encCodecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
+		vss.encCodecContext.SetFlags(vss.encCodecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := s.encCodecContext.Open(s.encCodec, nil); err != nil {
+	if err := vss.encCodecContext.Open(vss.encCodec, nil); err != nil {
 		return fmt.Errorf("opening video encoder: %w", err)
 	}
 
@@ -263,7 +265,7 @@ func (s *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile hw
 // configureEncoderPixelFormat sets the pixel format on the encoder codec
 // context and, for the SW decode + HW encode path, allocates the hardware
 // frames context for CPU→GPU upload.
-func (s *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, profile hwProfile, useHW bool) error {
+func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, profile hwProfile, useHW bool) error {
 	if !useHW {
 		// Software path: prefer YUV420P; fall back to the encoder's first
 		// supported format if it does not support YUV420P.
@@ -272,40 +274,40 @@ func (s *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, profil
 		if len(fmts) > 0 && !slices.Contains(fmts, astiav.PixelFormatYuv420P) {
 			encPixFmt = fmts[0]
 		}
-		s.encCodecContext.SetPixelFormat(encPixFmt)
+		vss.encCodecContext.SetPixelFormat(encPixFmt)
 		return nil
 	}
 
 	// HW encode with HW decode: decoded frames are already in GPU memory —
 	// share those surfaces directly with the encoder.
-	if s.dec.hwDevCtx != nil && s.dec.hwPixFmt == profile.hwPixFmt {
-		s.isHWDecode = true
-		s.encCodecContext.SetPixelFormat(profile.hwPixFmt)
+	if vss.dec.hwDevCtx != nil && vss.dec.hwPixFmt == profile.hwPixFmt {
+		vss.isHWDecode = true
+		vss.encCodecContext.SetPixelFormat(profile.hwPixFmt)
 		return nil
 	}
 
 	// HW encode with SW decode: allocate a frames pool for CPU→GPU upload.
-	if err := s.setupHWFramesContext(profile); err != nil {
+	if err := vss.setupHWFramesContext(profile); err != nil {
 		return err
 	}
-	s.encCodecContext.SetPixelFormat(profile.hwPixFmt)
-	s.encCodecContext.SetHardwareFramesContext(s.hwFramesCtx)
+	vss.encCodecContext.SetPixelFormat(profile.hwPixFmt)
+	vss.encCodecContext.SetHardwareFramesContext(vss.hwFramesCtx)
 	return nil
 }
 
 // setupHWFramesContext allocates and initialises the hardware frames context
 // used to upload decoded software frames into GPU memory before encoding.
-func (s *videoStreamState) setupHWFramesContext(profile hwProfile) error {
-	s.hwFramesCtx = astiav.AllocHardwareFramesContext(s.dec.hwDevCtx)
-	if s.hwFramesCtx == nil {
+func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
+	vss.hwFramesCtx = astiav.AllocHardwareFramesContext(vss.dec.hwDevCtx)
+	if vss.hwFramesCtx == nil {
 		return errors.New("failed to allocate hardware frames context")
 	}
-	s.hwFramesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
-	s.hwFramesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
-	s.hwFramesCtx.SetWidth(s.dec.codecContext.Width())
-	s.hwFramesCtx.SetHeight(s.dec.codecContext.Height())
-	s.hwFramesCtx.SetInitialPoolSize(20)
-	if err := s.hwFramesCtx.Initialize(); err != nil {
+	vss.hwFramesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
+	vss.hwFramesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
+	vss.hwFramesCtx.SetWidth(vss.dec.codecContext.Width())
+	vss.hwFramesCtx.SetHeight(vss.dec.codecContext.Height())
+	vss.hwFramesCtx.SetInitialPoolSize(20)
+	if err := vss.hwFramesCtx.Initialize(); err != nil {
 		return fmt.Errorf("initializing hardware frames context: %w", err)
 	}
 	return nil
@@ -323,50 +325,50 @@ func (s *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 // Note: side-data formats such as Dolby Vision RPU are currently not
 // preserved across re-encoding. Copy streams (CodecCopy) always preserve all
 // side data since the bitstream is passed through unchanged.
-func (s *videoStreamState) setupVideoConversion(profile hwProfile) error {
-	if s.isHWDecode {
+func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
+	if vss.isHWDecode {
 		// Decoded frames are already in the correct HW pixel format.
 		return nil
 	}
 
-	decPixFmt := s.dec.codecContext.PixelFormat()
+	decPixFmt := vss.dec.codecContext.PixelFormat()
 
 	// For HW encode with SW decode, target the SW pixel format (e.g. NV12)
 	// before uploading; for pure SW encode, target the encoder pixel format.
-	targetSwPixFmt := s.encCodecContext.PixelFormat()
-	if s.isHWEncode {
+	targetSwPixFmt := vss.encCodecContext.PixelFormat()
+	if vss.isHWEncode {
 		targetSwPixFmt = profile.swPixFmt
 	}
 
 	if decPixFmt != targetSwPixFmt {
 		swsCtx, err := astiav.CreateSoftwareScaleContext(
-			s.dec.codecContext.Width(), s.dec.codecContext.Height(), decPixFmt,
-			s.dec.codecContext.Width(), s.dec.codecContext.Height(), targetSwPixFmt,
+			vss.dec.codecContext.Width(), vss.dec.codecContext.Height(), decPixFmt,
+			vss.dec.codecContext.Width(), vss.dec.codecContext.Height(), targetSwPixFmt,
 			astiav.NewSoftwareScaleContextFlags(astiav.SoftwareScaleContextFlagBilinear),
 		)
 		if err != nil {
 			return fmt.Errorf("creating software scale context: %w", err)
 		}
-		s.swsCtx = swsCtx
+		vss.swsCtx = swsCtx
 
-		s.scaledFrame = astiav.AllocFrame()
-		if s.scaledFrame == nil {
+		vss.scaledFrame = astiav.AllocFrame()
+		if vss.scaledFrame == nil {
 			return errors.New("failed to allocate scaled frame")
 		}
-		s.scaledFrame.SetWidth(s.dec.codecContext.Width())
-		s.scaledFrame.SetHeight(s.dec.codecContext.Height())
-		s.scaledFrame.SetPixelFormat(targetSwPixFmt)
-		if err := s.scaledFrame.AllocBuffer(0); err != nil {
+		vss.scaledFrame.SetWidth(vss.dec.codecContext.Width())
+		vss.scaledFrame.SetHeight(vss.dec.codecContext.Height())
+		vss.scaledFrame.SetPixelFormat(targetSwPixFmt)
+		if err := vss.scaledFrame.AllocBuffer(0); err != nil {
 			return fmt.Errorf("allocating scaled frame buffer: %w", err)
 		}
 	}
 
-	if s.isHWEncode {
-		s.hwFrame = astiav.AllocFrame()
-		if s.hwFrame == nil {
+	if vss.isHWEncode {
+		vss.hwFrame = astiav.AllocFrame()
+		if vss.hwFrame == nil {
 			return errors.New("failed to allocate hardware frame")
 		}
-		if err := s.hwFrame.AllocHardwareBuffer(s.hwFramesCtx); err != nil {
+		if err := vss.hwFrame.AllocHardwareBuffer(vss.hwFramesCtx); err != nil {
 			return fmt.Errorf("allocating hardware frame buffer: %w", err)
 		}
 	}
@@ -376,68 +378,68 @@ func (s *videoStreamState) setupVideoConversion(profile hwProfile) error {
 
 // processPacket implements the stream interface for video. It decodes the
 // packet and re-encodes each decoded frame.
-func (s *videoStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	pkt.RescaleTs(s.inStream.TimeBase(), s.dec.codecContext.TimeBase())
+func (vss *videoStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	packet.RescaleTs(vss.inStream.TimeBase(), vss.dec.codecContext.TimeBase())
 
-	if err := s.dec.codecContext.SendPacket(pkt); err != nil {
+	if err := vss.dec.codecContext.SendPacket(packet); err != nil {
 		return fmt.Errorf("ffmpeg: sending video packet to decoder: %w", err)
 	}
 
 	for {
-		if err := s.dec.codecContext.ReceiveFrame(s.dec.frame); err != nil {
+		if err := vss.dec.codecContext.ReceiveFrame(vss.dec.frame); err != nil {
 			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
 				return nil
 			}
 			return fmt.Errorf("ffmpeg: receiving decoded video frame: %w", err)
 		}
-		if err := s.encodeVideoFrame(s.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
-			s.dec.frame.Unref()
+		if err := vss.encodeVideoFrame(vss.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			vss.dec.frame.Unref()
 			return err
 		}
-		s.dec.frame.Unref()
+		vss.dec.frame.Unref()
 	}
 }
 
 // encodeVideoFrame converts and encodes a single decoded video frame.
 // On the fully hardware path (isHWDecode=true) the frame is already in GPU
 // memory and is passed directly to the encoder without any CPU conversion.
-func (s *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	encFrame := frame
 
-	if !s.isHWDecode {
+	if !vss.isHWDecode {
 		// Software decode path: convert pixel format if needed.
-		if s.swsCtx != nil {
-			if err := s.swsCtx.ScaleFrame(frame, s.scaledFrame); err != nil {
+		if vss.swsCtx != nil {
+			if err := vss.swsCtx.ScaleFrame(frame, vss.scaledFrame); err != nil {
 				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
 			}
-			s.scaledFrame.SetPts(frame.Pts())
-			s.scaledFrame.SetPictureType(astiav.PictureTypeNone)
-			encFrame = s.scaledFrame
+			vss.scaledFrame.SetPts(frame.Pts())
+			vss.scaledFrame.SetPictureType(astiav.PictureTypeNone)
+			encFrame = vss.scaledFrame
 		}
 
 		// Upload to hardware memory when using SW decode + HW encode.
-		if s.isHWEncode {
-			if err := encFrame.TransferHardwareData(s.hwFrame); err != nil {
+		if vss.isHWEncode {
+			if err := encFrame.TransferHardwareData(vss.hwFrame); err != nil {
 				return fmt.Errorf("ffmpeg: uploading frame to hardware: %w", err)
 			}
-			s.hwFrame.SetPts(encFrame.Pts())
-			s.hwFrame.SetPictureType(astiav.PictureTypeNone)
-			encFrame = s.hwFrame
+			vss.hwFrame.SetPts(encFrame.Pts())
+			vss.hwFrame.SetPictureType(astiav.PictureTypeNone)
+			encFrame = vss.hwFrame
 		}
 	}
 
-	if err := s.encCodecContext.SendFrame(encFrame); err != nil {
+	if err := vss.encCodecContext.SendFrame(encFrame); err != nil {
 		return fmt.Errorf("ffmpeg: sending video frame to encoder: %w", err)
 	}
 
-	return s.receiveAndWritePackets(s.encCodecContext, s.encPkt, outputFmt, progressCh, totalDuration)
+	return vss.receiveAndWritePackets(vss.encCodecContext, vss.encPkt, outputFmt, progressCh, totalDuration)
 }
 
 // flush implements the stream interface for video. It drains buffered frames
 // from the encoder.
-func (s *videoStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	if err := s.encCodecContext.SendFrame(nil); err != nil {
+func (vss *videoStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if err := vss.encCodecContext.SendFrame(nil); err != nil {
 		return fmt.Errorf("ffmpeg: flushing video encoder: %w", err)
 	}
-	return s.receiveAndWritePackets(s.encCodecContext, s.encPkt, outputFmt, progressCh, totalDuration)
+	return vss.receiveAndWritePackets(vss.encCodecContext, vss.encPkt, outputFmt, progressCh, totalDuration)
 }

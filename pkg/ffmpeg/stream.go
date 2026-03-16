@@ -10,8 +10,11 @@ import (
 // stream is the interface for all per-stream processing types.
 // copyStreamState, videoStreamState, and audioStreamState implement it.
 type stream interface {
+	// inputStream returns the source stream from the input format context.
 	inputStream() *astiav.Stream
+	// outputStream returns the destination stream in the output format context.
 	outputStream() *astiav.Stream
+	// setOutputStream binds the output stream produced by the muxer to this state.
 	setOutputStream(*astiav.Stream)
 	// setupEncoder configures the encoder and allocates encoder resources.
 	// For copy streams this is a no-op.
@@ -20,9 +23,10 @@ type stream interface {
 	// stream parameters. Returns nil for copy streams.
 	encoderContext() *astiav.CodecContext
 	// processPacket handles an incoming demuxed packet.
-	processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
+	processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
 	// flush drains any buffered encoder output. No-op for copy streams.
 	flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
+	// free releases all resources held by this stream state.
 	free()
 }
 
@@ -36,26 +40,26 @@ type copyStreamState struct {
 	frames    int64 // encoded frames written; used for progress reporting
 }
 
-func (s *copyStreamState) inputStream() *astiav.Stream        { return s.inStream }
-func (s *copyStreamState) outputStream() *astiav.Stream       { return s.outStream }
-func (s *copyStreamState) setOutputStream(out *astiav.Stream) { s.outStream = out }
+func (css *copyStreamState) inputStream() *astiav.Stream        { return css.inStream }
+func (css *copyStreamState) outputStream() *astiav.Stream       { return css.outStream }
+func (css *copyStreamState) setOutputStream(out *astiav.Stream) { css.outStream = out }
 
-func (s *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
-func (s *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
+func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
+func (css *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
 
-func (s *copyStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, _ chan<- Progress, _ int64) error {
-	return remuxPacket(pkt, s.inStream, s.outStream, outputFmt)
+func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, _ chan<- Progress, _ int64) error {
+	return remuxPacket(packet, css.inStream, css.outStream, outputFmt)
 }
 
-func (s *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ int64) error {
+func (css *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ int64) error {
 	return nil
 }
 
-func (s *copyStreamState) free() {}
+func (css *copyStreamState) free() {}
 
 // receiveAndWritePackets drains encoded packets from the encoder context and
-// writes each to the output. s.frames is incremented per written packet.
-func (s *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, encPkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+// writes each to the output. css.frames is incremented per written packet.
+func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, encPkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	for {
 		if err := encCtx.ReceivePacket(encPkt); err != nil {
 			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
@@ -64,12 +68,12 @@ func (s *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, en
 			return fmt.Errorf("ffmpeg: receiving encoded packet: %w", err)
 		}
 
-		s.frames++
-		encPkt.SetStreamIndex(s.outStream.Index())
-		encPkt.RescaleTs(encCtx.TimeBase(), s.outStream.TimeBase())
+		css.frames++
+		encPkt.SetStreamIndex(css.outStream.Index())
+		encPkt.RescaleTs(encCtx.TimeBase(), css.outStream.TimeBase())
 
 		if progressCh != nil {
-			sendProgress(progressCh, s.frames, encPkt, s.outStream, totalDuration)
+			sendProgress(progressCh, css.frames, encPkt, css.outStream, totalDuration)
 		}
 
 		if err := outputFmt.WriteInterleavedFrame(encPkt); err != nil {
@@ -81,31 +85,31 @@ func (s *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, en
 }
 
 // remuxPacket copies a packet directly to the output without decoding/encoding.
-func remuxPacket(pkt *astiav.Packet, inStream, outStream *astiav.Stream, outputFmt *astiav.FormatContext) error {
-	pkt.RescaleTs(inStream.TimeBase(), outStream.TimeBase())
-	pkt.SetStreamIndex(outStream.Index())
-	if err := outputFmt.WriteInterleavedFrame(pkt); err != nil {
+func remuxPacket(packet *astiav.Packet, inStream, outStream *astiav.Stream, outputFmt *astiav.FormatContext) error {
+	packet.RescaleTs(inStream.TimeBase(), outStream.TimeBase())
+	packet.SetStreamIndex(outStream.Index())
+	if err := outputFmt.WriteInterleavedFrame(packet); err != nil {
 		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", outStream.Index(), err)
 	}
 	return nil
 }
 
 // sendProgress emits a non-blocking progress update on ch.
-func sendProgress(ch chan<- Progress, frames int64, pkt *astiav.Packet, outStream *astiav.Stream, totalDuration int64) {
-	var pct float64
+func sendProgress(ch chan<- Progress, frames int64, packet *astiav.Packet, outStream *astiav.Stream, totalDuration int64) {
+	var percentComplete float64
 	if totalDuration > 0 {
 		tb := outStream.TimeBase()
-		ptsInMicros := float64(pkt.Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6
-		pct = ptsInMicros / float64(totalDuration) * 100
-		if pct > 100 {
-			pct = 100
+		ptsInMicros := float64(packet.Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6
+		percentComplete = ptsInMicros / float64(totalDuration) * 100
+		if percentComplete > 100 {
+			percentComplete = 100
 		}
-		if pct < 0 {
-			pct = 0
+		if percentComplete < 0 {
+			percentComplete = 0
 		}
 	}
 	select {
-	case ch <- Progress{FramesProcessed: frames, PercentComplete: pct}:
+	case ch <- Progress{FramesProcessed: frames, PercentComplete: percentComplete}:
 	default:
 	}
 }
