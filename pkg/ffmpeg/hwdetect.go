@@ -2,42 +2,63 @@ package ffmpeg
 
 import "github.com/asticode/go-astiav"
 
-// DetectHardwareEncoder checks whether a hardware encoder is available for the
-// given output codec. It probes libavcodec directly — no device is opened, only
-// codec registration is checked.
+// DetectHardwareEncoders returns all HWAccel values for which a hardware
+// encoder is registered in libavcodec for the given output codec, in priority
+// order (QSV > NVENC > VAAPI). It probes libavcodec directly — no device is
+// opened, only codec registration is checked.
 //
-// Hardware encode and decode capabilities are independent: a hardware
-// accelerator may support encoding a codec without supporting decoding it, or
-// vice versa. Use DetectHardwareDecoder to check decode-side availability.
-func DetectHardwareEncoder(codec Codec) (HWAccel, error) {
-	for hw, profile := range hwProfiles {
-		name := hwEncoderNameForCodec(codec, profile)
+// Hardware encode and decode capabilities are independent. Use
+// DetectHardwareDecoders to check decode-side availability.
+func DetectHardwareEncoders(codec Codec) []HWAccel {
+	codecID := codecToCodecID(codec)
+	var result []HWAccel
+	for _, hw := range hwAccelPriority {
+		profile, ok := hwProfiles[hw]
+		if !ok {
+			continue
+		}
+		name := profile.encoders[codecID]
 		if name != "" && astiav.FindEncoderByName(name) != nil {
-			return hw, nil
+			result = append(result, hw)
 		}
 	}
-	return HWAccelNone, nil
+	return result
 }
 
-// DetectHardwareDecoder checks whether a hardware decoder is available for the
-// given input codec. See DetectHardwareEncoder for the distinction between
-// encode and decode capability.
-func DetectHardwareDecoder(codec Codec) (HWAccel, error) {
-	var codecID astiav.CodecID
-	switch codec {
-	case CodecH264:
-		codecID = astiav.CodecIDH264
-	case CodecH265:
-		codecID = astiav.CodecIDH265
-	default:
-		return HWAccelNone, nil
-	}
-
-	for hw, profile := range hwProfiles {
-		name := hwDecoderNameForCodecID(codecID, profile)
+// DetectHardwareDecoders returns all HWAccel values for which a hardware
+// decoder is registered in libavcodec for the given codec ID, in priority
+// order (QSV > NVENC > VAAPI).
+func DetectHardwareDecoders(codecID astiav.CodecID) []HWAccel {
+	var result []HWAccel
+	for _, hw := range hwAccelPriority {
+		profile, ok := hwProfiles[hw]
+		if !ok {
+			continue
+		}
+		name := profile.decoders[codecID]
 		if name != "" && astiav.FindDecoderByName(name) != nil {
-			return hw, nil
+			result = append(result, hw)
 		}
 	}
-	return HWAccelNone, nil
+	return result
+}
+
+// GetHardwareEncoder returns preferred if it is available as a hardware encoder
+// for the given codec. If preferred is HWAccelNone or unavailable, the first
+// available hardware encoder (in priority order) is returned. Returns
+// HWAccelNone if no hardware encoder is available.
+func GetHardwareEncoder(codec Codec, preferred HWAccel) HWAccel {
+	if preferred != HWAccelNone {
+		codecID := codecToCodecID(codec)
+		if p, ok := hwProfiles[preferred]; ok {
+			name := p.encoders[codecID]
+			if name != "" && astiav.FindEncoderByName(name) != nil {
+				return preferred
+			}
+		}
+	}
+	if accs := DetectHardwareEncoders(codec); len(accs) > 0 {
+		return accs[0]
+	}
+	return HWAccelNone
 }

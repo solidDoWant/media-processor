@@ -99,101 +99,119 @@ func (e *audioEncoderState) free() {
 	}
 }
 
-// streamState holds all per-stream resources for a single transcode pass.
-// It is composed of typed sub-structs to keep the decoder and encoder concerns
-// separate and make the per-stream resource lifecycle explicit.
-type streamState struct {
-	inputStream   *astiav.Stream
-	outputStream  *astiav.Stream
-	isCopy        bool
-	isVideo       bool
-	framesWritten int64
-
-	dec      streamDecoder
-	videoEnc videoEncoderState
-	audioEnc audioEncoderState
+// streamBase holds fields common to all stream processing types.
+type streamBase struct {
+	inStream  *astiav.Stream
+	outStream *astiav.Stream
+	frames    int64 // encoded frames written, used for progress reporting
 }
 
-func (state *streamState) free() {
-	if state.isCopy {
-		return
-	}
-	state.dec.free()
-	if state.isVideo {
-		state.videoEnc.free()
-	} else {
-		state.audioEnc.free()
-	}
+func (s *streamBase) inputStream() *astiav.Stream         { return s.inStream }
+func (s *streamBase) outputStream() *astiav.Stream        { return s.outStream }
+func (s *streamBase) setOutputStream(out *astiav.Stream)  { s.outStream = out }
+
+// stream is the interface for all per-stream processing types.
+// copyStreamState, videoStreamState, and audioStreamState implement it.
+type stream interface {
+	inputStream() *astiav.Stream
+	outputStream() *astiav.Stream
+	setOutputStream(*astiav.Stream)
+	// setupEncoder configures the encoder and allocates encoder resources.
+	// For copy streams this is a no-op.
+	setupEncoder(hwAccel HWAccel, outputFmt *astiav.FormatContext) error
+	// encoderContext returns the encoder codec context used to populate output
+	// stream parameters. Returns nil for copy streams.
+	encoderContext() *astiav.CodecContext
+	// processPacket handles an incoming demuxed packet.
+	processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
+	// flush drains any buffered encoder output. No-op for copy streams.
+	flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
+	free()
 }
 
-// encCodecContext returns the encoder codec context for this stream.
-func (state *streamState) encCodecContext() *astiav.CodecContext {
-	if state.isVideo {
-		return state.videoEnc.codecContext
-	}
-	return state.audioEnc.codecContext
+// ---- copyStreamState -------------------------------------------------------
+
+// copyStreamState passes packets through to the output without re-encoding.
+// Used for subtitle, attachment, data, and copy-codec audio/video streams.
+type copyStreamState struct {
+	streamBase
 }
 
-// encPkt returns the encoder packet for this stream.
-func (state *streamState) encPkt() *astiav.Packet {
-	if state.isVideo {
-		return state.videoEnc.pkt
-	}
-	return state.audioEnc.pkt
+func (s *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
+func (s *copyStreamState) encoderContext() *astiav.CodecContext                   { return nil }
+
+func (s *copyStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, _ chan<- Progress, _ int64) error {
+	return remuxPacket(pkt, s.inStream, s.outStream, outputFmt)
 }
 
-// setupDecoder initialises the decoder codec context for an audio or video
-// stream. For video streams with a non-None hwAccel, it attempts to use a
-// hardware-accelerated decoder so that decoded frames remain in GPU memory,
-// enabling a zero-copy decode→encode pipeline. If the HW decoder is
-// unavailable the function silently falls back to software decoding.
-func (state *streamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
+func (s *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ int64) error {
+	return nil
+}
+
+func (s *copyStreamState) free() {}
+
+// ---- videoStreamState ------------------------------------------------------
+
+// videoStreamState decodes and re-encodes a video stream.
+type videoStreamState struct {
+	streamBase
+	dec         streamDecoder
+	enc         videoEncoderState
+	outputCodec Codec
+}
+
+func (s *videoStreamState) encoderContext() *astiav.CodecContext { return s.enc.codecContext }
+
+func (s *videoStreamState) free() {
+	s.dec.free()
+	s.enc.free()
+}
+
+// setupDecoder initialises the decoder codec context for the video stream.
+// For non-None hwAccel it attempts hardware decoding so that decoded frames
+// remain in GPU memory, enabling a zero-copy decode→encode pipeline.
+// Falls back silently to software decoding if HW decode is unavailable.
+func (s *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
 	var codec *astiav.Codec
 
-	// For video streams with a hardware profile, attempt hardware decoding.
-	if state.isVideo {
-		if profile, ok := hwProfiles[hwAccel]; ok {
-			hwDecName := hwDecoderNameForCodecID(inStream.CodecParameters().CodecID(), profile)
-			if hwDecName != "" {
-				if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
-					hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
-					if err == nil {
-						state.dec.hwDevCtx = hwDevCtx
-						state.dec.hwPixFmt = profile.hwPixFmt
-						codec = hwDec
-					}
-					// On failure, fall through to software decoding.
+	if profile, ok := hwProfiles[hwAccel]; ok {
+		hwDecName := hwDecoderNameForCodecID(inStream.CodecParameters().CodecID(), profile)
+		if hwDecName != "" {
+			if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
+				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
+				if err == nil {
+					s.dec.hwDevCtx = hwDevCtx
+					s.dec.hwPixFmt = profile.hwPixFmt
+					codec = hwDec
 				}
+				// On failure, fall through to software decoding.
 			}
 		}
 	}
 
-	// Software decoder fallback.
 	if codec == nil {
 		codec = astiav.FindDecoder(inStream.CodecParameters().CodecID())
 		if codec == nil {
 			return fmt.Errorf("no decoder for codec ID %v", inStream.CodecParameters().CodecID())
 		}
 	}
-	state.dec.codec = codec
+	s.dec.codec = codec
 
-	state.dec.codecContext = astiav.AllocCodecContext(codec)
-	if state.dec.codecContext == nil {
+	s.dec.codecContext = astiav.AllocCodecContext(codec)
+	if s.dec.codecContext == nil {
 		return errors.New("failed to allocate decoder codec context")
 	}
 
-	if err := inStream.CodecParameters().ToCodecContext(state.dec.codecContext); err != nil {
+	if err := inStream.CodecParameters().ToCodecContext(s.dec.codecContext); err != nil {
 		return fmt.Errorf("copying codec parameters to context: %w", err)
 	}
 
-	if state.isVideo {
-		state.dec.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
-	}
+	s.dec.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
 
-	if state.dec.hwDevCtx != nil {
-		state.dec.codecContext.SetHardwareDeviceContext(state.dec.hwDevCtx)
-		hwPixFmt := state.dec.hwPixFmt
-		state.dec.codecContext.SetPixelFormatCallback(func(pfs []astiav.PixelFormat) astiav.PixelFormat {
+	if s.dec.hwDevCtx != nil {
+		s.dec.codecContext.SetHardwareDeviceContext(s.dec.hwDevCtx)
+		hwPixFmt := s.dec.hwPixFmt
+		s.dec.codecContext.SetPixelFormatCallback(func(pfs []astiav.PixelFormat) astiav.PixelFormat {
 			for _, pf := range pfs {
 				if pf == hwPixFmt {
 					return pf
@@ -207,42 +225,39 @@ func (state *streamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav
 		})
 	}
 
-	if err := state.dec.codecContext.Open(codec, nil); err != nil {
+	if err := s.dec.codecContext.Open(codec, nil); err != nil {
 		return fmt.Errorf("opening decoder: %w", err)
 	}
-	state.dec.codecContext.SetTimeBase(inStream.TimeBase())
+	s.dec.codecContext.SetTimeBase(inStream.TimeBase())
 
-	state.dec.frame = astiav.AllocFrame()
-	if state.dec.frame == nil {
+	s.dec.frame = astiav.AllocFrame()
+	if s.dec.frame == nil {
 		return errors.New("failed to allocate decoder frame")
 	}
 
 	return nil
 }
 
-
-// setupVideoEncoder initialises the encoder for a video stream. If a hardware
-// encoder is requested but the hardware device cannot be opened, it silently
-// falls back to software encoding. When the decoder is also hardware-
-// accelerated the same device context is reused for a zero-copy pipeline.
-func (state *streamState) setupVideoEncoder(outputCodec Codec, hwAccel HWAccel, outputFmt *astiav.FormatContext) error {
-	enc, profile, useHW, err := state.selectVideoEncoder(outputCodec, hwAccel)
+// setupEncoder implements the stream interface for video. If a hardware encoder
+// is requested but unavailable, it falls back to software encoding transparently.
+func (s *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.FormatContext) error {
+	enc, profile, useHW, err := s.selectVideoEncoder(hwAccel)
 	if err != nil {
 		return err
 	}
-	state.videoEnc.codec = enc
-	state.videoEnc.isHW = useHW
+	s.enc.codec = enc
+	s.enc.isHW = useHW
 
-	if err := state.openVideoEncoderContext(enc, profile, useHW, outputFmt); err != nil {
+	if err := s.openVideoEncoderContext(enc, profile, useHW, outputFmt); err != nil {
 		return err
 	}
 
-	if err := state.setupVideoConversion(profile); err != nil {
+	if err := s.setupVideoConversion(profile); err != nil {
 		return err
 	}
 
-	state.videoEnc.pkt = astiav.AllocPacket()
-	if state.videoEnc.pkt == nil {
+	s.enc.pkt = astiav.AllocPacket()
+	if s.enc.pkt == nil {
 		return errors.New("failed to allocate encoder packet")
 	}
 
@@ -251,32 +266,27 @@ func (state *streamState) setupVideoEncoder(outputCodec Codec, hwAccel HWAccel, 
 
 // selectVideoEncoder chooses a hardware or software encoder. On hardware
 // selection failure it transparently falls back to software.
-func (state *streamState) selectVideoEncoder(outputCodec Codec, hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
+func (s *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Codec, profile hwProfile, useHW bool, err error) {
 	p, hasProfile := hwProfiles[hwAccel]
 	if hasProfile {
-		hwEncName := hwEncoderNameForCodec(outputCodec, p)
+		hwEncName := hwEncoderNameForCodec(s.outputCodec, p)
 		if hwEncName != "" && astiav.FindEncoderByName(hwEncName) != nil {
 			// Reuse the hardware device context from the HW decoder if one was
 			// set up, otherwise create a new one. This enables the zero-copy
 			// decode→encode path when both sides use the same hardware.
 			var hwDevCtx *astiav.HardwareDeviceContext
-			if state.dec.hwDevCtx != nil {
-				hwDevCtx = state.dec.hwDevCtx
+			if s.dec.hwDevCtx != nil {
+				hwDevCtx = s.dec.hwDevCtx
 			} else {
 				hwDevCtx, err = astiav.CreateHardwareDeviceContext(p.deviceType, "", nil, 0)
 				if err != nil {
-					// Device creation failed — fall through to software.
 					hwDevCtx = nil
 				}
 			}
 			if hwDevCtx != nil {
-				// Store the device context on the encoder state so it can be freed
-				// independently if it was newly created (not shared from the decoder).
-				if state.dec.hwDevCtx == nil {
-					// Newly created — store so free() can release it via videoEnc path.
-					// We repurpose hwFrame's slot to hold nothing; instead we must track
-					// separately. For simplicity, place it in dec.hwDevCtx for unified free.
-					state.dec.hwDevCtx = hwDevCtx
+				if s.dec.hwDevCtx == nil {
+					// Newly created — store so free() releases it via dec.free().
+					s.dec.hwDevCtx = hwDevCtx
 				}
 				return astiav.FindEncoderByName(hwEncName), p, true, nil
 			}
@@ -287,16 +297,16 @@ func (state *streamState) selectVideoEncoder(outputCodec Codec, hwAccel HWAccel)
 	// Only reachable if libavcodec was compiled without the requested software
 	// encoder (e.g. without libx264/libx265), which should not occur in normal
 	// deployments but is checked here as a safety net.
-	switch outputCodec {
+	switch s.outputCodec {
 	case CodecH264:
 		enc = astiav.FindEncoder(astiav.CodecIDH264)
 	case CodecH265:
 		enc = astiav.FindEncoder(astiav.CodecIDH265)
 	default:
-		return nil, hwProfile{}, false, fmt.Errorf("unsupported video codec: %s", outputCodec)
+		return nil, hwProfile{}, false, fmt.Errorf("unsupported video codec: %s", s.outputCodec)
 	}
 	if enc == nil {
-		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %s", outputCodec)
+		return nil, hwProfile{}, false, fmt.Errorf("no encoder found for video codec %s", s.outputCodec)
 	}
 
 	return enc, hwProfile{}, false, nil
@@ -304,39 +314,39 @@ func (state *streamState) selectVideoEncoder(outputCodec Codec, hwAccel HWAccel)
 
 // openVideoEncoderContext allocates, configures, and opens the encoder codec
 // context. For hardware paths it also sets up the hardware frames context.
-func (state *streamState) openVideoEncoderContext(enc *astiav.Codec, profile hwProfile, useHW bool, outputFmt *astiav.FormatContext) error {
-	state.videoEnc.codecContext = astiav.AllocCodecContext(enc)
-	if state.videoEnc.codecContext == nil {
+func (s *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile hwProfile, useHW bool, outputFmt *astiav.FormatContext) error {
+	s.enc.codecContext = astiav.AllocCodecContext(enc)
+	if s.enc.codecContext == nil {
 		return errors.New("failed to allocate encoder codec context")
 	}
 
-	state.videoEnc.codecContext.SetWidth(state.dec.codecContext.Width())
-	state.videoEnc.codecContext.SetHeight(state.dec.codecContext.Height())
-	state.videoEnc.codecContext.SetSampleAspectRatio(state.dec.codecContext.SampleAspectRatio())
-	state.videoEnc.codecContext.SetTimeBase(state.dec.codecContext.TimeBase())
-	state.videoEnc.codecContext.SetFramerate(state.dec.codecContext.Framerate())
+	s.enc.codecContext.SetWidth(s.dec.codecContext.Width())
+	s.enc.codecContext.SetHeight(s.dec.codecContext.Height())
+	s.enc.codecContext.SetSampleAspectRatio(s.dec.codecContext.SampleAspectRatio())
+	s.enc.codecContext.SetTimeBase(s.dec.codecContext.TimeBase())
+	s.enc.codecContext.SetFramerate(s.dec.codecContext.Framerate())
 
 	// Preserve HDR and color metadata.
-	state.videoEnc.codecContext.SetColorPrimaries(state.dec.codecContext.ColorPrimaries())
-	state.videoEnc.codecContext.SetColorTransferCharacteristic(state.dec.codecContext.ColorTransferCharacteristic())
-	state.videoEnc.codecContext.SetColorSpace(state.dec.codecContext.ColorSpace())
-	state.videoEnc.codecContext.SetColorRange(state.dec.codecContext.ColorRange())
+	s.enc.codecContext.SetColorPrimaries(s.dec.codecContext.ColorPrimaries())
+	s.enc.codecContext.SetColorTransferCharacteristic(s.dec.codecContext.ColorTransferCharacteristic())
+	s.enc.codecContext.SetColorSpace(s.dec.codecContext.ColorSpace())
+	s.enc.codecContext.SetColorRange(s.dec.codecContext.ColorRange())
 
 	if useHW {
 		// When the decoder is also hardware-accelerated the decoded frames are
 		// already in GPU memory — use those shared surfaces directly rather
 		// than allocating a separate frames pool.
-		if state.dec.hwDevCtx != nil && state.dec.hwPixFmt == profile.hwPixFmt {
-			state.videoEnc.isHWDecode = true
-			state.videoEnc.codecContext.SetPixelFormat(profile.hwPixFmt)
+		if s.dec.hwDevCtx != nil && s.dec.hwPixFmt == profile.hwPixFmt {
+			s.enc.isHWDecode = true
+			s.enc.codecContext.SetPixelFormat(profile.hwPixFmt)
 			// The encoder will use the hardware frames context from the decoded
 			// frames themselves; no explicit frames context is needed.
 		} else {
-			if err := state.setupHWFramesContext(profile); err != nil {
+			if err := s.setupHWFramesContext(profile); err != nil {
 				return err
 			}
-			state.videoEnc.codecContext.SetPixelFormat(profile.hwPixFmt)
-			state.videoEnc.codecContext.SetHardwareFramesContext(state.videoEnc.hwFramesCtx)
+			s.enc.codecContext.SetPixelFormat(profile.hwPixFmt)
+			s.enc.codecContext.SetHardwareFramesContext(s.enc.hwFramesCtx)
 		}
 	} else {
 		// Software path: prefer YUV420P; fall back to the encoder's first
@@ -346,14 +356,14 @@ func (state *streamState) openVideoEncoderContext(enc *astiav.Codec, profile hwP
 		if len(fmts) > 0 && !slices.Contains(fmts, astiav.PixelFormatYuv420P) {
 			encPixFmt = fmts[0]
 		}
-		state.videoEnc.codecContext.SetPixelFormat(encPixFmt)
+		s.enc.codecContext.SetPixelFormat(encPixFmt)
 	}
 
 	if outputFmt.OutputFormat().Flags().Has(astiav.IOFormatFlagGlobalheader) {
-		state.videoEnc.codecContext.SetFlags(state.videoEnc.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
+		s.enc.codecContext.SetFlags(s.enc.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := state.videoEnc.codecContext.Open(state.videoEnc.codec, nil); err != nil {
+	if err := s.enc.codecContext.Open(s.enc.codec, nil); err != nil {
 		return fmt.Errorf("opening video encoder: %w", err)
 	}
 
@@ -362,17 +372,17 @@ func (state *streamState) openVideoEncoderContext(enc *astiav.Codec, profile hwP
 
 // setupHWFramesContext allocates and initialises the hardware frames context
 // used to upload decoded software frames into GPU memory before encoding.
-func (state *streamState) setupHWFramesContext(profile hwProfile) error {
-	state.videoEnc.hwFramesCtx = astiav.AllocHardwareFramesContext(state.dec.hwDevCtx)
-	if state.videoEnc.hwFramesCtx == nil {
+func (s *videoStreamState) setupHWFramesContext(profile hwProfile) error {
+	s.enc.hwFramesCtx = astiav.AllocHardwareFramesContext(s.dec.hwDevCtx)
+	if s.enc.hwFramesCtx == nil {
 		return errors.New("failed to allocate hardware frames context")
 	}
-	state.videoEnc.hwFramesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
-	state.videoEnc.hwFramesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
-	state.videoEnc.hwFramesCtx.SetWidth(state.dec.codecContext.Width())
-	state.videoEnc.hwFramesCtx.SetHeight(state.dec.codecContext.Height())
-	state.videoEnc.hwFramesCtx.SetInitialPoolSize(20)
-	if err := state.videoEnc.hwFramesCtx.Initialize(); err != nil {
+	s.enc.hwFramesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
+	s.enc.hwFramesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
+	s.enc.hwFramesCtx.SetWidth(s.dec.codecContext.Width())
+	s.enc.hwFramesCtx.SetHeight(s.dec.codecContext.Height())
+	s.enc.hwFramesCtx.SetInitialPoolSize(20)
+	if err := s.enc.hwFramesCtx.Initialize(); err != nil {
 		return fmt.Errorf("initializing hardware frames context: %w", err)
 	}
 	return nil
@@ -390,50 +400,50 @@ func (state *streamState) setupHWFramesContext(profile hwProfile) error {
 // Note: side-data formats such as Dolby Vision RPU are currently not
 // preserved across re-encoding. Copy streams (CodecCopy) always preserve all
 // side data since the bitstream is passed through unchanged.
-func (state *streamState) setupVideoConversion(profile hwProfile) error {
-	if state.videoEnc.isHWDecode {
+func (s *videoStreamState) setupVideoConversion(profile hwProfile) error {
+	if s.enc.isHWDecode {
 		// Decoded frames are already in the correct HW pixel format.
 		return nil
 	}
 
-	decPixFmt := state.dec.codecContext.PixelFormat()
+	decPixFmt := s.dec.codecContext.PixelFormat()
 
 	// For HW encode with SW decode, target the SW pixel format (e.g. NV12)
 	// before uploading; for pure SW encode, target the encoder pixel format.
-	targetSwPixFmt := state.videoEnc.codecContext.PixelFormat()
-	if state.videoEnc.isHW {
+	targetSwPixFmt := s.enc.codecContext.PixelFormat()
+	if s.enc.isHW {
 		targetSwPixFmt = profile.swPixFmt
 	}
 
 	if decPixFmt != targetSwPixFmt {
 		swsCtx, err := astiav.CreateSoftwareScaleContext(
-			state.dec.codecContext.Width(), state.dec.codecContext.Height(), decPixFmt,
-			state.dec.codecContext.Width(), state.dec.codecContext.Height(), targetSwPixFmt,
+			s.dec.codecContext.Width(), s.dec.codecContext.Height(), decPixFmt,
+			s.dec.codecContext.Width(), s.dec.codecContext.Height(), targetSwPixFmt,
 			astiav.NewSoftwareScaleContextFlags(astiav.SoftwareScaleContextFlagBilinear),
 		)
 		if err != nil {
 			return fmt.Errorf("creating software scale context: %w", err)
 		}
-		state.videoEnc.swsCtx = swsCtx
+		s.enc.swsCtx = swsCtx
 
-		state.videoEnc.scaledFrame = astiav.AllocFrame()
-		if state.videoEnc.scaledFrame == nil {
+		s.enc.scaledFrame = astiav.AllocFrame()
+		if s.enc.scaledFrame == nil {
 			return errors.New("failed to allocate scaled frame")
 		}
-		state.videoEnc.scaledFrame.SetWidth(state.dec.codecContext.Width())
-		state.videoEnc.scaledFrame.SetHeight(state.dec.codecContext.Height())
-		state.videoEnc.scaledFrame.SetPixelFormat(targetSwPixFmt)
-		if err := state.videoEnc.scaledFrame.AllocBuffer(0); err != nil {
+		s.enc.scaledFrame.SetWidth(s.dec.codecContext.Width())
+		s.enc.scaledFrame.SetHeight(s.dec.codecContext.Height())
+		s.enc.scaledFrame.SetPixelFormat(targetSwPixFmt)
+		if err := s.enc.scaledFrame.AllocBuffer(0); err != nil {
 			return fmt.Errorf("allocating scaled frame buffer: %w", err)
 		}
 	}
 
-	if state.videoEnc.isHW {
-		state.videoEnc.hwFrame = astiav.AllocFrame()
-		if state.videoEnc.hwFrame == nil {
+	if s.enc.isHW {
+		s.enc.hwFrame = astiav.AllocFrame()
+		if s.enc.hwFrame == nil {
 			return errors.New("failed to allocate hardware frame")
 		}
-		if err := state.videoEnc.hwFrame.AllocHardwareBuffer(state.videoEnc.hwFramesCtx); err != nil {
+		if err := s.enc.hwFrame.AllocHardwareBuffer(s.enc.hwFramesCtx); err != nil {
 			return fmt.Errorf("allocating hardware frame buffer: %w", err)
 		}
 	}
@@ -441,82 +451,317 @@ func (state *streamState) setupVideoConversion(profile hwProfile) error {
 	return nil
 }
 
-// setupAudioEncoder initialises the encoder for an audio stream.
-func (state *streamState) setupAudioEncoder(outputCodec Codec, outputFmt *astiav.FormatContext) error {
-	switch outputCodec {
+// processPacket implements the stream interface for video. It decodes the
+// packet and re-encodes each decoded frame.
+func (s *videoStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	pkt.RescaleTs(s.inStream.TimeBase(), s.dec.codecContext.TimeBase())
+
+	if err := s.dec.codecContext.SendPacket(pkt); err != nil {
+		return fmt.Errorf("ffmpeg: sending video packet to decoder: %w", err)
+	}
+
+	for {
+		if err := s.dec.codecContext.ReceiveFrame(s.dec.frame); err != nil {
+			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+				return nil
+			}
+			return fmt.Errorf("ffmpeg: receiving decoded video frame: %w", err)
+		}
+		if err := s.encodeVideoFrame(s.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			s.dec.frame.Unref()
+			return err
+		}
+		s.dec.frame.Unref()
+	}
+}
+
+// encodeVideoFrame converts and encodes a single decoded video frame.
+// On the fully hardware path (isHWDecode=true) the frame is already in GPU
+// memory and is passed directly to the encoder without any CPU conversion.
+func (s *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	encFrame := frame
+
+	if !s.enc.isHWDecode {
+		// Software decode path: convert pixel format if needed.
+		if s.enc.swsCtx != nil {
+			if err := s.enc.swsCtx.ScaleFrame(frame, s.enc.scaledFrame); err != nil {
+				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
+			}
+			s.enc.scaledFrame.SetPts(frame.Pts())
+			s.enc.scaledFrame.SetPictureType(astiav.PictureTypeNone)
+			encFrame = s.enc.scaledFrame
+		}
+
+		// Upload to hardware memory when using SW decode + HW encode.
+		if s.enc.isHW {
+			if err := encFrame.TransferHardwareData(s.enc.hwFrame); err != nil {
+				return fmt.Errorf("ffmpeg: uploading frame to hardware: %w", err)
+			}
+			s.enc.hwFrame.SetPts(encFrame.Pts())
+			s.enc.hwFrame.SetPictureType(astiav.PictureTypeNone)
+			encFrame = s.enc.hwFrame
+		}
+	}
+
+	if err := s.enc.codecContext.SendFrame(encFrame); err != nil {
+		return fmt.Errorf("ffmpeg: sending video frame to encoder: %w", err)
+	}
+
+	return receiveAndWritePackets(s.enc.codecContext, s.enc.pkt, s.outStream, &s.frames, outputFmt, progressCh, totalDuration)
+}
+
+// flush implements the stream interface for video. It drains buffered frames
+// from the encoder.
+func (s *videoStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if err := s.enc.codecContext.SendFrame(nil); err != nil {
+		return fmt.Errorf("ffmpeg: flushing video encoder: %w", err)
+	}
+	return receiveAndWritePackets(s.enc.codecContext, s.enc.pkt, s.outStream, &s.frames, outputFmt, progressCh, totalDuration)
+}
+
+// ---- audioStreamState ------------------------------------------------------
+
+// audioStreamState decodes and re-encodes an audio stream.
+type audioStreamState struct {
+	streamBase
+	dec         streamDecoder
+	enc         audioEncoderState
+	outputCodec Codec
+}
+
+func (s *audioStreamState) encoderContext() *astiav.CodecContext { return s.enc.codecContext }
+
+func (s *audioStreamState) free() {
+	s.dec.free()
+	s.enc.free()
+}
+
+// setupDecoder initialises the software decoder codec context for the audio stream.
+func (s *audioStreamState) setupDecoder(inStream *astiav.Stream) error {
+	codec := astiav.FindDecoder(inStream.CodecParameters().CodecID())
+	if codec == nil {
+		return fmt.Errorf("no decoder for codec ID %v", inStream.CodecParameters().CodecID())
+	}
+	s.dec.codec = codec
+
+	s.dec.codecContext = astiav.AllocCodecContext(codec)
+	if s.dec.codecContext == nil {
+		return errors.New("failed to allocate decoder codec context")
+	}
+
+	if err := inStream.CodecParameters().ToCodecContext(s.dec.codecContext); err != nil {
+		return fmt.Errorf("copying codec parameters to context: %w", err)
+	}
+
+	if err := s.dec.codecContext.Open(codec, nil); err != nil {
+		return fmt.Errorf("opening decoder: %w", err)
+	}
+	s.dec.codecContext.SetTimeBase(inStream.TimeBase())
+
+	s.dec.frame = astiav.AllocFrame()
+	if s.dec.frame == nil {
+		return errors.New("failed to allocate decoder frame")
+	}
+
+	return nil
+}
+
+// setupEncoder implements the stream interface for audio.
+func (s *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatContext) error {
+	switch s.outputCodec {
 	case CodecH264, CodecH265:
-		return fmt.Errorf("unsupported audio codec: %s", outputCodec)
+		return fmt.Errorf("unsupported audio codec: %s", s.outputCodec)
 	}
 
 	// Re-encode using the same codec as the input (transcode → same format,
 	// potentially with a different container).
-	enc := astiav.FindEncoder(state.dec.codecContext.CodecID())
+	enc := astiav.FindEncoder(s.dec.codecContext.CodecID())
 	if enc == nil {
-		return fmt.Errorf("no encoder found for audio codec ID %v", state.dec.codecContext.CodecID())
+		return fmt.Errorf("no encoder found for audio codec ID %v", s.dec.codecContext.CodecID())
 	}
-	state.audioEnc.codec = enc
+	s.enc.codec = enc
 
-	state.audioEnc.codecContext = astiav.AllocCodecContext(enc)
-	if state.audioEnc.codecContext == nil {
+	s.enc.codecContext = astiav.AllocCodecContext(enc)
+	if s.enc.codecContext == nil {
 		return errors.New("failed to allocate audio encoder codec context")
 	}
 
 	// Preserve sample rate and channel layout.
-	state.audioEnc.codecContext.SetSampleRate(state.dec.codecContext.SampleRate())
+	s.enc.codecContext.SetSampleRate(s.dec.codecContext.SampleRate())
 	if layouts := enc.SupportedChannelLayouts(); len(layouts) > 0 {
-		state.audioEnc.codecContext.SetChannelLayout(layouts[0])
+		s.enc.codecContext.SetChannelLayout(layouts[0])
 	} else {
-		state.audioEnc.codecContext.SetChannelLayout(state.dec.codecContext.ChannelLayout())
+		s.enc.codecContext.SetChannelLayout(s.dec.codecContext.ChannelLayout())
 	}
 	if fmts := enc.SupportedSampleFormats(); len(fmts) > 0 {
-		state.audioEnc.codecContext.SetSampleFormat(fmts[0])
+		s.enc.codecContext.SetSampleFormat(fmts[0])
 	} else {
-		state.audioEnc.codecContext.SetSampleFormat(state.dec.codecContext.SampleFormat())
+		s.enc.codecContext.SetSampleFormat(s.dec.codecContext.SampleFormat())
 	}
-	state.audioEnc.codecContext.SetTimeBase(astiav.NewRational(1, state.audioEnc.codecContext.SampleRate()))
+	s.enc.codecContext.SetTimeBase(astiav.NewRational(1, s.enc.codecContext.SampleRate()))
 
 	if outputFmt.OutputFormat().Flags().Has(astiav.IOFormatFlagGlobalheader) {
-		state.audioEnc.codecContext.SetFlags(state.audioEnc.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
+		s.enc.codecContext.SetFlags(s.enc.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := state.audioEnc.codecContext.Open(state.audioEnc.codec, nil); err != nil {
+	if err := s.enc.codecContext.Open(s.enc.codec, nil); err != nil {
 		return fmt.Errorf("opening audio encoder: %w", err)
 	}
 
 	// Set up resampler if sample format, channel layout, or sample rate differs.
-	needResample := state.dec.codecContext.SampleFormat() != state.audioEnc.codecContext.SampleFormat() ||
-		state.dec.codecContext.ChannelLayout().Channels() != state.audioEnc.codecContext.ChannelLayout().Channels() ||
-		state.dec.codecContext.SampleRate() != state.audioEnc.codecContext.SampleRate()
+	needResample := s.dec.codecContext.SampleFormat() != s.enc.codecContext.SampleFormat() ||
+		s.dec.codecContext.ChannelLayout().Channels() != s.enc.codecContext.ChannelLayout().Channels() ||
+		s.dec.codecContext.SampleRate() != s.enc.codecContext.SampleRate()
 
 	if needResample {
-		state.audioEnc.swrCtx = astiav.AllocSoftwareResampleContext()
-		if state.audioEnc.swrCtx == nil {
+		s.enc.swrCtx = astiav.AllocSoftwareResampleContext()
+		if s.enc.swrCtx == nil {
 			return errors.New("failed to allocate software resample context")
 		}
 
-		state.audioEnc.audioFrame = astiav.AllocFrame()
-		if state.audioEnc.audioFrame == nil {
+		s.enc.audioFrame = astiav.AllocFrame()
+		if s.enc.audioFrame == nil {
 			return errors.New("failed to allocate audio resample frame")
 		}
-		state.audioEnc.audioFrame.SetChannelLayout(state.audioEnc.codecContext.ChannelLayout())
-		state.audioEnc.audioFrame.SetSampleFormat(state.audioEnc.codecContext.SampleFormat())
-		state.audioEnc.audioFrame.SetSampleRate(state.audioEnc.codecContext.SampleRate())
-		state.audioEnc.audioFrame.SetNbSamples(state.dec.codecContext.FrameSize())
-		if state.audioEnc.audioFrame.NbSamples() <= 0 {
-			state.audioEnc.audioFrame.SetNbSamples(1024)
+		s.enc.audioFrame.SetChannelLayout(s.enc.codecContext.ChannelLayout())
+		s.enc.audioFrame.SetSampleFormat(s.enc.codecContext.SampleFormat())
+		s.enc.audioFrame.SetSampleRate(s.enc.codecContext.SampleRate())
+		s.enc.audioFrame.SetNbSamples(s.dec.codecContext.FrameSize())
+		if s.enc.audioFrame.NbSamples() <= 0 {
+			s.enc.audioFrame.SetNbSamples(1024)
 		}
-		if err := state.audioEnc.audioFrame.AllocBuffer(0); err != nil {
+		if err := s.enc.audioFrame.AllocBuffer(0); err != nil {
 			return fmt.Errorf("allocating audio resample frame buffer: %w", err)
 		}
 	}
 
-	state.audioEnc.pkt = astiav.AllocPacket()
-	if state.audioEnc.pkt == nil {
+	s.enc.pkt = astiav.AllocPacket()
+	if s.enc.pkt == nil {
 		return errors.New("failed to allocate encoder packet")
 	}
 
 	return nil
 }
+
+// processPacket implements the stream interface for audio. It decodes the
+// packet and re-encodes each decoded frame.
+func (s *audioStreamState) processPacket(pkt *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	pkt.RescaleTs(s.inStream.TimeBase(), s.dec.codecContext.TimeBase())
+
+	if err := s.dec.codecContext.SendPacket(pkt); err != nil {
+		return fmt.Errorf("ffmpeg: sending audio packet to decoder: %w", err)
+	}
+
+	for {
+		if err := s.dec.codecContext.ReceiveFrame(s.dec.frame); err != nil {
+			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+				return nil
+			}
+			return fmt.Errorf("ffmpeg: receiving decoded audio frame: %w", err)
+		}
+		if err := s.encodeAudioFrame(s.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			s.dec.frame.Unref()
+			return err
+		}
+		s.dec.frame.Unref()
+	}
+}
+
+// encodeAudioFrame resamples (if needed) and encodes a single decoded audio frame.
+func (s *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	encFrame := frame
+
+	if s.enc.swrCtx != nil {
+		if err := s.enc.swrCtx.ConvertFrame(frame, s.enc.audioFrame); err != nil {
+			return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
+		}
+		s.enc.audioFrame.SetPts(frame.Pts())
+		encFrame = s.enc.audioFrame
+	}
+
+	if err := s.enc.codecContext.SendFrame(encFrame); err != nil {
+		return fmt.Errorf("ffmpeg: sending audio frame to encoder: %w", err)
+	}
+
+	return receiveAndWritePackets(s.enc.codecContext, s.enc.pkt, s.outStream, &s.frames, outputFmt, progressCh, totalDuration)
+}
+
+// flush implements the stream interface for audio. It drains buffered frames
+// from the encoder.
+func (s *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if err := s.enc.codecContext.SendFrame(nil); err != nil {
+		return fmt.Errorf("ffmpeg: flushing audio encoder: %w", err)
+	}
+	return receiveAndWritePackets(s.enc.codecContext, s.enc.pkt, s.outStream, &s.frames, outputFmt, progressCh, totalDuration)
+}
+
+// ---- shared helpers --------------------------------------------------------
+
+// remuxPacket copies a packet directly to the output without decoding/encoding.
+func remuxPacket(pkt *astiav.Packet, inStream, outStream *astiav.Stream, outputFmt *astiav.FormatContext) error {
+	pkt.RescaleTs(inStream.TimeBase(), outStream.TimeBase())
+	pkt.SetStreamIndex(outStream.Index())
+	if err := outputFmt.WriteInterleavedFrame(pkt); err != nil {
+		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", outStream.Index(), err)
+	}
+	return nil
+}
+
+// receiveAndWritePackets drains encoded packets from the encoder and writes them
+// to the output. framesPtr is incremented for each packet written.
+func receiveAndWritePackets(encCtx *astiav.CodecContext, encPkt *astiav.Packet, outStream *astiav.Stream, framesPtr *int64, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	for {
+		if err := encCtx.ReceivePacket(encPkt); err != nil {
+			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+				return nil
+			}
+			return fmt.Errorf("ffmpeg: receiving encoded packet: %w", err)
+		}
+
+		*framesPtr++
+		encPkt.SetStreamIndex(outStream.Index())
+		encPkt.RescaleTs(encCtx.TimeBase(), outStream.TimeBase())
+
+		if progressCh != nil {
+			sendProgress(progressCh, *framesPtr, encPkt, outStream, totalDuration)
+		}
+
+		if err := outputFmt.WriteInterleavedFrame(encPkt); err != nil {
+			encPkt.Unref()
+			return fmt.Errorf("ffmpeg: writing encoded packet: %w", err)
+		}
+		encPkt.Unref()
+	}
+}
+
+// sendProgress emits a non-blocking progress update on ch.
+func sendProgress(ch chan<- Progress, frames int64, pkt *astiav.Packet, outStream *astiav.Stream, totalDuration int64) {
+	var pct float64
+	if totalDuration > 0 {
+		tb := outStream.TimeBase()
+		ptsInMicros := float64(pkt.Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6
+		pct = ptsInMicros / float64(totalDuration) * 100
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+	}
+	select {
+	case ch <- Progress{FramesProcessed: frames, PercentComplete: pct}:
+	default:
+	}
+}
+
+// freeStreams releases all resources held by a streams map.
+func freeStreams(streams map[int]stream) {
+	for _, s := range streams {
+		s.free()
+	}
+}
+
+// ---- TranscodeBuilder and Transcoder ---------------------------------------
 
 // TranscodeBuilder constructs a Transcoder using a fluent API.
 type TranscodeBuilder struct {
@@ -609,13 +854,13 @@ func (t *Transcoder) Run(ctx context.Context) error {
 
 	totalDuration := inputFmt.Duration()
 
-	states, err := t.buildStreamStates(inputFmt, effectiveHW)
+	streams, err := t.buildStreamStates(inputFmt, effectiveHW)
 	if err != nil {
 		return err
 	}
-	defer freeStreamStates(states)
+	defer freeStreams(streams)
 
-	outputFmt, closeIO, err := t.setupOutputContext(states, inputFmt, effectiveHW)
+	outputFmt, closeIO, err := t.setupOutputContext(streams, inputFmt, effectiveHW)
 	if err != nil {
 		return err
 	}
@@ -630,25 +875,24 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		t.startHook()
 	}
 
-	if err := t.readAllPackets(ctx, inputFmt, outputFmt, states, interrupter, totalDuration); err != nil {
+	if err := t.readAllPackets(ctx, inputFmt, outputFmt, streams, interrupter, totalDuration); err != nil {
 		return err
 	}
 
-	if err := t.flushAllEncoders(ctx, outputFmt, states, interrupter, totalDuration); err != nil {
+	if err := t.flushAllEncoders(ctx, outputFmt, streams, interrupter, totalDuration); err != nil {
 		return err
 	}
 
 	return outputFmt.WriteTrailer()
 }
 
-// resolveHWAccel resolves HWAccelAuto to a concrete value by checking for a
-// hardware encoder for the configured video codec.
+// resolveHWAccel resolves HWAccelAuto to a concrete value by detecting the
+// best available hardware encoder for the configured video codec.
 func (t *Transcoder) resolveHWAccel() HWAccel {
 	if t.hwAccel != HWAccelAuto {
 		return t.hwAccel
 	}
-	hw, _ := DetectHardwareEncoder(t.videoCodec)
-	return hw
+	return GetHardwareEncoder(t.videoCodec, HWAccelNone)
 }
 
 // openInputContext opens the input file and arms the IOInterrupter so that a
@@ -697,7 +941,7 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 	return inputFmt, interrupter, cancelWatch, nil
 }
 
-// buildStreamStates creates a streamState for every input stream.
+// buildStreamStates creates a stream for every input stream.
 // Audio and video streams are set up with a decoder when re-encoding is
 // requested; the hwAccel hint is passed through so hardware decoders can be
 // selected for a zero-copy decode→encode pipeline.
@@ -705,45 +949,44 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 //
 // Multiple audio tracks are fully supported — each audio stream gets its own
 // independent decoder and encoder pipeline.
-func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel HWAccel) (map[int]*streamState, error) {
-	states := make(map[int]*streamState)
+func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel HWAccel) (map[int]stream, error) {
+	streams := make(map[int]stream)
 
 	for _, inStream := range inputFmt.Streams() {
 		mediaType := inStream.CodecParameters().MediaType()
+		base := streamBase{inStream: inStream}
 
-		outputCodec := t.audioCodec
-		if mediaType == astiav.MediaTypeVideo {
-			outputCodec = t.videoCodec
-		}
-
-		// Non-AV streams (subtitles, attachments, data) are always remuxed as-is.
-		isCopy := outputCodec == CodecCopy ||
-			(mediaType != astiav.MediaTypeVideo && mediaType != astiav.MediaTypeAudio)
-
-		state := &streamState{
-			inputStream: inStream,
-			isVideo:     mediaType == astiav.MediaTypeVideo,
-			isCopy:      isCopy,
-		}
-
-		if !isCopy {
-			if err := state.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
-				freeStreamStates(states)
+		var s stream
+		switch {
+		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
+			vs := &videoStreamState{streamBase: base, outputCodec: t.videoCodec}
+			if err := vs.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
+				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
+			s = vs
+		case mediaType == astiav.MediaTypeAudio && t.audioCodec != CodecCopy:
+			as := &audioStreamState{streamBase: base, outputCodec: t.audioCodec}
+			if err := as.setupDecoder(inStream); err != nil {
+				freeStreams(streams)
+				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
+			}
+			s = as
+		default:
+			s = &copyStreamState{streamBase: base}
 		}
 
-		states[inStream.Index()] = state
+		streams[inStream.Index()] = s
 	}
 
-	return states, nil
+	return streams, nil
 }
 
 // setupOutputContext opens the output format context, creates output streams,
 // sets up encoders for re-encoded streams, and opens the IO context for
 // file-based output. The returned closeIO function must be deferred by the
 // caller — it flushes the IO context's buffers.
-func (t *Transcoder) setupOutputContext(states map[int]*streamState, inputFmt *astiav.FormatContext, effectiveHW HWAccel) (*astiav.FormatContext, func(), error) {
+func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav.FormatContext, effectiveHW HWAccel) (*astiav.FormatContext, func(), error) {
 	noopClose := func() {}
 
 	outputFmt, err := astiav.AllocOutputFormatContext(nil, string(t.container), t.outputPath)
@@ -756,22 +999,14 @@ func (t *Transcoder) setupOutputContext(states map[int]*streamState, inputFmt *a
 
 	// Create output streams in input order.
 	for _, inStream := range inputFmt.Streams() {
-		state, ok := states[inStream.Index()]
+		s, ok := streams[inStream.Index()]
 		if !ok {
 			continue
 		}
 
-		if !state.isCopy {
-			var setupErr error
-			if state.isVideo {
-				setupErr = state.setupVideoEncoder(t.videoCodec, effectiveHW, outputFmt)
-			} else {
-				setupErr = state.setupAudioEncoder(t.audioCodec, outputFmt)
-			}
-			if setupErr != nil {
-				outputFmt.Free()
-				return nil, noopClose, fmt.Errorf("ffmpeg: setting up encoder for stream %d: %w", inStream.Index(), setupErr)
-			}
+		if err := s.setupEncoder(effectiveHW, outputFmt); err != nil {
+			outputFmt.Free()
+			return nil, noopClose, fmt.Errorf("ffmpeg: setting up encoder for stream %d: %w", inStream.Index(), err)
 		}
 
 		outStream := outputFmt.NewStream(nil)
@@ -779,9 +1014,17 @@ func (t *Transcoder) setupOutputContext(states map[int]*streamState, inputFmt *a
 			outputFmt.Free()
 			return nil, noopClose, errors.New("ffmpeg: failed to create output stream")
 		}
-		state.outputStream = outStream
+		s.setOutputStream(outStream)
 
-		if state.isCopy {
+		if encCtx := s.encoderContext(); encCtx != nil {
+			// Re-encoded stream: populate output parameters from the encoder.
+			if err := outStream.CodecParameters().FromCodecContext(encCtx); err != nil {
+				outputFmt.Free()
+				return nil, noopClose, fmt.Errorf("ffmpeg: updating codec parameters for stream %d: %w", inStream.Index(), err)
+			}
+			outStream.SetTimeBase(encCtx.TimeBase())
+		} else {
+			// Copy stream: copy parameters from the input stream.
 			if err := inStream.CodecParameters().Copy(outStream.CodecParameters()); err != nil {
 				outputFmt.Free()
 				return nil, noopClose, fmt.Errorf("ffmpeg: copying codec parameters for stream %d: %w", inStream.Index(), err)
@@ -790,14 +1033,7 @@ func (t *Transcoder) setupOutputContext(states map[int]*streamState, inputFmt *a
 			// incompatible with the output container (e.g. matroska).
 			outStream.CodecParameters().SetCodecTag(0)
 			outStream.SetTimeBase(inStream.TimeBase())
-			continue
 		}
-
-		if err := outStream.CodecParameters().FromCodecContext(state.encCodecContext()); err != nil {
-			outputFmt.Free()
-			return nil, noopClose, fmt.Errorf("ffmpeg: updating codec parameters for stream %d: %w", inStream.Index(), err)
-		}
-		outStream.SetTimeBase(state.encCodecContext().TimeBase())
 	}
 
 	// Open the IO context for file-based output formats.
@@ -815,15 +1051,8 @@ func (t *Transcoder) setupOutputContext(states map[int]*streamState, inputFmt *a
 	return outputFmt, closeIO, nil
 }
 
-// freeStreamStates releases all resources held by a states map.
-func freeStreamStates(states map[int]*streamState) {
-	for _, state := range states {
-		state.free()
-	}
-}
-
 // readAllPackets is the main decode/encode loop.
-func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *astiav.FormatContext, states map[int]*streamState, interrupter *astiav.IOInterrupter, totalDuration int64) error {
+func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
 	pkt := astiav.AllocPacket()
 	defer pkt.Free()
 
@@ -838,13 +1067,13 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 			return fmt.Errorf("ffmpeg: reading frame: %w", err)
 		}
 
-		state, ok := states[pkt.StreamIndex()]
+		s, ok := streams[pkt.StreamIndex()]
 		if !ok {
 			pkt.Unref()
 			continue
 		}
 
-		err := t.dispatchPacket(pkt, state, outputFmt, totalDuration)
+		err := s.processPacket(pkt, outputFmt, t.progressCh, totalDuration)
 		pkt.Unref()
 
 		if err != nil {
@@ -856,32 +1085,10 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 	}
 }
 
-// dispatchPacket routes a packet to the appropriate handler.
-func (t *Transcoder) dispatchPacket(pkt *astiav.Packet, state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	if state.isCopy {
-		return remuxPacket(pkt, state, outputFmt)
-	}
-	if state.isVideo {
-		return t.processVideoPacket(pkt, state, outputFmt, totalDuration)
-	}
-	return t.processAudioPacket(pkt, state, outputFmt, totalDuration)
-}
-
 // flushAllEncoders drains buffered frames from every active encoder.
-func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.FormatContext, states map[int]*streamState, interrupter *astiav.IOInterrupter, totalDuration int64) error {
-	for _, state := range states {
-		if state.isCopy {
-			continue
-		}
-
-		var err error
-		if state.isVideo {
-			err = t.flushVideoEncoder(state, outputFmt, totalDuration)
-		} else {
-			err = t.flushAudioEncoder(state, outputFmt, totalDuration)
-		}
-
-		if err != nil {
+func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
+	for _, s := range streams {
+		if err := s.flush(outputFmt, t.progressCh, totalDuration); err != nil {
 			if interrupter.Interrupted() {
 				return ctx.Err()
 			}
@@ -889,176 +1096,4 @@ func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.For
 		}
 	}
 	return nil
-}
-
-// remuxPacket copies a packet directly to the output without decoding/encoding.
-func remuxPacket(pkt *astiav.Packet, state *streamState, outputFmt *astiav.FormatContext) error {
-	pkt.RescaleTs(state.inputStream.TimeBase(), state.outputStream.TimeBase())
-	pkt.SetStreamIndex(state.outputStream.Index())
-	if err := outputFmt.WriteInterleavedFrame(pkt); err != nil {
-		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", state.outputStream.Index(), err)
-	}
-	return nil
-}
-
-// processVideoPacket decodes a video packet and re-encodes each decoded frame.
-func (t *Transcoder) processVideoPacket(pkt *astiav.Packet, state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	pkt.RescaleTs(state.inputStream.TimeBase(), state.dec.codecContext.TimeBase())
-
-	if err := state.dec.codecContext.SendPacket(pkt); err != nil {
-		return fmt.Errorf("ffmpeg: sending video packet to decoder: %w", err)
-	}
-
-	for {
-		if err := state.dec.codecContext.ReceiveFrame(state.dec.frame); err != nil {
-			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
-				return nil
-			}
-			return fmt.Errorf("ffmpeg: receiving decoded video frame: %w", err)
-		}
-		if err := t.encodeVideoFrame(state.dec.frame, state, outputFmt, totalDuration); err != nil {
-			state.dec.frame.Unref()
-			return err
-		}
-		state.dec.frame.Unref()
-	}
-}
-
-// encodeVideoFrame converts and encodes a single decoded video frame.
-// On the fully hardware path (isHWDecode=true) the frame is already in GPU
-// memory and is passed directly to the encoder without any CPU conversion.
-func (t *Transcoder) encodeVideoFrame(frame *astiav.Frame, state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	encFrame := frame
-
-	if !state.videoEnc.isHWDecode {
-		// Software decode path: convert pixel format if needed.
-		if state.videoEnc.swsCtx != nil {
-			if err := state.videoEnc.swsCtx.ScaleFrame(frame, state.videoEnc.scaledFrame); err != nil {
-				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
-			}
-			state.videoEnc.scaledFrame.SetPts(frame.Pts())
-			state.videoEnc.scaledFrame.SetPictureType(astiav.PictureTypeNone)
-			encFrame = state.videoEnc.scaledFrame
-		}
-
-		// Upload to hardware memory when using SW decode + HW encode.
-		if state.videoEnc.isHW {
-			if err := encFrame.TransferHardwareData(state.videoEnc.hwFrame); err != nil {
-				return fmt.Errorf("ffmpeg: uploading frame to hardware: %w", err)
-			}
-			state.videoEnc.hwFrame.SetPts(encFrame.Pts())
-			state.videoEnc.hwFrame.SetPictureType(astiav.PictureTypeNone)
-			encFrame = state.videoEnc.hwFrame
-		}
-	}
-
-	if err := state.videoEnc.codecContext.SendFrame(encFrame); err != nil {
-		return fmt.Errorf("ffmpeg: sending video frame to encoder: %w", err)
-	}
-
-	return t.receiveAndWritePackets(state, outputFmt, totalDuration)
-}
-
-// flushVideoEncoder drains remaining buffered frames from the video encoder.
-func (t *Transcoder) flushVideoEncoder(state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	if err := state.videoEnc.codecContext.SendFrame(nil); err != nil {
-		return fmt.Errorf("ffmpeg: flushing video encoder: %w", err)
-	}
-	return t.receiveAndWritePackets(state, outputFmt, totalDuration)
-}
-
-// processAudioPacket decodes an audio packet and re-encodes each decoded frame.
-func (t *Transcoder) processAudioPacket(pkt *astiav.Packet, state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	pkt.RescaleTs(state.inputStream.TimeBase(), state.dec.codecContext.TimeBase())
-
-	if err := state.dec.codecContext.SendPacket(pkt); err != nil {
-		return fmt.Errorf("ffmpeg: sending audio packet to decoder: %w", err)
-	}
-
-	for {
-		if err := state.dec.codecContext.ReceiveFrame(state.dec.frame); err != nil {
-			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
-				return nil
-			}
-			return fmt.Errorf("ffmpeg: receiving decoded audio frame: %w", err)
-		}
-		if err := t.encodeAudioFrame(state.dec.frame, state, outputFmt, totalDuration); err != nil {
-			state.dec.frame.Unref()
-			return err
-		}
-		state.dec.frame.Unref()
-	}
-}
-
-// encodeAudioFrame resamples (if needed) and encodes a single decoded audio frame.
-func (t *Transcoder) encodeAudioFrame(frame *astiav.Frame, state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	encFrame := frame
-
-	if state.audioEnc.swrCtx != nil {
-		if err := state.audioEnc.swrCtx.ConvertFrame(frame, state.audioEnc.audioFrame); err != nil {
-			return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
-		}
-		state.audioEnc.audioFrame.SetPts(frame.Pts())
-		encFrame = state.audioEnc.audioFrame
-	}
-
-	if err := state.audioEnc.codecContext.SendFrame(encFrame); err != nil {
-		return fmt.Errorf("ffmpeg: sending audio frame to encoder: %w", err)
-	}
-
-	return t.receiveAndWritePackets(state, outputFmt, totalDuration)
-}
-
-// flushAudioEncoder drains remaining buffered frames from the audio encoder.
-func (t *Transcoder) flushAudioEncoder(state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	if err := state.audioEnc.codecContext.SendFrame(nil); err != nil {
-		return fmt.Errorf("ffmpeg: flushing audio encoder: %w", err)
-	}
-	return t.receiveAndWritePackets(state, outputFmt, totalDuration)
-}
-
-// receiveAndWritePackets drains encoded packets from the encoder and writes them.
-func (t *Transcoder) receiveAndWritePackets(state *streamState, outputFmt *astiav.FormatContext, totalDuration int64) error {
-	for {
-		if err := state.encCodecContext().ReceivePacket(state.encPkt()); err != nil {
-			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
-				return nil
-			}
-			return fmt.Errorf("ffmpeg: receiving encoded packet: %w", err)
-		}
-
-		state.framesWritten++
-		state.encPkt().SetStreamIndex(state.outputStream.Index())
-		state.encPkt().RescaleTs(state.encCodecContext().TimeBase(), state.outputStream.TimeBase())
-
-		if t.progressCh != nil {
-			t.sendProgress(state, totalDuration)
-		}
-
-		if err := outputFmt.WriteInterleavedFrame(state.encPkt()); err != nil {
-			state.encPkt().Unref()
-			return fmt.Errorf("ffmpeg: writing encoded packet: %w", err)
-		}
-		state.encPkt().Unref()
-	}
-}
-
-// sendProgress emits a non-blocking progress update on t.progressCh.
-func (t *Transcoder) sendProgress(state *streamState, totalDuration int64) {
-	var pct float64
-	if totalDuration > 0 {
-		tb := state.outputStream.TimeBase()
-		ptsInMicros := float64(state.encPkt().Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6
-		pct = ptsInMicros / float64(totalDuration) * 100
-		if pct > 100 {
-			pct = 100
-		}
-		if pct < 0 {
-			pct = 0
-		}
-	}
-	select {
-	case t.progressCh <- Progress{FramesProcessed: state.framesWritten, PercentComplete: pct}:
-	default:
-	}
 }
