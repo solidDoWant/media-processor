@@ -151,10 +151,11 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 	interrupter := astiav.NewIOInterrupter()
 	inputFmt.SetIOInterrupter(interrupter)
 
+	// Free() is called from the goroutine after it exits to avoid a race
+	// between Interrupt() and Free() if the context is cancelled concurrently.
 	watchDone := make(chan struct{})
 	cancelWatch := func() {
 		close(watchDone)
-		interrupter.Free()
 	}
 	go func() {
 		select {
@@ -162,12 +163,13 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 			interrupter.Interrupt()
 		case <-watchDone:
 		}
+		interrupter.Free()
 	}()
 
 	if err := inputFmt.OpenInput(t.inputPath, nil, nil); err != nil {
 		cancelWatch()
 		inputFmt.Free()
-		if interrupter.Interrupted() {
+		if ctx.Err() != nil {
 			return nil, nil, nil, ctx.Err()
 		}
 		return nil, nil, nil, fmt.Errorf("ffmpeg: opening input %q: %w", t.inputPath, err)
@@ -177,7 +179,7 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 		cancelWatch()
 		inputFmt.CloseInput()
 		inputFmt.Free()
-		if interrupter.Interrupted() {
+		if ctx.Err() != nil {
 			return nil, nil, nil, ctx.Err()
 		}
 		return nil, nil, nil, fmt.Errorf("ffmpeg: finding stream info: %w", err)

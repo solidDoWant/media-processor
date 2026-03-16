@@ -139,9 +139,12 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 				}
 			}
 			// HW pixel format not offered — fall back to the first available format.
+			// Update vss.dec.hwPixFmt so configureEncoderPixelFormat correctly
+			// detects that the decoder is not outputting the HW format.
 			if len(pfs) > 0 {
 				slog.Debug("ffmpeg: preferred hardware pixel format not offered by decoder, using fallback",
 					"preferred", hwPixFmt, "fallback", pfs[0])
+				vss.dec.hwPixFmt = pfs[0]
 				return pfs[0]
 			}
 			return astiav.PixelFormatNone

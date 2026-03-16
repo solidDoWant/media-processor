@@ -33,8 +33,10 @@ HAS_QSV_ENCODER := $(shell ffmpeg -hide_banner -encoders 2>/dev/null | \
 
 # Build tags: hwtest when any HW encoder is present; qsvtest when QSV specifically is present.
 comma := ,
+empty :=
+space := $(empty) $(empty)
 _test_tags := $(strip $(if $(filter 1,$(HAS_HW_ENCODER)),hwtest )$(if $(filter 1,$(HAS_QSV_ENCODER)),qsvtest))
-TEST_TAG_FLAGS := $(if $(_test_tags),-tags $(subst $(empty) ,$(comma),$(_test_tags)))
+TEST_TAG_FLAGS := $(if $(_test_tags),-tags $(subst $(space),$(comma),$(_test_tags)))
 
 .PHONY: test
 test: fmt vet ## Run tests.

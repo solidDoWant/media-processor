@@ -76,14 +76,12 @@ func (ass *audioStreamState) setupDecoder(inStream *astiav.Stream) error {
 func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatContext) error {
 	switch ass.outputCodec {
 	case CodecH264, CodecH265:
-		return fmt.Errorf("unsupported audio codec: %s", ass.outputCodec)
+		return fmt.Errorf("unsupported audio codec: %v", ass.outputCodec)
 	}
 
-	// Re-encode using the same codec as the input (transcode → same format,
-	// potentially with a different container).
-	enc := astiav.FindEncoder(ass.dec.codecContext.CodecID())
+	enc := astiav.FindEncoder(ass.outputCodec)
 	if enc == nil {
-		return fmt.Errorf("no encoder found for audio codec ID %v", ass.dec.codecContext.CodecID())
+		return fmt.Errorf("no encoder found for audio codec %v", ass.outputCodec)
 	}
 	ass.encCodec = enc
 
