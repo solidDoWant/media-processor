@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -195,7 +196,7 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 	case err := <-done:
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.Canceled)
-	case <-t.Context().Done():
+	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return promptly after context cancellation")
 	}
 }
