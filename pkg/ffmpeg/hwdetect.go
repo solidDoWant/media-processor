@@ -10,8 +10,22 @@ import "github.com/asticode/go-astiav"
 // Hardware encode and decode capabilities are independent. Use
 // DetectHardwareDecoders to check decode-side availability.
 func DetectHardwareEncoders(codec Codec) []HWAccel {
-	result := make([]HWAccel, 0, len(hwAccelPriority))
+	return detectHardwareAccelerator(codec, astiav.FindEncoderByName)
+}
 
+// DetectHardwareDecoders returns all HWAccel values for which a hardware
+// decoder is registered in libavcodec for the given codec, in priority
+// order (QSV > NVENC > VAAPI). It probes libavcodec directly — no device is
+// opened, only codec registration is checked.
+//
+// Hardware encode and decode capabilities are independent. Use
+// DetectHardwareEncoders to check encode-side availability.
+func DetectHardwareDecoders(codec Codec) []HWAccel {
+	return detectHardwareAccelerator(codec, astiav.FindDecoderByName)
+}
+
+func detectHardwareAccelerator(codec Codec, findAccelByCodec func(string) *astiav.Codec) []HWAccel {
+	accelerators := make([]HWAccel, 0, len(hwAccelPriority))
 	for _, hw := range hwAccelPriority {
 		profile, ok := hwProfiles[hw]
 		if !ok {
@@ -19,33 +33,12 @@ func DetectHardwareEncoders(codec Codec) []HWAccel {
 		}
 
 		name := profile.encoders[codec]
-		if name != "" && astiav.FindEncoderByName(name) != nil {
-			result = append(result, hw)
+		if name != "" && findAccelByCodec(name) != nil {
+			accelerators = append(accelerators, hw)
 		}
 	}
 
-	return result
-}
-
-// DetectHardwareDecoders returns all HWAccel values for which a hardware
-// decoder is registered in libavcodec for the given codec, in priority
-// order (QSV > NVENC > VAAPI).
-func DetectHardwareDecoders(codec Codec) []HWAccel {
-	result := make([]HWAccel, 0, len(hwAccelPriority))
-
-	for _, hw := range hwAccelPriority {
-		profile, ok := hwProfiles[hw]
-		if !ok {
-			continue
-		}
-
-		name := profile.decoders[codec]
-		if name != "" && astiav.FindDecoderByName(name) != nil {
-			result = append(result, hw)
-		}
-	}
-
-	return result
+	return accelerators
 }
 
 // GetHardwareEncoder returns preferred if it is available as a hardware encoder
@@ -53,21 +46,7 @@ func DetectHardwareDecoders(codec Codec) []HWAccel {
 // available hardware encoder (in priority order) is returned. Returns
 // HWAccelNone if no hardware encoder is available.
 func GetHardwareEncoder(codec Codec, preferred HWAccel) HWAccel {
-	if preferred != HWAccelAuto && preferred != HWAccelNone {
-		if p, ok := hwProfiles[preferred]; ok {
-			name := p.encoders[codec]
-			if name != "" && astiav.FindEncoderByName(name) != nil {
-				return preferred
-			}
-		}
-	}
-
-	accs := DetectHardwareEncoders(codec)
-	if len(accs) > 0 {
-		return accs[0]
-	}
-
-	return HWAccelNone
+	return getHardwareAccelerator(codec, preferred, DetectHardwareEncoders)
 }
 
 // GetHardwareDecoder returns preferred if it is available as a hardware decoder
@@ -75,19 +54,26 @@ func GetHardwareEncoder(codec Codec, preferred HWAccel) HWAccel {
 // available hardware decoder (in priority order) is returned. Returns
 // HWAccelNone if no hardware decoder is available.
 func GetHardwareDecoder(codec Codec, preferred HWAccel) HWAccel {
-	if preferred != HWAccelAuto && preferred != HWAccelNone {
-		if p, ok := hwProfiles[preferred]; ok {
-			name := p.decoders[codec]
-			if name != "" && astiav.FindDecoderByName(name) != nil {
-				return preferred
-			}
+	return getHardwareAccelerator(codec, preferred, DetectHardwareDecoders)
+}
+
+func getHardwareAccelerator(codec Codec, preferred HWAccel, detectFunc func(Codec) []HWAccel) HWAccel {
+	if preferred == HWAccelNone {
+		return HWAccelNone
+	}
+
+	accs := detectFunc(codec)
+	if len(accs) == 0 {
+		return HWAccelNone
+	}
+
+	// If preferred is available, return it.
+	for _, acc := range accs {
+		if acc == preferred {
+			return acc
 		}
 	}
 
-	accs := DetectHardwareDecoders(codec)
-	if len(accs) > 0 {
-		return accs[0]
-	}
-
-	return HWAccelNone
+	// In the case of auto or preferred not being available, return the first available hardware accelerator.
+	return accs[0]
 }

@@ -30,6 +30,23 @@ type stream interface {
 	free()
 }
 
+// streamDecoderState holds resources for the decoder side of a stream. Used by
+// both videoStreamState and audioStreamState.
+type streamDecoderState struct {
+	codec        *astiav.Codec
+	codecContext *astiav.CodecContext
+	frame        *astiav.Frame
+}
+
+func (sd *streamDecoderState) free() {
+	if sd.codecContext != nil {
+		sd.codecContext.Free()
+	}
+	if sd.frame != nil {
+		sd.frame.Free()
+	}
+}
+
 // copyStreamState passes packets through to the output without re-encoding.
 // Used for subtitle, attachment, data, and copy-codec audio/video streams.
 // It is also embedded by videoStreamState and audioStreamState to provide the
@@ -88,9 +105,11 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 func remuxPacket(packet *astiav.Packet, inStream, outStream *astiav.Stream, outputFmt *astiav.FormatContext) error {
 	packet.RescaleTs(inStream.TimeBase(), outStream.TimeBase())
 	packet.SetStreamIndex(outStream.Index())
+
 	if err := outputFmt.WriteInterleavedFrame(packet); err != nil {
 		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", outStream.Index(), err)
 	}
+
 	return nil
 }
 
@@ -101,13 +120,16 @@ func sendProgress(ch chan<- Progress, frames int64, packet *astiav.Packet, outSt
 		tb := outStream.TimeBase()
 		ptsInMicros := float64(packet.Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6
 		percentComplete = ptsInMicros / float64(totalDuration) * 100
+
 		if percentComplete > 100 {
 			percentComplete = 100
 		}
+
 		if percentComplete < 0 {
 			percentComplete = 0
 		}
 	}
+
 	select {
 	case ch <- Progress{FramesProcessed: frames, PercentComplete: percentComplete}:
 	default:

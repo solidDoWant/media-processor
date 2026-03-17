@@ -206,14 +206,14 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		var s stream
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			videoState := &videoStreamState{copyStreamState: base, outputCodec: t.videoCodec}
+			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}}
 			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
 			s = videoState
 		case mediaType == astiav.MediaTypeAudio && t.audioCodec != CodecCopy:
-			audioState := &audioStreamState{copyStreamState: base, outputCodec: t.audioCodec}
+			audioState := &audioStreamState{copyStreamState: base, encoder: audioEncoderState{codecID: t.audioCodec}}
 			if err := audioState.setupDecoder(inStream); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
@@ -278,6 +278,7 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 			outputFmt.Free()
 			return nil, noopClose, fmt.Errorf("ffmpeg: copying codec parameters for stream %d: %w", inStream.Index(), err)
 		}
+
 		// Clear the source-container codec tag (e.g. mp4a) which would be
 		// incompatible with the output container (e.g. matroska).
 		outStream.CodecParameters().SetCodecTag(0)
@@ -292,6 +293,7 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 			outputFmt.Free()
 			return nil, noopClose, fmt.Errorf("ffmpeg: opening output io context: %w", err)
 		}
+
 		closeIO = func() { _ = ioCtx.Close() }
 		outputFmt.SetPb(ioCtx)
 	}
@@ -309,9 +311,11 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 			if errors.Is(err, astiav.ErrEof) {
 				return nil
 			}
+
 			if interrupter.Interrupted() {
 				return ctx.Err()
 			}
+
 			return fmt.Errorf("ffmpeg: reading frame: %w", err)
 		}
 
@@ -324,24 +328,32 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 		err := s.processPacket(packet, outputFmt, t.progressCh, totalDuration)
 		packet.Unref()
 
-		if err != nil {
-			if interrupter.Interrupted() {
-				return ctx.Err()
-			}
-			return err
+		if err == nil {
+			continue
 		}
+
+		if interrupter.Interrupted() {
+			return ctx.Err()
+		}
+
+		return err
 	}
 }
 
 // flushAllEncoders drains buffered frames from every active encoder.
 func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
 	for _, s := range streams {
-		if err := s.flush(outputFmt, t.progressCh, totalDuration); err != nil {
-			if interrupter.Interrupted() {
-				return ctx.Err()
-			}
-			return err
+		err := s.flush(outputFmt, t.progressCh, totalDuration)
+
+		if err == nil {
+			continue
 		}
+
+		if interrupter.Interrupted() {
+			return ctx.Err()
+		}
+
+		return err
 	}
 	return nil
 }
