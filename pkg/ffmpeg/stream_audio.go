@@ -93,13 +93,13 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 	// Preserve sample rate and channel layout.
 	ass.encCodecContext.SetSampleRate(ass.dec.codecContext.SampleRate())
 
-	// Prefer the decoder's channel layout if the encoder supports it;
+	// Prefer the decoder's channel layout if the encoder supports it exactly;
 	// fall back to the encoder's first supported layout otherwise.
 	channelLayout := ass.dec.codecContext.ChannelLayout()
 	if layouts := enc.SupportedChannelLayouts(); len(layouts) > 0 {
 		supported := false
 		for _, l := range layouts {
-			if l.Channels() == channelLayout.Channels() {
+			if l.Equal(channelLayout) {
 				supported = true
 				break
 			}
@@ -110,9 +110,20 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 	}
 	ass.encCodecContext.SetChannelLayout(channelLayout)
 
+	// Prefer the decoder's sample format if the encoder supports it;
+	// fall back to the encoder's first supported format otherwise.
 	sampleFmt := ass.dec.codecContext.SampleFormat()
 	if fmts := enc.SupportedSampleFormats(); len(fmts) > 0 {
-		sampleFmt = fmts[0]
+		supported := false
+		for _, f := range fmts {
+			if f == sampleFmt {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			sampleFmt = fmts[0]
+		}
 	}
 	ass.encCodecContext.SetSampleFormat(sampleFmt)
 
@@ -128,7 +139,7 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 
 	// Set up resampler if sample format, channel layout, or sample rate differs.
 	needResample := ass.dec.codecContext.SampleFormat() != ass.encCodecContext.SampleFormat() ||
-		ass.dec.codecContext.ChannelLayout().Channels() != ass.encCodecContext.ChannelLayout().Channels() ||
+		!ass.dec.codecContext.ChannelLayout().Equal(ass.encCodecContext.ChannelLayout()) ||
 		ass.dec.codecContext.SampleRate() != ass.encCodecContext.SampleRate()
 
 	if needResample {
@@ -204,9 +215,28 @@ func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *as
 	return ass.receiveAndWritePackets(ass.encCodecContext, ass.encPkt, outputFmt, progressCh, totalDuration)
 }
 
-// flush implements the stream interface for audio. It drains buffered frames
-// from the encoder.
+// flush implements the stream interface for audio. It first drains any frames
+// buffered inside the decoder, then flushes the encoder.
 func (ass *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	// Signal EOF to the decoder so it releases all buffered frames.
+	if err := ass.dec.codecContext.SendPacket(nil); err != nil {
+		return fmt.Errorf("ffmpeg: flushing audio decoder: %w", err)
+	}
+	for {
+		if err := ass.dec.codecContext.ReceiveFrame(ass.dec.frame); err != nil {
+			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+				break
+			}
+			return fmt.Errorf("ffmpeg: receiving flushed audio frame: %w", err)
+		}
+		if err := ass.encodeAudioFrame(ass.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			ass.dec.frame.Unref()
+			return err
+		}
+		ass.dec.frame.Unref()
+	}
+
+	// Flush the encoder.
 	if err := ass.encCodecContext.SendFrame(nil); err != nil {
 		return fmt.Errorf("ffmpeg: flushing audio encoder: %w", err)
 	}

@@ -24,7 +24,7 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
-# Detect hardware encoders via ffmpeg CLI — independent of our DetectHardwareEncoder() logic.
+# Detect hardware encoders via ffmpeg CLI — independent of our DetectHardwareEncoders() logic.
 # This ensures hwtest/qsvtest runs even if our detection has bugs, allowing tests to catch them.
 HAS_HW_ENCODER := $(shell ffmpeg -hide_banner -encoders 2>/dev/null | \
 	grep -qE '^\s+V..... (hevc|h264)_(qsv|nvenc|vaapi)' && echo "1" || echo "0")

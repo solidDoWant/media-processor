@@ -438,9 +438,29 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 	return vss.receiveAndWritePackets(vss.encCodecContext, vss.encPkt, outputFmt, progressCh, totalDuration)
 }
 
-// flush implements the stream interface for video. It drains buffered frames
-// from the encoder.
+// flush implements the stream interface for video. It first drains any frames
+// buffered inside the decoder (common for H.264/H.265 with B-frames), then
+// flushes the encoder.
 func (vss *videoStreamState) flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	// Signal EOF to the decoder so it releases all buffered frames.
+	if err := vss.dec.codecContext.SendPacket(nil); err != nil {
+		return fmt.Errorf("ffmpeg: flushing video decoder: %w", err)
+	}
+	for {
+		if err := vss.dec.codecContext.ReceiveFrame(vss.dec.frame); err != nil {
+			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
+				break
+			}
+			return fmt.Errorf("ffmpeg: receiving flushed video frame: %w", err)
+		}
+		if err := vss.encodeVideoFrame(vss.dec.frame, outputFmt, progressCh, totalDuration); err != nil {
+			vss.dec.frame.Unref()
+			return err
+		}
+		vss.dec.frame.Unref()
+	}
+
+	// Flush the encoder.
 	if err := vss.encCodecContext.SendFrame(nil); err != nil {
 		return fmt.Errorf("ffmpeg: flushing video encoder: %w", err)
 	}
