@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -129,14 +128,9 @@ func TestNotifyFailure_CancelledContext(t *testing.T) {
 // TestNotifyFailure_UnreachableEndpoint verifies that an unreachable endpoint
 // returns a non-nil error.
 func TestNotifyFailure_UnreachableEndpoint(t *testing.T) {
-	// Bind a listener, get its address, then close it so nothing is listening.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := ln.Addr().String()
-	require.NoError(t, ln.Close())
-
-	client := &webhook.Client{URL: "http://" + addr}
-	err = client.NotifyFailure(t.Context(), testEvent)
+	// Port 1 is reserved and connections to it are reliably refused.
+	client := &webhook.Client{URL: "http://127.0.0.1:1"}
+	err := client.NotifyFailure(t.Context(), testEvent)
 	require.Error(t, err)
 }
 
