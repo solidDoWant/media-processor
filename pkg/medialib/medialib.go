@@ -11,6 +11,7 @@ var ErrNotFound = errors.New("not found in library")
 
 // Movie represents a movie entry in a movie library service.
 type Movie struct {
+	// ID is the internal database ID assigned by the backing movie library service.
 	ID    int64
 	Title string
 	Year  int
@@ -18,6 +19,7 @@ type Movie struct {
 
 // Episode represents an episode entry in a TV library service.
 type Episode struct {
+	// ID is the internal database ID assigned by the backing TV library service.
 	ID            int64
 	SeriesTitle   string
 	SeasonNumber  int

@@ -1,9 +1,10 @@
 package radarr_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,6 +33,16 @@ func newTestServer(t *testing.T, movies []*radarrlib.Movie) *httptest.Server {
 	})
 
 	return httptest.NewServer(mux)
+}
+
+// unusedURL returns a URL pointing at a port where nothing is listening.
+func unusedURL(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return fmt.Sprintf("http://%s", addr)
 }
 
 func TestGetMovieByFilePath(t *testing.T) {
@@ -132,28 +143,16 @@ func TestRefreshMovie(t *testing.T) {
 }
 
 func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	srv.Close() // immediately close so the URL is unreachable
+	client := radarr.New(radarr.Config{URL: unusedURL(t), APIKey: "test-key"})
 
-	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
-
-	ctx, cancel := context.WithTimeout(t.Context(), 100)
-	defer cancel()
-
-	_, err := client.GetMovieByFilePath(ctx, "/any/path.mkv")
+	_, err := client.GetMovieByFilePath(t.Context(), "/any/path.mkv")
 	require.Error(t, err)
 }
 
 func TestRefreshMovie_UnreachableURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	srv.Close()
+	client := radarr.New(radarr.Config{URL: unusedURL(t), APIKey: "test-key"})
 
-	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
-
-	ctx, cancel := context.WithTimeout(t.Context(), 100)
-	defer cancel()
-
-	err := client.RefreshMovie(ctx, 42)
+	err := client.RefreshMovie(t.Context(), 42)
 	require.Error(t, err)
 }
 

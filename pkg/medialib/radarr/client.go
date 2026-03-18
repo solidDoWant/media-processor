@@ -4,6 +4,7 @@ package radarr
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"golift.io/starr"
@@ -48,6 +49,7 @@ func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.
 			path = c.cfg.RemotePathPrefix + after
 		}
 	}
+	path = filepath.Clean(path)
 
 	movies, err := c.radarr.GetMovieContext(ctx, &radarrlib.GetMovie{})
 	if err != nil {

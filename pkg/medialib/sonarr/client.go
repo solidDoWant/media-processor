@@ -4,6 +4,7 @@ package sonarr
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"golift.io/starr"
@@ -42,36 +43,47 @@ func New(cfg Config) *Client {
 
 // GetEpisodeByFilePath returns the episode whose file matches path.
 // Returns medialib.ErrNotFound if no match is found.
+//
+// The implementation first fetches all series and uses each series' root path
+// as a prefix filter, so episode files are fetched for only the one series
+// whose root path matches — reducing API calls from O(N series) to O(1).
 func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
 	if c.cfg.LocalPathPrefix != "" {
 		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
 			path = c.cfg.RemotePathPrefix + after
 		}
 	}
+	path = filepath.Clean(path)
 
 	series, err := c.sonarr.GetAllSeriesContext(ctx)
 	if err != nil {
 		return medialib.Episode{}, fmt.Errorf("list series: %w", err)
 	}
 
+	// Use each series' root path as a prefix filter to avoid fetching episode
+	// files for every series in the library.
 	for _, s := range series {
+		if !strings.HasPrefix(path, filepath.Clean(s.Path)+string(filepath.Separator)) {
+			continue
+		}
+
 		files, err := c.sonarr.GetSeriesEpisodeFilesContext(ctx, s.ID)
 		if err != nil {
 			return medialib.Episode{}, fmt.Errorf("list episode files for series %d: %w", s.ID, err)
 		}
 
-		for _, f := range files {
-			if f.Path != path {
+		for _, file := range files {
+			if file.Path != path {
 				continue
 			}
 
-			episodes, err := c.sonarr.GetSeriesEpisodesContext(ctx, &sonarrlib.GetEpisode{EpisodeFileID: f.ID})
+			episodes, err := c.sonarr.GetSeriesEpisodesContext(ctx, &sonarrlib.GetEpisode{EpisodeFileID: file.ID})
 			if err != nil {
-				return medialib.Episode{}, fmt.Errorf("get episode for file %d: %w", f.ID, err)
+				return medialib.Episode{}, fmt.Errorf("get episode for file %d: %w", file.ID, err)
 			}
 
 			if len(episodes) == 0 {
-				return medialib.Episode{}, fmt.Errorf("no episode found for file %d: %w", f.ID, medialib.ErrNotFound)
+				return medialib.Episode{}, fmt.Errorf("no episode found for file %d: %w", file.ID, medialib.ErrNotFound)
 			}
 
 			ep := episodes[0]
