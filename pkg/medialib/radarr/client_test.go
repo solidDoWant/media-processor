@@ -3,8 +3,6 @@ package radarr_test
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +14,10 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 )
+
+// unreachableURL is a URL that always refuses connections (port 1 is a
+// privileged port with no listener in any normal environment).
+const unreachableURL = "http://127.0.0.1:1"
 
 func newTestServer(t *testing.T, movies []*radarrlib.Movie) *httptest.Server {
 	t.Helper()
@@ -33,16 +35,6 @@ func newTestServer(t *testing.T, movies []*radarrlib.Movie) *httptest.Server {
 	})
 
 	return httptest.NewServer(mux)
-}
-
-// unusedURL returns a URL pointing at a port where nothing is listening.
-func unusedURL(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return fmt.Sprintf("http://%s", addr)
 }
 
 func TestGetMovieByFilePath(t *testing.T) {
@@ -104,6 +96,19 @@ func TestGetMovieByFilePath(t *testing.T) {
 				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
 			},
 		},
+		{
+			name:   "path traversal outside remote prefix returns error",
+			path:   "/mnt/movies/../../etc/passwd",
+			movies: []*radarrlib.Movie{knownMovie},
+			cfg: radarr.Config{
+				LocalPathPrefix:  "/mnt/movies",
+				RemotePathPrefix: "/movies",
+			},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				require.NotErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -143,14 +148,14 @@ func TestRefreshMovie(t *testing.T) {
 }
 
 func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
-	client := radarr.New(radarr.Config{URL: unusedURL(t), APIKey: "test-key"})
+	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
 	_, err := client.GetMovieByFilePath(t.Context(), "/any/path.mkv")
 	require.Error(t, err)
 }
 
 func TestRefreshMovie_UnreachableURL(t *testing.T) {
-	client := radarr.New(radarr.Config{URL: unusedURL(t), APIKey: "test-key"})
+	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
 	err := client.RefreshMovie(t.Context(), 42)
 	require.Error(t, err)

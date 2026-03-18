@@ -51,6 +51,15 @@ func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.
 	}
 	path = filepath.Clean(path)
 
+	// Guard against path traversal: if a remote prefix is configured, reject
+	// any path that escapes it after translation and cleaning.
+	if c.cfg.RemotePathPrefix != "" {
+		cleanPrefix := filepath.Clean(c.cfg.RemotePathPrefix)
+		if !strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)) {
+			return medialib.Movie{}, fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
+		}
+	}
+
 	movies, err := c.radarr.GetMovieContext(ctx, &radarrlib.GetMovie{})
 	if err != nil {
 		return medialib.Movie{}, fmt.Errorf("list movies: %w", err)

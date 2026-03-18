@@ -55,6 +55,15 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	}
 	path = filepath.Clean(path)
 
+	// Guard against path traversal: if a remote prefix is configured, reject
+	// any path that escapes it after translation and cleaning.
+	if c.cfg.RemotePathPrefix != "" {
+		cleanPrefix := filepath.Clean(c.cfg.RemotePathPrefix)
+		if !strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)) {
+			return medialib.Episode{}, fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
+		}
+	}
+
 	series, err := c.sonarr.GetAllSeriesContext(ctx)
 	if err != nil {
 		return medialib.Episode{}, fmt.Errorf("list series: %w", err)
