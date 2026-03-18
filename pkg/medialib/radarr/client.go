@@ -4,6 +4,7 @@ package radarr
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -41,8 +42,9 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, radarr: radarrlib.New(s)}
 }
 
-// GetMovieByFilePath returns the movie whose file matches path.
-// Returns medialib.ErrNotFound if no match is found.
+// GetMovieByFilePath returns the movie identified by parsing the file path.
+// Uses Radarr's parse endpoint, so it works for pre-import files.
+// Returns medialib.ErrNotFound if no movie is identified.
 func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.Movie, error) {
 	if c.cfg.LocalPathPrefix != "" {
 		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
@@ -60,22 +62,38 @@ func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.
 		}
 	}
 
-	movies, err := c.radarr.GetMovieContext(ctx, &radarrlib.GetMovie{})
+	movie, err := c.parseFilePath(ctx, path)
 	if err != nil {
-		return medialib.Movie{}, fmt.Errorf("list movies: %w", err)
+		return medialib.Movie{}, fmt.Errorf("parse file path: %w", err)
 	}
 
-	for _, m := range movies {
-		if m.MovieFile != nil && m.MovieFile.Path == path {
-			return medialib.Movie{
-				ID:    m.ID,
-				Title: m.Title,
-				Year:  m.Year,
-			}, nil
-		}
+	if movie == nil {
+		return medialib.Movie{}, medialib.ErrNotFound
 	}
 
-	return medialib.Movie{}, medialib.ErrNotFound
+	return medialib.Movie{
+		ID:    movie.ID,
+		Title: movie.Title,
+		Year:  movie.Year,
+	}, nil
+}
+
+// parseFilePath calls Radarr's /api/v3/parse endpoint to identify a movie
+// from a file path. Returns nil if Radarr cannot identify the movie.
+func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Movie, error) {
+	var output struct {
+		Movie *radarrlib.Movie `json:"movie"`
+	}
+
+	q := make(url.Values)
+	q.Set("path", path)
+
+	req := starr.Request{URI: radarrlib.APIver + "/parse", Query: q}
+	if err := c.radarr.GetInto(ctx, req, &output); err != nil {
+		return nil, fmt.Errorf("api.Get(parse): %w", err)
+	}
+
+	return output.Movie, nil
 }
 
 // RefreshMovie triggers a Radarr library rescan for the given movie ID.

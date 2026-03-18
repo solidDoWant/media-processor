@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,48 +19,14 @@ import (
 // privileged port with no listener in any normal environment).
 const unreachableURL = "http://127.0.0.1:1"
 
-type sonarrFixture struct {
-	series       []*sonarrlib.Series
-	episodeFiles map[int64][]*sonarrlib.EpisodeFile // keyed by seriesID
-	episodes     map[int64][]*sonarrlib.Episode     // keyed by episodeFileID
-}
-
-func newSonarrTestServer(t *testing.T, fix sonarrFixture) *httptest.Server {
+func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/v3/series", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(fix.series))
-	})
-
-	mux.HandleFunc("/api/v3/episodeFile", func(w http.ResponseWriter, r *http.Request) {
-		seriesIDStr := r.URL.Query().Get("seriesId")
-		seriesID, err := strconv.ParseInt(seriesIDStr, 10, 64)
-		require.NoError(t, err)
-
-		files := fix.episodeFiles[seriesID]
-		if files == nil {
-			files = []*sonarrlib.EpisodeFile{}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(files))
-	})
-
-	mux.HandleFunc("/api/v3/episode", func(w http.ResponseWriter, r *http.Request) {
-		fileIDStr := r.URL.Query().Get("episodeFileId")
-		fileID, err := strconv.ParseInt(fileIDStr, 10, 64)
-		require.NoError(t, err)
-
-		eps := fix.episodes[fileID]
-		if eps == nil {
-			eps = []*sonarrlib.Episode{}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(eps))
+		require.NoError(t, json.NewEncoder(w).Encode(parseResp))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -73,63 +38,66 @@ func newSonarrTestServer(t *testing.T, fix sonarrFixture) *httptest.Server {
 }
 
 func TestGetEpisodeByFilePath(t *testing.T) {
-	fix := sonarrFixture{
-		series: []*sonarrlib.Series{
-			{ID: 10, Title: "Breaking Bad", Path: "/tv/Breaking Bad"},
+	knownParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
 		},
-		episodeFiles: map[int64][]*sonarrlib.EpisodeFile{
-			10: {
-				{ID: 100, SeriesID: 10, Path: "/tv/Breaking Bad/Season 01/S01E01.mkv"},
-			},
-		},
-		episodes: map[int64][]*sonarrlib.Episode{
-			100: {
-				{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
-			},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
 		},
 	}
 
 	tests := []struct {
-		name     string
-		path     string
-		cfg      sonarr.Config
-		expected medialib.Episode
-		errFunc  require.ErrorAssertionFunc
+		name      string
+		path      string
+		cfg       sonarr.Config
+		parseResp *sonarrlib.ParseOutput
+		expected  medialib.Episode
+		errFunc   require.ErrorAssertionFunc
 	}{
 		{
-			name: "known path returns episode",
-			path: "/tv/Breaking Bad/Season 01/S01E01.mkv",
+			name:      "known path returns episode",
+			path:      "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp: knownParseOutput,
 			expected: medialib.Episode{
 				ID:            200,
+				SeriesID:      10,
 				SeriesTitle:   "Breaking Bad",
 				SeasonNumber:  1,
 				EpisodeNumber: 1,
 			},
 		},
 		{
-			name: "unknown path returns ErrNotFound",
-			path: "/tv/Unknown/S01E01.mkv",
+			name:      "unrecognized path returns ErrNotFound",
+			path:      "/tv/Unknown.S01E01.mkv",
+			parseResp: &sonarrlib.ParseOutput{},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
 			},
 		},
 		{
-			name: "path translation maps local to remote path",
-			path: "/mnt/tv/Breaking Bad/Season 01/S01E01.mkv",
+			name:      "path translation maps local to remote path",
+			path:      "/mnt/tv/Breaking.Bad.S01E01.mkv",
+			parseResp: knownParseOutput,
 			cfg: sonarr.Config{
 				LocalPathPrefix:  "/mnt/tv",
 				RemotePathPrefix: "/tv",
 			},
 			expected: medialib.Episode{
 				ID:            200,
+				SeriesID:      10,
 				SeriesTitle:   "Breaking Bad",
 				SeasonNumber:  1,
 				EpisodeNumber: 1,
 			},
 		},
 		{
-			name: "path traversal outside remote prefix returns error",
-			path: "/mnt/tv/../../etc/passwd",
+			name:      "path traversal outside remote prefix returns error",
+			path:      "/mnt/tv/../../etc/passwd",
+			parseResp: &sonarrlib.ParseOutput{},
 			cfg: sonarr.Config{
 				LocalPathPrefix:  "/mnt/tv",
 				RemotePathPrefix: "/tv",
@@ -143,7 +111,7 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := newSonarrTestServer(t, fix)
+			srv := newSonarrTestServer(t, tc.parseResp)
 			t.Cleanup(srv.Close)
 
 			cfg := tc.cfg
@@ -168,7 +136,7 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 }
 
 func TestRefreshSeries(t *testing.T) {
-	srv := newSonarrTestServer(t, sonarrFixture{})
+	srv := newSonarrTestServer(t, nil)
 	t.Cleanup(srv.Close)
 
 	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
@@ -192,9 +160,7 @@ func TestRefreshSeries_UnreachableURL(t *testing.T) {
 }
 
 func TestGetEpisodeByFilePath_ErrNotFoundSentinel(t *testing.T) {
-	srv := newSonarrTestServer(t, sonarrFixture{
-		series: []*sonarrlib.Series{},
-	})
+	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
 	t.Cleanup(srv.Close)
 
 	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})

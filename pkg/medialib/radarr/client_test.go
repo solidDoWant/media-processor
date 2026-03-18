@@ -19,14 +19,19 @@ import (
 // privileged port with no listener in any normal environment).
 const unreachableURL = "http://127.0.0.1:1"
 
-func newTestServer(t *testing.T, movies []*radarrlib.Movie) *httptest.Server {
+// parseResponse mirrors the shape of Radarr's /api/v3/parse response.
+type parseResponse struct {
+	Movie *radarrlib.Movie `json:"movie"`
+}
+
+func newTestServer(t *testing.T, parseResp *parseResponse) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/v3/movie", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(movies))
+		require.NoError(t, json.NewEncoder(w).Encode(parseResp))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -42,24 +47,20 @@ func TestGetMovieByFilePath(t *testing.T) {
 		ID:    42,
 		Title: "The Matrix",
 		Year:  1999,
-		MovieFile: &radarrlib.MovieFile{
-			ID:   1,
-			Path: "/movies/The Matrix (1999)/The.Matrix.1999.mkv",
-		},
 	}
 
 	tests := []struct {
-		name     string
-		path     string
-		movies   []*radarrlib.Movie
-		cfg      radarr.Config
-		expected medialib.Movie
-		errFunc  require.ErrorAssertionFunc
+		name      string
+		path      string
+		cfg       radarr.Config
+		parseResp *parseResponse
+		expected  medialib.Movie
+		errFunc   require.ErrorAssertionFunc
 	}{
 		{
-			name:   "known path returns movie",
-			path:   "/movies/The Matrix (1999)/The.Matrix.1999.mkv",
-			movies: []*radarrlib.Movie{knownMovie},
+			name:      "known path returns movie",
+			path:      "/movies/The.Matrix.1999.mkv",
+			parseResp: &parseResponse{Movie: knownMovie},
 			expected: medialib.Movie{
 				ID:    42,
 				Title: "The Matrix",
@@ -67,17 +68,17 @@ func TestGetMovieByFilePath(t *testing.T) {
 			},
 		},
 		{
-			name:   "unknown path returns ErrNotFound",
-			path:   "/movies/Unknown/Unknown.mkv",
-			movies: []*radarrlib.Movie{knownMovie},
+			name:      "unknown path returns ErrNotFound",
+			path:      "/movies/Unknown.mkv",
+			parseResp: &parseResponse{Movie: nil},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
 			},
 		},
 		{
-			name:   "path translation maps local to remote path",
-			path:   "/mnt/movies/The Matrix (1999)/The.Matrix.1999.mkv",
-			movies: []*radarrlib.Movie{knownMovie},
+			name:      "path translation maps local to remote path",
+			path:      "/mnt/movies/The.Matrix.1999.mkv",
+			parseResp: &parseResponse{Movie: knownMovie},
 			cfg: radarr.Config{
 				LocalPathPrefix:  "/mnt/movies",
 				RemotePathPrefix: "/movies",
@@ -89,17 +90,9 @@ func TestGetMovieByFilePath(t *testing.T) {
 			},
 		},
 		{
-			name:   "movie without file is skipped",
-			path:   "/movies/Anything/anything.mkv",
-			movies: []*radarrlib.Movie{{ID: 1, Title: "No File", Year: 2000}},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
-			},
-		},
-		{
-			name:   "path traversal outside remote prefix returns error",
-			path:   "/mnt/movies/../../etc/passwd",
-			movies: []*radarrlib.Movie{knownMovie},
+			name:      "path traversal outside remote prefix returns error",
+			path:      "/mnt/movies/../../etc/passwd",
+			parseResp: &parseResponse{},
 			cfg: radarr.Config{
 				LocalPathPrefix:  "/mnt/movies",
 				RemotePathPrefix: "/movies",
@@ -113,7 +106,7 @@ func TestGetMovieByFilePath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := newTestServer(t, tc.movies)
+			srv := newTestServer(t, tc.parseResp)
 			t.Cleanup(srv.Close)
 
 			cfg := tc.cfg
@@ -162,7 +155,7 @@ func TestRefreshMovie_UnreachableURL(t *testing.T) {
 }
 
 func TestGetMovieByFilePath_ErrNotFoundSentinel(t *testing.T) {
-	srv := newTestServer(t, []*radarrlib.Movie{})
+	srv := newTestServer(t, &parseResponse{Movie: nil})
 	t.Cleanup(srv.Close)
 
 	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})

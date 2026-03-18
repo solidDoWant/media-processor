@@ -41,12 +41,9 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, sonarr: sonarrlib.New(s)}
 }
 
-// GetEpisodeByFilePath returns the episode whose file matches path.
-// Returns medialib.ErrNotFound if no match is found.
-//
-// The implementation first fetches all series and uses each series' root path
-// as a prefix filter, so episode files are fetched for only the one series
-// whose root path matches — reducing API calls from O(N series) to O(1).
+// GetEpisodeByFilePath returns the episode identified by parsing the file path.
+// Uses Sonarr's parse endpoint, so it works for pre-import files.
+// Returns medialib.ErrNotFound if no episode is identified.
 func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
 	if c.cfg.LocalPathPrefix != "" {
 		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
@@ -64,48 +61,23 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 		}
 	}
 
-	series, err := c.sonarr.GetAllSeriesContext(ctx)
+	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Path: path})
 	if err != nil {
-		return medialib.Episode{}, fmt.Errorf("list series: %w", err)
+		return medialib.Episode{}, fmt.Errorf("parse file path: %w", err)
 	}
 
-	// Use each series' root path as a prefix filter to avoid fetching episode
-	// files for every series in the library.
-	for _, s := range series {
-		if !strings.HasPrefix(path, filepath.Clean(s.Path)+string(filepath.Separator)) {
-			continue
-		}
-
-		files, err := c.sonarr.GetSeriesEpisodeFilesContext(ctx, s.ID)
-		if err != nil {
-			return medialib.Episode{}, fmt.Errorf("list episode files for series %d: %w", s.ID, err)
-		}
-
-		for _, file := range files {
-			if file.Path != path {
-				continue
-			}
-
-			episodes, err := c.sonarr.GetSeriesEpisodesContext(ctx, &sonarrlib.GetEpisode{EpisodeFileID: file.ID})
-			if err != nil {
-				return medialib.Episode{}, fmt.Errorf("get episode for file %d: %w", file.ID, err)
-			}
-
-			if len(episodes) == 0 {
-				return medialib.Episode{}, fmt.Errorf("no episode found for file %d: %w", file.ID, medialib.ErrNotFound)
-			}
-
-			ep := episodes[0]
-			return medialib.Episode{
-				ID:            ep.ID,
-				SeriesTitle:   s.Title,
-				SeasonNumber:  ep.SeasonNumber,
-				EpisodeNumber: ep.EpisodeNumber,
-			}, nil
-		}
+	if parsed == nil || parsed.ParsedEpisodeInfo == nil || len(parsed.Episodes) == 0 {
+		return medialib.Episode{}, medialib.ErrNotFound
 	}
 
-	return medialib.Episode{}, medialib.ErrNotFound
+	ep := parsed.Episodes[0]
+	return medialib.Episode{
+		ID:            ep.ID,
+		SeriesID:      ep.SeriesID,
+		SeriesTitle:   parsed.Title,
+		SeasonNumber:  ep.SeasonNumber,
+		EpisodeNumber: ep.EpisodeNumber,
+	}, nil
 }
 
 // RefreshSeries triggers a Sonarr library rescan for the given series ID.
