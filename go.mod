@@ -6,6 +6,7 @@ require (
 	github.com/asticode/go-astiav v0.40.0
 	github.com/hatchet-dev/hatchet v0.79.43
 	github.com/stretchr/testify v1.11.1
+	golift.io/starr v1.3.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
