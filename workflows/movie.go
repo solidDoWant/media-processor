@@ -37,9 +37,12 @@ type probeOutput struct {
 	// IsValidMedia is false when the file is not a recognisable media file with a
 	// video stream. All downstream steps are skipped when this is false.
 	IsValidMedia bool `json:"is_valid_media"`
-	// CopyVideo is true when the video stream should be copied without re-encoding
-	// (i.e. the source is already H.264 or H.265 in an MKV container).
-	CopyVideo bool `json:"copy_video"`
+	// VideoCodec is the codec name of the first video stream (e.g. "h264", "hevc").
+	// Only meaningful when IsValidMedia is true.
+	VideoCodec string `json:"video_codec"`
+	// Format is the container format name as reported by ffprobe (e.g. "matroska,webm").
+	// Only meaningful when IsValidMedia is true.
+	Format string `json:"format"`
 }
 
 // lookupOutput is the output of the lookup step.
@@ -52,16 +55,12 @@ type transcodeOutput struct {
 	TempPath string `json:"temp_path"`
 }
 
-// selectVideoCodec returns CodecCopy when the media is already H.264 or H.265 in an
+// selectVideoCodec returns CodecCopy when the video is already H.264 or H.265 in an
 // MKV container, and CodecH265 otherwise.
-func selectVideoCodec(info *ffprobe.MediaInfo) ffmpeg.Codec {
-	if strings.Contains(info.Format, "matroska") {
-		for _, s := range info.Streams {
-			if s.CodecType == ffprobe.CodecTypeVideo {
-				if s.CodecName == "h264" || s.CodecName == "hevc" {
-					return ffmpeg.CodecCopy
-				}
-			}
+func selectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
+	if strings.Contains(format, string(ffmpeg.ContainerMKV)) {
+		if videoCodecName == ffprobe.CodecNameH264 || videoCodecName == ffprobe.CodecNameH265 {
+			return ffmpeg.CodecCopy
 		}
 	}
 	return ffmpeg.CodecH265
@@ -70,7 +69,7 @@ func selectVideoCodec(info *ffprobe.MediaInfo) ffmpeg.Codec {
 // NewMovieWorkflow returns a Hatchet workflow that transcodes a movie file to the
 // standard format, moves it to the output directory, and notifies Radarr.
 //
-// Steps (in order): probe → lookup → transcode → move → notify → cleanup.
+// Steps (in order): probe → lookup → transcode → move → notify-radarr → cleanup.
 // If the source file is not a valid media file with a video stream the file is
 // deleted and all other steps are skipped without triggering the failure webhook.
 func NewMovieWorkflow(
@@ -79,7 +78,7 @@ func NewMovieWorkflow(
 	radarrClient medialib.MovieLibrary,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
-	var maxRuns int32 = 1
+	maxRuns := int32(1)
 	dropNewest := types.DropNewest
 
 	wf := client.NewWorkflow(movieWorkflowName,
@@ -96,7 +95,9 @@ func NewMovieWorkflow(
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MovieInput) (probeOutput, error) {
 		info, err := ffprobe.Probe(ctx, input.FilePath)
 		if err != nil {
-			_ = os.Remove(input.FilePath)
+			if removeErr := os.Remove(input.FilePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return probeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
+			}
 			return probeOutput{IsValidMedia: false}, nil
 		}
 
@@ -104,13 +105,16 @@ func NewMovieWorkflow(
 			if s.CodecType == ffprobe.CodecTypeVideo {
 				return probeOutput{
 					IsValidMedia: true,
-					CopyVideo:    selectVideoCodec(info) == ffmpeg.CodecCopy,
+					VideoCodec:   s.CodecName,
+					Format:       info.Format,
 				}, nil
 			}
 		}
 
 		// No video stream found — not a movie file.
-		_ = os.Remove(input.FilePath)
+		if removeErr := os.Remove(input.FilePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return probeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
+		}
 		return probeOutput{IsValidMedia: false}, nil
 	})
 
@@ -125,33 +129,28 @@ func NewMovieWorkflow(
 		return lookupOutput{MovieID: movie.ID}, nil
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
-	// transcode: copy or re-encode the video stream, writing output to a temp path.
+	// transcode: copy or re-encode the video stream, writing output to a temp path
+	// that is namespaced by the Hatchet workflow run ID.
 	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MovieInput) (transcodeOutput, error) {
 		var probe probeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			return transcodeOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		videoCodec := ffmpeg.CodecH265
-		if probe.CopyVideo {
-			videoCodec = ffmpeg.CodecCopy
-		}
-
-		tmpFile, err := os.CreateTemp(cfg.OutputDir, ".tmp-*.mkv")
-		if err != nil {
-			return transcodeOutput{}, fmt.Errorf("create temp file: %w", err)
-		}
-		tempPath := tmpFile.Name()
-		if err := tmpFile.Close(); err != nil {
-			return transcodeOutput{}, fmt.Errorf("close temp file: %w", err)
-		}
+		videoCodec := selectVideoCodec(probe.VideoCodec, probe.Format)
+		tempPath := filepath.Join(cfg.OutputDir, ".tmp-"+ctx.WorkflowRunId()+".mkv")
 
 		if err := ffmpeg.NewTranscode(input.FilePath, tempPath).
 			ToVideoCodec(videoCodec).
 			ToContainer(ffmpeg.ContainerMKV).
 			Build().
 			Run(ctx); err != nil {
-			_ = os.Remove(tempPath)
+			if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return transcodeOutput{}, errors.Join(
+					fmt.Errorf("transcode: %w", err),
+					fmt.Errorf("cleanup temp file: %w", removeErr),
+				)
+			}
 			return transcodeOutput{}, fmt.Errorf("transcode: %w", err)
 		}
 
@@ -159,6 +158,7 @@ func NewMovieWorkflow(
 	}, hatchet.WithParents(probeTask, lookupTask), skipIfInvalid)
 
 	// move: atomically rename the temp file to the final output path.
+	// Both paths are within cfg.OutputDir, ensuring they share the same filesystem.
 	moveTask := wf.NewTask("move", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
 		var tc transcodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &tc); err != nil {
@@ -167,15 +167,20 @@ func NewMovieWorkflow(
 
 		finalPath := filepath.Join(cfg.OutputDir, filepath.Base(input.FilePath))
 		if err := os.Rename(tc.TempPath, finalPath); err != nil {
-			_ = os.Remove(tc.TempPath)
+			if removeErr := os.Remove(tc.TempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return struct{}{}, errors.Join(
+					fmt.Errorf("move output file: %w", err),
+					fmt.Errorf("cleanup temp file: %w", removeErr),
+				)
+			}
 			return struct{}{}, fmt.Errorf("move output file: %w", err)
 		}
 
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid)
 
-	// notify: trigger a Radarr library rescan for the movie.
-	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
+	// notify-radarr: trigger a Radarr library rescan for the movie.
+	notifyTask := wf.NewTask("notify-radarr", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
 		var lu lookupOutput
 		if err := ctx.ParentOutput(lookupTask, &lu); err != nil {
 			return struct{}{}, fmt.Errorf("get lookup output: %w", err)

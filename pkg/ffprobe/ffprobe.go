@@ -22,6 +22,12 @@ const (
 	CodecTypeAttachment CodecType = "attachment"
 )
 
+// Video codec name constants as reported by ffprobe in StreamInfo.CodecName.
+const (
+	CodecNameH264 = "h264"
+	CodecNameH265 = "hevc"
+)
+
 // MediaInfo holds top-level metadata for a media container.
 type MediaInfo struct {
 	Format        string

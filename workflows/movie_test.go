@@ -11,76 +11,46 @@ import (
 
 func TestSelectVideoCodec(t *testing.T) {
 	tests := []struct {
-		name     string
-		info     *ffprobe.MediaInfo
-		expected ffmpeg.Codec
+		name           string
+		videoCodecName string
+		format         string
+		expected       ffmpeg.Codec
 	}{
 		{
-			name: "H.264 in MKV container is copied without re-encoding",
-			info: &ffprobe.MediaInfo{
-				Format: "matroska,webm",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeVideo, CodecName: "h264"},
-				},
-			},
-			expected: ffmpeg.CodecCopy,
+			name:           "H.264 in MKV container is copied without re-encoding",
+			videoCodecName: ffprobe.CodecNameH264,
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecCopy,
 		},
 		{
-			name: "H.265/HEVC in MKV container is copied without re-encoding",
-			info: &ffprobe.MediaInfo{
-				Format: "matroska,webm",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeVideo, CodecName: "hevc"},
-				},
-			},
-			expected: ffmpeg.CodecCopy,
+			name:           "H.265/HEVC in MKV container is copied without re-encoding",
+			videoCodecName: ffprobe.CodecNameH265,
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecCopy,
 		},
 		{
-			name: "H.264 in MP4 container is transcoded to H.265",
-			info: &ffprobe.MediaInfo{
-				Format: "mov,mp4,m4a,3gp,3g2,mj2",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeVideo, CodecName: "h264"},
-				},
-			},
-			expected: ffmpeg.CodecH265,
+			name:           "H.264 in MP4 container is transcoded to H.265",
+			videoCodecName: ffprobe.CodecNameH264,
+			format:         "mov,mp4,m4a,3gp,3g2,mj2",
+			expected:       ffmpeg.CodecH265,
 		},
 		{
-			name: "MPEG-4 video in MKV container is transcoded to H.265",
-			info: &ffprobe.MediaInfo{
-				Format: "matroska,webm",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeVideo, CodecName: "mpeg4"},
-				},
-			},
-			expected: ffmpeg.CodecH265,
+			name:           "MPEG-4 video in MKV container is transcoded to H.265",
+			videoCodecName: "mpeg4",
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecH265,
 		},
 		{
-			name: "audio-only MKV is transcoded (no video stream to copy)",
-			info: &ffprobe.MediaInfo{
-				Format: "matroska,webm",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeAudio, CodecName: "aac"},
-				},
-			},
-			expected: ffmpeg.CodecH265,
-		},
-		{
-			name: "H.264 with audio track in MKV is copied (first video stream wins)",
-			info: &ffprobe.MediaInfo{
-				Format: "matroska,webm",
-				Streams: []ffprobe.StreamInfo{
-					{CodecType: ffprobe.CodecTypeAudio, CodecName: "aac"},
-					{CodecType: ffprobe.CodecTypeVideo, CodecName: "h264"},
-				},
-			},
-			expected: ffmpeg.CodecCopy,
+			name:           "unknown codec in MKV container is transcoded to H.265",
+			videoCodecName: "av1",
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecH265,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := selectVideoCodec(tt.info)
+			got := selectVideoCodec(tt.videoCodecName, tt.format)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
