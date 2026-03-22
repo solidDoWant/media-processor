@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -53,7 +52,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 // validateWatchDirs returns an error listing every configured watch directory that does
 // not exist, so the operator sees all problems at once rather than fixing them one at a time.
 func validateWatchDirs(cfg *Config) error {
-	var errs []error
+	errs := make([]error, 0, len(cfg.Watches))
 
 	for _, w := range cfg.Watches {
 		if _, err := os.Stat(w.Path); err != nil {
@@ -65,13 +64,16 @@ func validateWatchDirs(cfg *Config) error {
 }
 
 // scan walks every configured watch directory recursively and calls dispatch for each
-// file found. Files in subdirectories inherit the mapping of their watch root. Dispatch
-// errors are logged as warnings so a single failed submission does not abort the scan.
+// file found. Files in subdirectories inherit the mapping of their watch root. All
+// per-file errors (access errors and dispatch errors) are collected and returned as an
+// aggregate so a single failure does not abort the scan.
 func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
+	var errs []error
+
 	for _, w := range cfg.Watches {
 		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				log.Printf("warning: scan error at %q: %v", path, err)
+				errs = append(errs, fmt.Errorf("scan error at %q: %w", path, err))
 				return nil
 			}
 
@@ -81,17 +83,19 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 
 			absPath, err := filepath.Abs(path)
 			if err != nil {
-				return fmt.Errorf("resolve absolute path for %q: %w", path, err)
+				errs = append(errs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
+				return nil
 			}
 
 			if dispatchErr := dispatch(ctx, w.Workflow, absPath); dispatchErr != nil {
-				log.Printf("warning: dispatch workflow %q for %q: %v", w.Workflow, absPath, dispatchErr)
+				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", w.Workflow, absPath, dispatchErr))
 			}
 
 			return nil
 		}); err != nil {
-			return fmt.Errorf("walk directory %q: %w", w.Path, err)
+			errs = append(errs, fmt.Errorf("walk directory %q: %w", w.Path, err))
 		}
 	}
-	return nil
+
+	return errors.Join(errs...)
 }

@@ -124,9 +124,9 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 	assert.Equal(t, filePath, dispatched[0])
 }
 
-// TestScan_DispatchErrorIsWarningNotFatal verifies that a dispatch error does not abort
-// the scan — all files in the directory are still processed.
-func TestScan_DispatchErrorIsWarningNotFatal(t *testing.T) {
+// TestScan_DispatchErrorsAreAggregated verifies that dispatch errors do not abort the
+// scan — all files are still processed — and the aggregate error is returned.
+func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -145,7 +145,7 @@ func TestScan_DispatchErrorIsWarningNotFatal(t *testing.T) {
 		return errors.New("simulated dispatch failure")
 	}
 
-	require.NoError(t, scan(t.Context(), cfg, dispatch))
+	require.Error(t, scan(t.Context(), cfg, dispatch))
 	assert.Equal(t, 2, count)
 }
 
