@@ -40,6 +40,20 @@ func TestValidateWatchDirs(t *testing.T) {
 			errFunc: require.Error,
 		},
 		{
+			name: "all errors reported when multiple dirs are missing",
+			cfg: &Config{
+				Watches: []WatchEntry{
+					{Path: "/nonexistent/alpha", Workflow: "W"},
+					{Path: "/nonexistent/beta", Workflow: "W"},
+				},
+			},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "/nonexistent/alpha")
+				assert.Contains(t, err.Error(), "/nonexistent/beta")
+			},
+		},
+		{
 			name:    "empty watch list passes",
 			cfg:     &Config{},
 			errFunc: require.NoError,

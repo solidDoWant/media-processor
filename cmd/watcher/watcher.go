@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -22,7 +23,7 @@ type dispatchFunc func(ctx context.Context, workflowName, filePath string) error
 // Overlapping scans are dropped (CANCEL_NEWEST, max 1 concurrent run) so a slow
 // scan does not pile up behind a cron backlog.
 func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTask {
-	var maxRuns int32 = 1
+	maxRuns := int32(1)
 	strategy := types.CancelNewest
 
 	return client.NewStandaloneTask(
@@ -49,14 +50,18 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 	)
 }
 
-// validateWatchDirs returns an error if any configured watch directory does not exist.
+// validateWatchDirs returns an error listing every configured watch directory that does
+// not exist, so the operator sees all problems at once rather than fixing them one at a time.
 func validateWatchDirs(cfg *Config) error {
+	var errs []error
+
 	for _, w := range cfg.Watches {
 		if _, err := os.Stat(w.Path); err != nil {
-			return fmt.Errorf("watch directory %q: %w", w.Path, err)
+			errs = append(errs, fmt.Errorf("watch directory %q: %w", w.Path, err))
 		}
 	}
-	return nil
+
+	return errors.Join(errs...)
 }
 
 // scan walks every configured watch directory recursively and calls dispatch for each
@@ -69,16 +74,20 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 				log.Printf("warning: scan error at %q: %v", path, err)
 				return nil
 			}
+
 			if d.IsDir() {
 				return nil
 			}
+
 			absPath, err := filepath.Abs(path)
 			if err != nil {
 				return fmt.Errorf("resolve absolute path for %q: %w", path, err)
 			}
+
 			if dispatchErr := dispatch(ctx, w.Workflow, absPath); dispatchErr != nil {
 				log.Printf("warning: dispatch workflow %q for %q: %v", w.Workflow, absPath, dispatchErr)
 			}
+
 			return nil
 		}); err != nil {
 			return fmt.Errorf("walk directory %q: %w", w.Path, err)
