@@ -50,13 +50,20 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 }
 
 // validateWatchDirs returns an error listing every configured watch directory that does
-// not exist, so the operator sees all problems at once rather than fixing them one at a time.
+// not exist or is not a directory, so the operator sees all problems at once rather than
+// fixing them one at a time.
 func validateWatchDirs(cfg *Config) error {
 	errs := make([]error, 0, len(cfg.Watches))
 
 	for _, w := range cfg.Watches {
-		if _, err := os.Stat(w.Path); err != nil {
+		info, err := os.Stat(w.Path)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("watch directory %q: %w", w.Path, err))
+			continue
+		}
+
+		if !info.IsDir() {
+			errs = append(errs, fmt.Errorf("watch path %q is not a directory", w.Path))
 		}
 	}
 
@@ -66,12 +73,21 @@ func validateWatchDirs(cfg *Config) error {
 // scan walks every configured watch directory recursively and calls dispatch for each
 // file found. Files in subdirectories inherit the mapping of their watch root. All
 // per-file errors (access errors and dispatch errors) are collected and returned as an
-// aggregate so a single failure does not abort the scan.
+// aggregate so a single failure does not abort the scan. The walk respects ctx
+// cancellation and returns immediately on shutdown.
 func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 	var errs []error
 
 	for _, w := range cfg.Watches {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+
 			if err != nil {
 				errs = append(errs, fmt.Errorf("scan error at %q: %w", path, err))
 				return nil
@@ -93,6 +109,10 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 
 			return nil
 		}); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+
 			errs = append(errs, fmt.Errorf("walk directory %q: %w", w.Path, err))
 		}
 	}

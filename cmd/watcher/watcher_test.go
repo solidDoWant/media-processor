@@ -58,6 +58,19 @@ func TestValidateWatchDirs(t *testing.T) {
 			cfg:     &Config{},
 			errFunc: require.NoError,
 		},
+		{
+			name: "path that exists but is a file returns error",
+			cfg: func() *Config {
+				f, err := os.CreateTemp(t.TempDir(), "notadir")
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				return &Config{Watches: []WatchEntry{{Path: f.Name(), Workflow: "W"}}}
+			}(),
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "not a directory")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -147,6 +160,28 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	require.Error(t, scan(t.Context(), cfg, dispatch))
 	assert.Equal(t, 2, count)
+}
+
+// TestScan_ContextCancellationStopsWalk verifies that cancelling the context causes scan
+// to stop walking and return the context error rather than an aggregate scan error.
+func TestScan_ContextCancellationStopsWalk(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.mkv"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Path: dir, Workflow: "W"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // cancel immediately before scan starts
+
+	err := scan(ctx, cfg, func(_ context.Context, _, _ string) error { return nil })
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // TestScan_MultipleWatchEntries verifies that files in separate watch directories are
