@@ -31,10 +31,30 @@ watches:
     workflow: ShowWorkflow
 `,
 			expected: Config{
+				CronSchedule: defaultCronSchedule,
 				Watches: []WatchEntry{
 					{Path: "/watch/movies", Workflow: "MovieWorkflow"},
 					{Path: "/watch/shows", Workflow: "ShowWorkflow"},
 				},
+			},
+		},
+		{
+			name: "custom cron_schedule is parsed",
+			content: `
+cron_schedule: "*/10 * * * * *"
+watches: []
+`,
+			expected: Config{
+				CronSchedule: "*/10 * * * * *",
+				Watches:      []WatchEntry{},
+			},
+		},
+		{
+			name:    "cron_schedule defaults to every 5 seconds when omitted",
+			content: "watches: []",
+			expected: Config{
+				CronSchedule: defaultCronSchedule,
+				Watches:      []WatchEntry{},
 			},
 		},
 		{
