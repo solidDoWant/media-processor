@@ -97,5 +97,9 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 		}
 	}
 
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("directory scan completed with errors: %w", err)
+	}
+
+	return nil
 }
