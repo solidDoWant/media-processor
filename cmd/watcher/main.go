@@ -33,17 +33,35 @@ func run(ctx context.Context, configPath string) error {
 
 	log.Printf("loaded %d watch mapping(s) from %s", len(cfg.Watches), configPath)
 
+	if err := validateWatchDirs(cfg); err != nil {
+		return fmt.Errorf("invalid watch configuration: %w", err)
+	}
+
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
 
-	if _, err = hatchet.NewClient(); err != nil {
+	client, err := hatchet.NewClient()
+	if err != nil {
 		return fmt.Errorf("connect to Hatchet: %w", err)
 	}
 
 	log.Println("connected to Hatchet")
 
-	// TODO(#7): start fsnotify directory watching
-	<-ctx.Done()
+	scanWorkflow := NewScanWorkflow(client, cfg)
+
+	worker, err := client.NewWorker("mediaprocessor-watcher",
+		hatchet.WithWorkflows(scanWorkflow),
+	)
+	if err != nil {
+		return fmt.Errorf("create watcher worker: %w", err)
+	}
+
+	log.Printf("starting directory scan worker (schedule: %s)", cfg.CronSchedule)
+
+	if err := worker.StartBlocking(ctx); err != nil {
+		return fmt.Errorf("watcher stopped: %w", err)
+	}
+
 	return nil
 }
