@@ -58,7 +58,9 @@ func NewMovieWorkflow(
 	// probe: read codec/container info. Deletes the file and returns IsValidMedia=false
 	// (without error) when the file is not a recognisable media file or has no video stream,
 	// which causes all downstream steps to be skipped via WithSkipIf.
-	probeTask := wf.NewTask("probe", runProbe)
+	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MovieInput) (probeOutput, error) {
+		return runProbe(ctx, input.FilePath)
+	})
 
 	// skipIfInvalid must list probeTask as a direct WithParents entry on every step that
 	// uses it. Hatchet only evaluates a PARENT_OVERRIDE (skip/wait) condition when the
@@ -67,7 +69,9 @@ func NewMovieWorkflow(
 	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
 
 	// lookup: identify the movie in Radarr; fails with ErrNotFound if unrecognised.
-	lookupTask := wf.NewTask("lookup", runLookup, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
+	lookupTask := wf.NewTask("lookup", func(ctx hatchet.Context, input MovieInput) (lookupOutput, error) {
+		return runLookup(ctx, input.FilePath, radarrClient)
+	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
