@@ -1,0 +1,182 @@
+package movie
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
+	"github.com/solidDoWant/media-processor/pkg/ffprobe"
+)
+
+// mkvOutputName returns the expected output filename for a given input path:
+// the input stem with ".mkv" extension.
+func mkvOutputName(inputPath string) string {
+	base := filepath.Base(inputPath)
+	return strings.TrimSuffix(base, filepath.Ext(base)) + ".mkv"
+}
+
+func TestSelectVideoCodec(t *testing.T) {
+	tests := []struct {
+		name           string
+		videoCodecName string
+		format         string
+		expected       ffmpeg.Codec
+	}{
+		{
+			name:           "H.264 in MKV container is copied without re-encoding",
+			videoCodecName: ffprobe.CodecNameH264,
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecCopy,
+		},
+		{
+			name:           "H.265/HEVC in MKV container is copied without re-encoding",
+			videoCodecName: ffprobe.CodecNameH265,
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecCopy,
+		},
+		{
+			name:           "H.264 in MP4 container is transcoded to H.265",
+			videoCodecName: ffprobe.CodecNameH264,
+			format:         "mov,mp4,m4a,3gp,3g2,mj2",
+			expected:       ffmpeg.CodecH265,
+		},
+		{
+			name:           "MPEG-4 video in MKV container is transcoded to H.265",
+			videoCodecName: "mpeg4",
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecH265,
+		},
+		{
+			name:           "unknown codec in MKV container is transcoded to H.265",
+			videoCodecName: "av1",
+			format:         "matroska,webm",
+			expected:       ffmpeg.CodecH265,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectVideoCodec(tt.videoCodecName, tt.format)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestRunTranscode(t *testing.T) {
+	h264Probe := probeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+	}
+
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (inputPath, outputDir string)
+		probe   probeOutput
+		errFunc require.ErrorAssertionFunc
+		check   func(t *testing.T, outputDir, inputPath string)
+	}{
+		{
+			name: "valid H.264 MP4 transcodes to output dir",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
+			},
+			probe:   h264Probe,
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := mkvOutputName(inputPath)
+				_, err := os.Stat(filepath.Join(outputDir, out))
+				require.NoError(t, err, "final output file should exist")
+
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+out+".tmp"))
+				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
+			},
+		},
+		{
+			name: "pre-existing temp file is overwritten",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+				// Simulate a stale temp file from a previous failed run.
+				stale := filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp")
+				require.NoError(t, os.WriteFile(stale, []byte("stale partial data"), 0o600))
+				return inputPath, outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := mkvOutputName(inputPath)
+				_, err := os.Stat(filepath.Join(outputDir, out))
+				require.NoError(t, err, "final output file should exist")
+
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+out+".tmp"))
+				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
+			},
+		},
+		{
+			name: "pre-existing final file is overwritten",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+				// Simulate a file already processed in a previous run.
+				oldContent := []byte("old output")
+				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), oldContent, 0o600))
+				return inputPath, outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				info, err := os.Stat(filepath.Join(outputDir, mkvOutputName(inputPath)))
+				require.NoError(t, err, "final output file should exist")
+				assert.Greater(t, info.Size(), int64(len("old output")), "final file should contain transcoded data, not old content")
+			},
+		},
+		{
+			name: "non-video input returns error and cleans up temp file",
+			setup: func(t *testing.T) (string, string) {
+				p := filepath.Join(t.TempDir(), "not-a-video.txt")
+				require.NoError(t, os.WriteFile(p, []byte("not a video"), 0o600))
+				return p, t.TempDir()
+			},
+			probe:   probeOutput{IsValidMedia: false},
+			errFunc: require.Error,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp"))
+				assert.True(t, os.IsNotExist(statErr), "temp file should be cleaned up on transcode error")
+			},
+		},
+		{
+			name: "non-writable output directory returns error",
+			setup: func(t *testing.T) (string, string) {
+				if os.Getuid() == 0 {
+					t.Skip("skipping permission test: chmod has no effect when running as root")
+				}
+				outputDir := t.TempDir()
+				require.NoError(t, os.Chmod(outputDir, 0o555))
+				t.Cleanup(func() { _ = os.Chmod(outputDir, 0o755) })
+				return copyTestVideo(t), outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.Error,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputPath, outputDir := tt.setup(t)
+			input := MovieInput{FilePath: inputPath}
+
+			err := runTranscode(t.Context(), input, tt.probe, outputDir)
+
+			tt.errFunc(t, err)
+			if tt.check != nil {
+				tt.check(t, outputDir, inputPath)
+			}
+		})
+	}
+}
