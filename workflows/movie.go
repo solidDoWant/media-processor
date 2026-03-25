@@ -113,8 +113,8 @@ func NewMovieWorkflow(
 			return struct{}{}, nil
 		}
 
-		var errs []error
-		var steps []string
+		errs := make([]error, 0, len(stepErrors))
+		steps := make([]string, 0, len(stepErrors))
 		for stepName, errMsg := range stepErrors {
 			steps = append(steps, stepName)
 			errs = append(errs, fmt.Errorf("%s: %s", stepName, errMsg))
