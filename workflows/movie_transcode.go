@@ -27,6 +27,7 @@ func selectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 			return ffmpeg.CodecCopy
 		}
 	}
+
 	return ffmpeg.CodecH265
 }
 
@@ -53,6 +54,7 @@ func runTranscode(ctx context.Context, input MovieInput, probe probeOutput, runI
 				fmt.Errorf("cleanup temp dir: %w", removeErr),
 			)
 		}
+
 		return transcodeOutput{}, fmt.Errorf("transcode: %w", err)
 	}
 

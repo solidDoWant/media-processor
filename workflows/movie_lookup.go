@@ -19,5 +19,6 @@ func runLookup(ctx context.Context, filePath string, radarrClient medialib.Movie
 	if err != nil {
 		return lookupOutput{}, fmt.Errorf("lookup movie: %w", err)
 	}
+
 	return lookupOutput{MovieID: movie.ID}, nil
 }

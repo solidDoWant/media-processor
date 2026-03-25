@@ -31,6 +31,7 @@ func runProbe(ctx context.Context, filePath string) (probeOutput, error) {
 		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return probeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
 		}
+
 		return probeOutput{IsValidMedia: false}, nil
 	}
 
@@ -48,5 +49,6 @@ func runProbe(ctx context.Context, filePath string) (probeOutput, error) {
 	if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return probeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
 	}
+
 	return probeOutput{IsValidMedia: false}, nil
 }

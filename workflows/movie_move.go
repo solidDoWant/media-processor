@@ -55,8 +55,10 @@ func copyFile(src, dst string) error {
 	if copyErr != nil {
 		return fmt.Errorf("copy data: %w", copyErr)
 	}
+
 	if closeErr != nil {
 		return fmt.Errorf("close destination: %w", closeErr)
 	}
+
 	return nil
 }

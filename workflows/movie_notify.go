@@ -12,5 +12,6 @@ func runNotify(ctx context.Context, lu lookupOutput, radarrClient medialib.Movie
 	if err := radarrClient.RefreshMovie(ctx, lu.MovieID); err != nil {
 		return fmt.Errorf("notify radarr: %w", err)
 	}
+
 	return nil
 }
