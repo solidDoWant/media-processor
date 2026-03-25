@@ -60,40 +60,107 @@ func TestSelectVideoCodec(t *testing.T) {
 }
 
 func TestRunTranscode(t *testing.T) {
+	h264Probe := probeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+	}
+
 	tests := []struct {
-		name      string
-		setupPath func(t *testing.T) string
-		probe     probeOutput
-		errFunc   require.ErrorAssertionFunc
-		check     func(t *testing.T, outputDir string, inputPath string)
+		name    string
+		setup   func(t *testing.T) (inputPath, outputDir string)
+		probe   probeOutput
+		errFunc require.ErrorAssertionFunc
+		check   func(t *testing.T, outputDir, inputPath string)
 	}{
 		{
-			name:      "valid H.264 MP4 transcodes to output dir",
-			setupPath: copyTestVideo,
-			probe: probeOutput{
-				IsValidMedia: true,
-				VideoCodec:   "h264",
-				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+			name: "valid H.264 MP4 transcodes to output dir",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
 			},
+			probe:   h264Probe,
 			errFunc: require.NoError,
-			check: func(t *testing.T, outputDir string, inputPath string) {
+			check: func(t *testing.T, outputDir, inputPath string) {
 				baseName := filepath.Base(inputPath)
-				finalPath := filepath.Join(outputDir, baseName)
-				_, err := os.Stat(finalPath)
+				_, err := os.Stat(filepath.Join(outputDir, baseName))
 				require.NoError(t, err, "final output file should exist")
 
-				// temp file must be cleaned up
-				tempPath := filepath.Join(outputDir, "._"+baseName+".tmp")
-				_, statErr := os.Stat(tempPath)
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+baseName+".tmp"))
 				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
 			},
+		},
+		{
+			name: "pre-existing temp file is overwritten",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+				// Simulate a stale temp file from a previous failed run.
+				stale := filepath.Join(outputDir, "._"+filepath.Base(inputPath)+".tmp")
+				require.NoError(t, os.WriteFile(stale, []byte("stale partial data"), 0o600))
+				return inputPath, outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				baseName := filepath.Base(inputPath)
+				_, err := os.Stat(filepath.Join(outputDir, baseName))
+				require.NoError(t, err, "final output file should exist")
+
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+baseName+".tmp"))
+				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
+			},
+		},
+		{
+			name: "pre-existing final file is overwritten",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+				// Simulate a file already processed in a previous run.
+				oldContent := []byte("old output")
+				require.NoError(t, os.WriteFile(filepath.Join(outputDir, filepath.Base(inputPath)), oldContent, 0o600))
+				return inputPath, outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				info, err := os.Stat(filepath.Join(outputDir, filepath.Base(inputPath)))
+				require.NoError(t, err, "final output file should exist")
+				assert.Greater(t, info.Size(), int64(len("old output")), "final file should contain transcoded data, not old content")
+			},
+		},
+		{
+			name: "non-video input returns error and cleans up temp file",
+			setup: func(t *testing.T) (string, string) {
+				p := filepath.Join(t.TempDir(), "not-a-video.txt")
+				require.NoError(t, os.WriteFile(p, []byte("not a video"), 0o600))
+				return p, t.TempDir()
+			},
+			probe:   probeOutput{IsValidMedia: false},
+			errFunc: require.Error,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+filepath.Base(inputPath)+".tmp"))
+				assert.True(t, os.IsNotExist(statErr), "temp file should be cleaned up on transcode error")
+			},
+		},
+		{
+			name: "non-writable output directory returns error",
+			setup: func(t *testing.T) (string, string) {
+				if os.Getuid() == 0 {
+					t.Skip("skipping permission test: chmod has no effect when running as root")
+				}
+				outputDir := t.TempDir()
+				require.NoError(t, os.Chmod(outputDir, 0o555))
+				t.Cleanup(func() { _ = os.Chmod(outputDir, 0o755) })
+				return copyTestVideo(t), outputDir
+			},
+			probe:   h264Probe,
+			errFunc: require.Error,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inputPath := tt.setupPath(t)
-			outputDir := t.TempDir()
+			inputPath, outputDir := tt.setup(t)
 			input := MovieInput{FilePath: inputPath}
 
 			err := runTranscode(t.Context(), input, tt.probe, outputDir)
