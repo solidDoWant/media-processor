@@ -1,5 +1,5 @@
-// Package workflows provides Hatchet workflow definitions.
-package workflows
+// Package movie provides the Hatchet workflow definition for processing movie files.
+package movie
 
 import (
 	"errors"
@@ -13,7 +13,11 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
 
-const movieWorkflowName = "MovieWorkflow"
+const (
+	movieWorkflowName = "MovieWorkflow"
+	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
+	defaultTaskRetries = 3
+)
 
 // MovieWorkflowConfig holds the configuration for the movie processing workflow.
 type MovieWorkflowConfig struct {
@@ -31,7 +35,7 @@ type MovieInput struct {
 // NewMovieWorkflow returns a Hatchet workflow that transcodes a movie file to the
 // standard format, moves it to the output directory, and notifies Radarr.
 //
-// Steps (in order): probe → lookup → transcode → move → notify-radarr → cleanup.
+// Steps (in order): probe → lookup → transcode → notify-radarr → cleanup.
 // If the source file is not a valid media file with a video stream the file is
 // deleted and all other steps are skipped without triggering the failure webhook.
 func NewMovieWorkflow(
@@ -63,30 +67,20 @@ func NewMovieWorkflow(
 	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
 
 	// lookup: identify the movie in Radarr; fails with ErrNotFound if unrecognised.
-	lookupTask := wf.NewTask("lookup", runLookup, hatchet.WithParents(probeTask), skipIfInvalid)
+	lookupTask := wf.NewTask("lookup", runLookup, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
-	// transcode: copy or re-encode the video stream, writing output to a temp path
-	// in a workflow-run-specific subdirectory of the system temp directory.
-	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MovieInput) (transcodeOutput, error) {
+	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
+	// temp name, then atomically rename it to the final path. Writing to the output
+	// directory (rather than the system temp dir) means the rename is always within the
+	// same filesystem, so it is guaranteed to be atomic on Linux.
+	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
 		var probe probeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return transcodeOutput{}, fmt.Errorf("get probe output: %w", err)
+			return struct{}{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return runTranscode(ctx, input, probe, ctx.WorkflowRunId())
+		return struct{}{}, runTranscode(ctx, input, probe, cfg.OutputDir)
 	}, hatchet.WithParents(probeTask, lookupTask), skipIfInvalid)
-
-	// move: copy the transcoded file to cfg.OutputDir and atomically rename it.
-	// Copying first ensures cross-filesystem compatibility; renaming within the same
-	// directory is atomic on Linux.
-	moveTask := wf.NewTask("move", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
-		var tc transcodeOutput
-		if err := ctx.ParentOutput(transcodeTask, &tc); err != nil {
-			return struct{}{}, fmt.Errorf("get transcode output: %w", err)
-		}
-
-		return struct{}{}, runMove(input, tc, cfg.OutputDir)
-	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid)
 
 	// notify-radarr: trigger a Radarr library rescan for the movie.
 	notifyTask := wf.NewTask("notify-radarr", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
@@ -99,12 +93,12 @@ func NewMovieWorkflow(
 			return struct{}{}, fmt.Errorf("notify radarr: %w", err)
 		}
 		return struct{}{}, nil
-	}, hatchet.WithParents(probeTask, lookupTask, moveTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask, lookupTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// cleanup: delete the original source file after successful processing.
 	_ = wf.NewTask("cleanup", func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
 		return struct{}{}, runCleanup(input.FilePath)
-	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MovieInput) (struct{}, error) {

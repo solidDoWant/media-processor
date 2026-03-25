@@ -13,6 +13,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows"
+	"github.com/solidDoWant/media-processor/workflows/movie"
 )
 
 func main() {
@@ -61,7 +62,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet client: %w", err)
 	}
 
-	movieWorkflow := workflows.NewMovieWorkflow(client, workflows.MovieWorkflowConfig{
+	movieWorkflow := movie.NewMovieWorkflow(client, movie.MovieWorkflowConfig{
 		OutputDir:  movieOutputDir,
 		WebhookURL: webhookClient.URL,
 	}, radarrClient, webhookClient)
