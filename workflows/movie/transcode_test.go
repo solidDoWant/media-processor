@@ -3,6 +3,7 @@ package movie
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,13 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
+
+// mkvOutputName returns the expected output filename for a given input path:
+// the input stem with ".mkv" extension.
+func mkvOutputName(inputPath string) string {
+	base := filepath.Base(inputPath)
+	return strings.TrimSuffix(base, filepath.Ext(base)) + ".mkv"
+}
 
 func TestSelectVideoCodec(t *testing.T) {
 	tests := []struct {
@@ -81,11 +89,11 @@ func TestRunTranscode(t *testing.T) {
 			probe:   h264Probe,
 			errFunc: require.NoError,
 			check: func(t *testing.T, outputDir, inputPath string) {
-				baseName := filepath.Base(inputPath)
-				_, err := os.Stat(filepath.Join(outputDir, baseName))
+				out := mkvOutputName(inputPath)
+				_, err := os.Stat(filepath.Join(outputDir, out))
 				require.NoError(t, err, "final output file should exist")
 
-				_, statErr := os.Stat(filepath.Join(outputDir, "._"+baseName+".tmp"))
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+out+".tmp"))
 				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
 			},
 		},
@@ -95,18 +103,18 @@ func TestRunTranscode(t *testing.T) {
 				inputPath := copyTestVideo(t)
 				outputDir := t.TempDir()
 				// Simulate a stale temp file from a previous failed run.
-				stale := filepath.Join(outputDir, "._"+filepath.Base(inputPath)+".tmp")
+				stale := filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp")
 				require.NoError(t, os.WriteFile(stale, []byte("stale partial data"), 0o600))
 				return inputPath, outputDir
 			},
 			probe:   h264Probe,
 			errFunc: require.NoError,
 			check: func(t *testing.T, outputDir, inputPath string) {
-				baseName := filepath.Base(inputPath)
-				_, err := os.Stat(filepath.Join(outputDir, baseName))
+				out := mkvOutputName(inputPath)
+				_, err := os.Stat(filepath.Join(outputDir, out))
 				require.NoError(t, err, "final output file should exist")
 
-				_, statErr := os.Stat(filepath.Join(outputDir, "._"+baseName+".tmp"))
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+out+".tmp"))
 				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
 			},
 		},
@@ -117,13 +125,13 @@ func TestRunTranscode(t *testing.T) {
 				outputDir := t.TempDir()
 				// Simulate a file already processed in a previous run.
 				oldContent := []byte("old output")
-				require.NoError(t, os.WriteFile(filepath.Join(outputDir, filepath.Base(inputPath)), oldContent, 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), oldContent, 0o600))
 				return inputPath, outputDir
 			},
 			probe:   h264Probe,
 			errFunc: require.NoError,
 			check: func(t *testing.T, outputDir, inputPath string) {
-				info, err := os.Stat(filepath.Join(outputDir, filepath.Base(inputPath)))
+				info, err := os.Stat(filepath.Join(outputDir, mkvOutputName(inputPath)))
 				require.NoError(t, err, "final output file should exist")
 				assert.Greater(t, info.Size(), int64(len("old output")), "final file should contain transcoded data, not old content")
 			},
@@ -138,7 +146,7 @@ func TestRunTranscode(t *testing.T) {
 			probe:   probeOutput{IsValidMedia: false},
 			errFunc: require.Error,
 			check: func(t *testing.T, outputDir, inputPath string) {
-				_, statErr := os.Stat(filepath.Join(outputDir, "._"+filepath.Base(inputPath)+".tmp"))
+				_, statErr := os.Stat(filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp"))
 				assert.True(t, os.IsNotExist(statErr), "temp file should be cleaned up on transcode error")
 			},
 		},

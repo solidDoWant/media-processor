@@ -25,15 +25,17 @@ func selectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 }
 
 // runTranscode transcodes input.FilePath into outputDir, writing to a temp file named
-// "._<basename>.tmp" and atomically renaming it to "<basename>" on success.
+// "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
+// The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
 func runTranscode(ctx context.Context, input MovieInput, probe probeOutput, outputDir string) error {
 	videoCodec := selectVideoCodec(probe.VideoCodec, probe.Format)
 
-	baseName := filepath.Base(input.FilePath)
-	tempPath := filepath.Join(outputDir, "._"+baseName+".tmp")
-	finalPath := filepath.Join(outputDir, baseName)
+	inputBase := filepath.Base(input.FilePath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
+	finalPath := filepath.Join(outputDir, mkvBase)
 
 	if err := ffmpeg.NewTranscode(input.FilePath, tempPath).
 		ToVideoCodec(videoCodec).
@@ -46,6 +48,7 @@ func runTranscode(ctx context.Context, input MovieInput, probe probeOutput, outp
 				fmt.Errorf("cleanup temp file: %w", removeErr),
 			)
 		}
+
 		return fmt.Errorf("transcode: %w", err)
 	}
 
@@ -56,6 +59,7 @@ func runTranscode(ctx context.Context, input MovieInput, probe probeOutput, outp
 				fmt.Errorf("cleanup temp file: %w", removeErr),
 			)
 		}
+
 		return fmt.Errorf("move output file: %w", err)
 	}
 

@@ -28,6 +28,12 @@ type probeOutput struct {
 func runProbe(ctx context.Context, filePath string) (probeOutput, error) {
 	info, err := ffprobe.Probe(ctx, filePath)
 	if err != nil {
+		// Context errors are operational — propagate them so the step fails and
+		// OnFailure fires, instead of silently deleting the file.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return probeOutput{}, err
+		}
+
 		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return probeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
 		}

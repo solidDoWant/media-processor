@@ -4,6 +4,7 @@ package movie
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -111,11 +112,15 @@ func NewMovieWorkflow(
 			return struct{}{}, nil
 		}
 
-		errs := make([]error, 0, len(stepErrors))
 		steps := make([]string, 0, len(stepErrors))
-		for stepName, errMsg := range stepErrors {
+		for stepName := range stepErrors {
 			steps = append(steps, stepName)
-			errs = append(errs, fmt.Errorf("%s: %s", stepName, errMsg))
+		}
+		sort.Strings(steps)
+
+		errs := make([]error, 0, len(stepErrors))
+		for _, stepName := range steps {
+			errs = append(errs, fmt.Errorf("%s: %s", stepName, stepErrors[stepName]))
 		}
 
 		if err := webhookClient.NotifyFailure(ctx, webhook.FailureEvent{

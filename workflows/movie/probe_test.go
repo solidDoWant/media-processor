@@ -1,6 +1,7 @@
 package movie
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,4 +66,19 @@ func TestRunProbe(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunProbe_CancelledContextPropagatesError(t *testing.T) {
+	// A cancelled context must not silently delete the file — it must propagate
+	// the context error so the step fails and OnFailure fires.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // cancel immediately
+
+	path := copyTestVideo(t)
+
+	_, err := runProbe(ctx, path)
+	require.ErrorIs(t, err, context.Canceled, "cancelled context should propagate as error, not delete the file")
+
+	_, statErr := os.Stat(path)
+	assert.NoError(t, statErr, "file must not be deleted on context cancellation")
 }

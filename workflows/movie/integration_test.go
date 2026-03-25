@@ -5,6 +5,7 @@ package movie
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,8 +52,10 @@ func TestMovieWorkflow_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
 	_, err = wf.Run(ctx, MovieInput{FilePath: inputPath})
 	require.NoError(t, err)
 
-	// Transcoded output file must exist in the output directory.
-	_, statErr := os.Stat(filepath.Join(outputDir, filepath.Base(inputPath)))
+	// Transcoded output file must exist in the output directory with .mkv extension.
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	_, statErr := os.Stat(filepath.Join(outputDir, mkvBase))
 	assert.NoError(t, statErr, "transcoded output file should exist in outputDir")
 
 	// Original source file must be deleted by the cleanup step.
