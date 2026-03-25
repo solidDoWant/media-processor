@@ -13,7 +13,7 @@ import (
 // directory. On rename failure it attempts to remove the intermediate copy.
 func runMove(input MovieInput, tc transcodeOutput, outputDir string) error {
 	finalPath := filepath.Join(outputDir, filepath.Base(input.FilePath))
-	tmpFinalPath := filepath.Join(outputDir, ".tmp-"+filepath.Base(input.FilePath))
+	tmpFinalPath := filepath.Join(outputDir, "._"+filepath.Base(input.FilePath)+".tmp")
 
 	if err := copyFile(tc.TempPath, tmpFinalPath); err != nil {
 		return fmt.Errorf("copy to output dir: %w", err)
@@ -30,7 +30,10 @@ func runMove(input MovieInput, tc transcodeOutput, outputDir string) error {
 	}
 
 	// Clean up the system temp dir now that the file has been successfully moved.
-	_ = os.RemoveAll(filepath.Dir(tc.TempPath))
+	// os.RemoveAll returns nil when the path doesn't exist, so no ErrNotExist check needed.
+	if err := os.RemoveAll(filepath.Dir(tc.TempPath)); err != nil {
+		return fmt.Errorf("remove temp dir: %w", err)
+	}
 
 	return nil
 }
