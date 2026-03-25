@@ -45,13 +45,13 @@ func NewMovieWorkflow(
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
 	maxRuns := int32(1)
-	dropNewest := types.DropNewest
+	cancelNewest := types.CancelNewest
 
 	wf := client.NewWorkflow(movieWorkflowName,
 		hatchet.WithWorkflowConcurrency(types.Concurrency{
 			Expression:    "input.file_path",
 			MaxRuns:       &maxRuns,
-			LimitStrategy: &dropNewest,
+			LimitStrategy: &cancelNewest,
 		}),
 	)
 
