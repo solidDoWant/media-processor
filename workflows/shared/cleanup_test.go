@@ -1,4 +1,4 @@
-package movie
+package shared
 
 import (
 	"os"
@@ -40,7 +40,7 @@ func TestRunCleanup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := tt.setupPath(t)
 
-			err := runCleanup(path)
+			err := RunCleanup(path)
 
 			tt.errFunc(t, err)
 			if tt.fileDeleted {

@@ -1,4 +1,5 @@
-package movie
+// Package shared provides workflow step implementations shared across workflow types.
+package shared
 
 import (
 	"context"
@@ -9,8 +10,8 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
 
-// probeOutput is the output of the probe step.
-type probeOutput struct {
+// ProbeOutput is the output of the probe step.
+type ProbeOutput struct {
 	// IsValidMedia is false when the file is not a recognisable media file with a
 	// video stream. All downstream steps are skipped when this is false.
 	IsValidMedia bool `json:"is_valid_media"`
@@ -22,28 +23,28 @@ type probeOutput struct {
 	Format string `json:"format"`
 }
 
-// runProbe reads codec and container info for filePath. If the file is not a
+// RunProbe reads codec and container info for filePath. If the file is not a
 // recognised media file or has no video stream, it deletes the file and returns
 // IsValidMedia=false (without error), causing all downstream steps to be skipped.
-func runProbe(ctx context.Context, filePath string) (probeOutput, error) {
+func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	info, err := ffprobe.Probe(ctx, filePath)
 	if err != nil {
 		// Context errors are operational — propagate them so the step fails and
 		// OnFailure fires, instead of silently deleting the file.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return probeOutput{}, err
+			return ProbeOutput{}, err
 		}
 
 		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return probeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
+			return ProbeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
 		}
 
-		return probeOutput{IsValidMedia: false}, nil
+		return ProbeOutput{IsValidMedia: false}, nil
 	}
 
 	for _, s := range info.Streams {
 		if s.CodecType == ffprobe.CodecTypeVideo {
-			return probeOutput{
+			return ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   s.CodecName,
 				Format:       info.Format,
@@ -51,10 +52,10 @@ func runProbe(ctx context.Context, filePath string) (probeOutput, error) {
 		}
 	}
 
-	// No video stream found — not a movie file.
+	// No video stream found.
 	if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return probeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
+		return ProbeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
 	}
 
-	return probeOutput{IsValidMedia: false}, nil
+	return ProbeOutput{IsValidMedia: false}, nil
 }
