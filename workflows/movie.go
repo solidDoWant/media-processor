@@ -4,6 +4,7 @@ package workflows
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -55,6 +56,10 @@ func NewMovieWorkflow(
 	// which causes all downstream steps to be skipped via WithSkipIf.
 	probeTask := wf.NewTask("probe", runProbe)
 
+	// skipIfInvalid must list probeTask as a direct WithParents entry on every step that
+	// uses it. Hatchet only evaluates a PARENT_OVERRIDE (skip/wait) condition when the
+	// referenced task appears in the step's direct-parent list — indirect ancestors are
+	// not checked. Verified in hatchet/pkg/repository/trigger.go.
 	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
 
 	// lookup: identify the movie in Radarr; fails with ErrNotFound if unrecognised.
@@ -90,7 +95,10 @@ func NewMovieWorkflow(
 			return struct{}{}, fmt.Errorf("get lookup output: %w", err)
 		}
 
-		return struct{}{}, runNotify(ctx, lu, radarrClient)
+		if err := radarrClient.RefreshMovie(ctx, lu.MovieID); err != nil {
+			return struct{}{}, fmt.Errorf("notify radarr: %w", err)
+		}
+		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, lookupTask, moveTask), skipIfInvalid)
 
 	// cleanup: delete the original source file after successful processing.
@@ -98,15 +106,27 @@ func NewMovieWorkflow(
 		return struct{}{}, runCleanup(input.FilePath)
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid)
 
-	// OnFailure: send a failure notification to the configured webhook.
+	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
-		for stepName, errMsg := range ctx.StepRunErrors() {
-			_ = webhookClient.NotifyFailure(ctx, webhook.FailureEvent{
-				Workflow: movieWorkflowName,
-				FilePath: input.FilePath,
-				Step:     stepName,
-				Err:      errors.New(errMsg),
-			})
+		stepErrors := ctx.StepRunErrors()
+		if len(stepErrors) == 0 {
+			return struct{}{}, nil
+		}
+
+		var errs []error
+		var steps []string
+		for stepName, errMsg := range stepErrors {
+			steps = append(steps, stepName)
+			errs = append(errs, fmt.Errorf("%s: %s", stepName, errMsg))
+		}
+
+		if err := webhookClient.NotifyFailure(ctx, webhook.FailureEvent{
+			Workflow: movieWorkflowName,
+			FilePath: input.FilePath,
+			Step:     strings.Join(steps, ", "),
+			Err:      errors.Join(errs...),
+		}); err != nil {
+			return struct{}{}, fmt.Errorf("notify failure: %w", err)
 		}
 
 		return struct{}{}, nil
