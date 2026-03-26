@@ -19,15 +19,15 @@ func (CronExpression) JSONSchema() *jsonschema.Schema {
 type WorkflowName string
 
 const (
-	// movie is the workflow for processing movie files.
-	movie WorkflowName = "MovieWorkflow"
-	// show is the workflow for processing TV show files.
-	show WorkflowName = "ShowWorkflow"
+	// MovieWorkflow is the workflow for processing movie files.
+	MovieWorkflow WorkflowName = "movie"
+	// ShowWorkflow is the workflow for processing TV show files.
+	ShowWorkflow WorkflowName = "show"
 )
 
 // validWorkflowNames is the authoritative list of WorkflowName values accepted in config.
 // It drives both JSON Schema enum generation and runtime validation.
-var validWorkflowNames = []WorkflowName{movie, show}
+var validWorkflowNames = []WorkflowName{MovieWorkflow, ShowWorkflow}
 
 // JSONSchema returns a JSON Schema for WorkflowName derived from validWorkflowNames,
 // so enum values are defined in one place rather than duplicated in struct tags.
