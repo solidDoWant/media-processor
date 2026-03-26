@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hatchet-dev/hatchet/pkg/client/rest"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,8 +19,9 @@ import (
 )
 
 // startShowWorker creates a Hatchet worker with the given ShowWorkflow and starts it.
-// The worker is automatically stopped via t.Cleanup. The call blocks briefly to allow
-// the worker to register its workflows with Hatchet before dispatching runs.
+// The worker is automatically stopped via t.Cleanup. The call blocks until the worker
+// appears as ACTIVE in the Hatchet server (with a 30s timeout) so tests never race
+// against a fixed sleep.
 func startShowWorker(t *testing.T, client *hatchet.Client, wf *hatchet.Workflow) {
 	t.Helper()
 	worker, err := client.NewWorker("test-show-worker", hatchet.WithWorkflows(wf))
@@ -29,8 +31,19 @@ func startShowWorker(t *testing.T, client *hatchet.Client, wf *hatchet.Workflow)
 	require.NoError(t, err, "start worker")
 	t.Cleanup(func() { _ = cleanup() })
 
-	// Allow time for the worker to register its workflow definitions with the Hatchet server.
-	time.Sleep(3 * time.Second)
+	// Poll until the worker is registered and ACTIVE on the Hatchet server.
+	require.Eventually(t, func() bool {
+		list, listErr := client.Workers().List(t.Context())
+		if listErr != nil || list == nil || list.Rows == nil {
+			return false
+		}
+		for _, w := range *list.Rows {
+			if w.Name == "test-show-worker" && w.Status != nil && *w.Status == rest.ACTIVE {
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 250*time.Millisecond, "show worker failed to register within 30s")
 }
 
 func TestShowWorkflow_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -113,7 +126,8 @@ func TestShowWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *t
 	assert.True(t, os.IsNotExist(statErr), "non-video file should be deleted by probe step")
 
 	// Nothing should have been written to the output directory.
-	entries, _ := os.ReadDir(outputDir)
+	entries, err := os.ReadDir(outputDir)
+	require.NoError(t, err)
 	assert.Empty(t, entries, "output directory should be empty when file is not a valid video")
 
 	// Sonarr should not have been called.
