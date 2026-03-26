@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 )
 
 // TestLoadConfig verifies that the watcher correctly parses its YAML config file,
@@ -31,7 +33,7 @@ watches:
     workflow: ShowWorkflow
 `,
 			expected: Config{
-				CronSchedule: defaultCronSchedule,
+				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
 					{Path: "/watch/movies", Workflow: "MovieWorkflow"},
 					{Path: "/watch/shows", Workflow: "ShowWorkflow"},
@@ -53,7 +55,7 @@ watches: []
 			name:    "cron_schedule defaults to every 5 seconds when omitted",
 			content: "watches: []",
 			expected: Config{
-				CronSchedule: defaultCronSchedule,
+				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches:      []WatchEntry{},
 			},
 		},

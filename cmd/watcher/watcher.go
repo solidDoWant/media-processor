@@ -103,7 +103,7 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 				return nil
 			}
 
-			if dispatchErr := dispatch(ctx, w.Workflow, absPath); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, string(w.Workflow), absPath); dispatchErr != nil {
 				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", w.Workflow, absPath, dispatchErr))
 			}
 

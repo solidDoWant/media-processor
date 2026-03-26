@@ -30,7 +30,10 @@
         },
         "workflow": {
           "type": "string",
-          "minLength": 1
+          "enum": [
+            "MovieWorkflow",
+            "ShowWorkflow"
+          ]
         }
       },
       "additionalProperties": false,
