@@ -1,4 +1,4 @@
-package movie
+package shared
 
 import (
 	"os"
@@ -61,14 +61,14 @@ func TestSelectVideoCodec(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := selectVideoCodec(tt.videoCodecName, tt.format)
+			got := SelectVideoCodec(tt.videoCodecName, tt.format)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
 
 func TestRunTranscode(t *testing.T) {
-	h264Probe := probeOutput{
+	h264Probe := ProbeOutput{
 		IsValidMedia: true,
 		VideoCodec:   "h264",
 		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
@@ -77,7 +77,7 @@ func TestRunTranscode(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T) (inputPath, outputDir string)
-		probe   probeOutput
+		probe   ProbeOutput
 		errFunc require.ErrorAssertionFunc
 		check   func(t *testing.T, outputDir, inputPath string)
 	}{
@@ -102,7 +102,6 @@ func TestRunTranscode(t *testing.T) {
 			setup: func(t *testing.T) (string, string) {
 				inputPath := copyTestVideo(t)
 				outputDir := t.TempDir()
-				// Simulate a stale temp file from a previous failed run.
 				stale := filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp")
 				require.NoError(t, os.WriteFile(stale, []byte("stale partial data"), 0o600))
 				return inputPath, outputDir
@@ -123,7 +122,6 @@ func TestRunTranscode(t *testing.T) {
 			setup: func(t *testing.T) (string, string) {
 				inputPath := copyTestVideo(t)
 				outputDir := t.TempDir()
-				// Simulate a file already processed in a previous run.
 				oldContent := []byte("old output")
 				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), oldContent, 0o600))
 				return inputPath, outputDir
@@ -143,7 +141,7 @@ func TestRunTranscode(t *testing.T) {
 				require.NoError(t, os.WriteFile(p, []byte("not a video"), 0o600))
 				return p, t.TempDir()
 			},
-			probe:   probeOutput{IsValidMedia: false},
+			probe:   ProbeOutput{IsValidMedia: false},
 			errFunc: require.Error,
 			check: func(t *testing.T, outputDir, inputPath string) {
 				_, statErr := os.Stat(filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp"))
@@ -169,9 +167,8 @@ func TestRunTranscode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
-			input := MovieInput{FilePath: inputPath}
 
-			err := runTranscode(t.Context(), input, tt.probe, outputDir)
+			err := RunTranscode(t.Context(), inputPath, tt.probe.VideoCodec, tt.probe.Format, outputDir)
 
 			tt.errFunc(t, err)
 			if tt.check != nil {

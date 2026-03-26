@@ -1,4 +1,4 @@
-package movie
+package shared
 
 import (
 	"context"
@@ -12,9 +12,9 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
 
-// selectVideoCodec returns CodecCopy when the video is already H.264 or H.265 in an
+// SelectVideoCodec returns CodecCopy when the video is already H.264 or H.265 in an
 // MKV container, and CodecH265 otherwise.
-func selectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
+func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 	if strings.Contains(format, string(ffmpeg.ContainerMKV)) {
 		if videoCodecName == ffprobe.CodecNameH264 || videoCodecName == ffprobe.CodecNameH265 {
 			return ffmpeg.CodecCopy
@@ -24,20 +24,22 @@ func selectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 	return ffmpeg.CodecH265
 }
 
-// runTranscode transcodes input.FilePath into outputDir, writing to a temp file named
+// RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
-func runTranscode(ctx context.Context, input MovieInput, probe probeOutput, outputDir string) error {
-	videoCodec := selectVideoCodec(probe.VideoCodec, probe.Format)
+// videoCodecName and format are the codec name and container format from ffprobe
+// (e.g. "h264", "matroska,webm").
+func RunTranscode(ctx context.Context, filePath, videoCodecName, format, outputDir string) error {
+	videoCodec := SelectVideoCodec(videoCodecName, format)
 
-	inputBase := filepath.Base(input.FilePath)
+	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
-	if err := ffmpeg.NewTranscode(input.FilePath, tempPath).
+	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().

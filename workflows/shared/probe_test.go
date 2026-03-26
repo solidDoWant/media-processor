@@ -1,4 +1,4 @@
-package movie
+package shared
 
 import (
 	"context"
@@ -14,14 +14,14 @@ func TestRunProbe(t *testing.T) {
 	tests := []struct {
 		name        string
 		setupPath   func(t *testing.T) string
-		expected    probeOutput
+		expected    ProbeOutput
 		errFunc     require.ErrorAssertionFunc
 		fileDeleted bool
 	}{
 		{
 			name:      "valid H.264 MP4 returns codec and format",
 			setupPath: copyTestVideo,
-			expected: probeOutput{
+			expected: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
 				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
@@ -36,7 +36,7 @@ func TestRunProbe(t *testing.T) {
 				require.NoError(t, os.WriteFile(p, []byte("hello"), 0o600))
 				return p
 			},
-			expected:    probeOutput{IsValidMedia: false},
+			expected:    ProbeOutput{IsValidMedia: false},
 			errFunc:     require.NoError,
 			fileDeleted: true,
 		},
@@ -45,7 +45,7 @@ func TestRunProbe(t *testing.T) {
 			setupPath: func(t *testing.T) string {
 				return filepath.Join(t.TempDir(), "does-not-exist.mp4")
 			},
-			expected:    probeOutput{IsValidMedia: false},
+			expected:    ProbeOutput{IsValidMedia: false},
 			errFunc:     require.NoError,
 			fileDeleted: false, // nothing to delete
 		},
@@ -55,7 +55,7 @@ func TestRunProbe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := tt.setupPath(t)
 
-			got, err := runProbe(t.Context(), path)
+			got, err := RunProbe(t.Context(), path)
 
 			tt.errFunc(t, err)
 			assert.Equal(t, tt.expected, got)
@@ -76,7 +76,7 @@ func TestRunProbe_CancelledContextPropagatesError(t *testing.T) {
 
 	path := copyTestVideo(t)
 
-	_, err := runProbe(ctx, path)
+	_, err := RunProbe(ctx, path)
 	require.ErrorIs(t, err, context.Canceled, "cancelled context should propagate as error, not delete the file")
 
 	_, statErr := os.Stat(path)

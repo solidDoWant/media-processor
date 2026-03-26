@@ -1,4 +1,4 @@
-package movie
+package shared
 
 import (
 	"errors"
@@ -6,8 +6,8 @@ import (
 	"os"
 )
 
-// runCleanup deletes the original source file after successful processing.
-func runCleanup(filePath string) error {
+// RunCleanup deletes the original source file after successful processing.
+func RunCleanup(filePath string) error {
 	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete source file: %w", err)
 	}
