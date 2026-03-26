@@ -81,22 +81,15 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	}, nil
 }
 
-// GetIDByFilePath implements medialib.LibraryClient. It looks up the episode
-// by file path and returns the series ID (used for library refresh).
-func (c *Client) GetIDByFilePath(ctx context.Context, path string) (int64, error) {
+// RefreshByFilePath implements medialib.Library. It looks up the episode by
+// file path and triggers a Sonarr series rescan. Sonarr only supports
+// series-level refresh, so the series ID (not the episode ID) is used.
+func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
 	episode, err := c.GetEpisodeByFilePath(ctx, path)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	return episode.SeriesID, nil
-}
-
-// Refresh implements medialib.Library by triggering a Sonarr library rescan
-// for the given series ID. The id parameter is the series ID (as returned by
-// GetIDByFilePath), not the episode ID, because Sonarr only supports
-// series-level refresh.
-func (c *Client) Refresh(ctx context.Context, seriesID int64) error {
-	return c.RefreshSeries(ctx, seriesID)
+	return c.RefreshSeries(ctx, episode.SeriesID)
 }
 
 // RefreshSeries triggers a Sonarr library rescan for the given series ID.

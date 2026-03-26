@@ -63,16 +63,12 @@ type EpisodeLibrary interface {
 	RefreshSeries(ctx context.Context, seriesID int64) error
 }
 
-// Library is a unified interface for looking up a media file and refreshing
-// its entry in the backing library service (Radarr for movies, Sonarr for shows).
-// It abstracts the type-specific calls so workflow steps need no media-type switch.
+// Library is a unified interface for refreshing a media item in the backing
+// library service (Radarr for movies, Sonarr for shows). It abstracts the
+// type-specific lookup-and-refresh calls so workflow steps need no media-type switch.
 type Library interface {
-	// GetIDByFilePath looks up the media item at path and returns the ID needed
-	// to trigger a library refresh. For movies this is the movie ID; for shows
-	// this is the series ID.
-	GetIDByFilePath(ctx context.Context, path string) (int64, error)
-	// Refresh triggers the backing library service to rescan using the ID
-	// returned by GetIDByFilePath. For movies this is the movie ID; for shows
-	// this is the series ID (Sonarr only supports series-level refresh).
-	Refresh(ctx context.Context, id int64) error
+	// RefreshByFilePath looks up the media item at path in the backing library
+	// service and triggers a rescan. For Sonarr, the rescan is at series level
+	// (Sonarr does not support episode-level refresh).
+	RefreshByFilePath(ctx context.Context, path string) error
 }

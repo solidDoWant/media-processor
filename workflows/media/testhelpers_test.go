@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,4 +22,15 @@ func copyTestVideo(t *testing.T) string {
 	dst := filepath.Join(t.TempDir(), "video.mp4")
 	require.NoError(t, os.WriteFile(dst, src, 0o600))
 	return dst
+}
+
+// stubLibraryClient implements medialib.Library for testing.
+type stubLibraryClient struct {
+	err          error
+	refreshCalls []string
+}
+
+func (s *stubLibraryClient) RefreshByFilePath(_ context.Context, path string) error {
+	s.refreshCalls = append(s.refreshCalls, path)
+	return s.err
 }

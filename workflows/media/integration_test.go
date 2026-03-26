@@ -57,8 +57,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	radarrStub := &stubLibraryClient{id: 42}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
@@ -73,7 +72,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by cleanup step")
 }
 
-func TestMediaWorkflow_Movie_RefreshMovieIsCalledAfterTranscode(t *testing.T) {
+func TestMediaWorkflow_Movie_RefreshByFilePathIsCalledAfterTranscode(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
@@ -84,14 +83,14 @@ func TestMediaWorkflow_Movie_RefreshMovieIsCalledAfterTranscode(t *testing.T) {
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	radarrStub := &stubLibraryClient{id: 42}
+	radarrStub := &stubLibraryClient{}
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
-	assert.Equal(t, []int64{42}, radarrStub.refreshCalls, "Refresh should be called once with the movie ID")
+	assert.Len(t, radarrStub.refreshCalls, 1, "RefreshByFilePath should be called exactly once")
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -105,8 +104,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	sonarrStub := &stubLibraryClient{id: 42}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
@@ -121,7 +119,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by cleanup step")
 }
 
-func TestMediaWorkflow_Show_RefreshSeriesIsCalledAfterTranscode(t *testing.T) {
+func TestMediaWorkflow_Show_RefreshByFilePathIsCalledAfterTranscode(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
@@ -132,14 +130,14 @@ func TestMediaWorkflow_Show_RefreshSeriesIsCalledAfterTranscode(t *testing.T) {
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	sonarrStub := &stubLibraryClient{id: 42}
+	sonarrStub := &stubLibraryClient{}
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
 	require.NoError(t, err)
 
-	assert.Equal(t, []int64{42}, sonarrStub.refreshCalls, "Refresh should be called once with the series ID")
+	assert.Len(t, sonarrStub.refreshCalls, 1, "RefreshByFilePath should be called exactly once")
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {
@@ -154,8 +152,7 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	require.NoError(t, os.WriteFile(inputPath, []byte("not a video"), 0o600))
 	outputDir := t.TempDir()
 
-	radarrStub := &stubLibraryClient{id: 1}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
@@ -169,7 +166,7 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	assert.Empty(t, entries, "output directory should be empty when file is not a valid video")
 }
 
-func TestMediaWorkflow_LookupFailureCausesWorkflowToFail(t *testing.T) {
+func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
@@ -188,5 +185,5 @@ func TestMediaWorkflow_LookupFailureCausesWorkflowToFail(t *testing.T) {
 	assert.Error(t, err, "workflow should fail when the movie is not found in Radarr")
 
 	_, statErr := os.Stat(inputPath)
-	assert.NoError(t, statErr, "source file should not be deleted when lookup fails")
+	assert.NoError(t, statErr, "source file should not be deleted when notify fails")
 }

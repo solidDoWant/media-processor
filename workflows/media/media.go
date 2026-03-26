@@ -37,7 +37,7 @@ type MediaInput struct {
 // episode) to the standard format, moves it to the output directory, and notifies the
 // appropriate library service (Radarr for movies, Sonarr for TV episodes).
 //
-// Steps (in order): probe → lookup → transcode → notify → cleanup.
+// Steps (in order): probe → transcode → notify → cleanup.
 // If the source file is not a valid media file with a video stream the file is
 // deleted and all other steps are skipped without triggering the failure webhook.
 func NewMediaWorkflow(
@@ -71,15 +71,6 @@ func NewMediaWorkflow(
 	// not checked. Verified in hatchet/pkg/repository/trigger.go.
 	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
 
-	// lookup: identify the media in Radarr (movie) or Sonarr (show); fails with ErrNotFound if unrecognised.
-	lookupTask := wf.NewTask("lookup", func(ctx hatchet.Context, input MediaInput) (lookupOutput, error) {
-		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
-		if err != nil {
-			return lookupOutput{}, err
-		}
-		return runLookup(ctx, input.FilePath, library)
-	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
-
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
 	// directory (rather than the system temp dir) means the rename is always within the
@@ -91,25 +82,20 @@ func NewMediaWorkflow(
 		}
 
 		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe.VideoCodec, probe.Format, cfg.OutputDir)
-	}, hatchet.WithParents(probeTask, lookupTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
-	// notify: trigger a library rescan in Radarr (movie) or Sonarr (show).
+	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library
+	// rescan. Fails with ErrNotFound if the file is not recognised by the library service.
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		var lu lookupOutput
-		if err := ctx.ParentOutput(lookupTask, &lu); err != nil {
-			return struct{}{}, fmt.Errorf("get lookup output: %w", err)
-		}
-
 		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return struct{}{}, err
 		}
-
-		if err := library.Refresh(ctx, lu.MediaID); err != nil {
+		if err := library.RefreshByFilePath(ctx, input.FilePath); err != nil {
 			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
 		return struct{}{}, nil
-	}, hatchet.WithParents(probeTask, lookupTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
+	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// cleanup: delete the original source file after successful processing.
 	_ = wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
