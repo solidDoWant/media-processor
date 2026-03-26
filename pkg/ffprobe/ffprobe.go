@@ -55,6 +55,10 @@ type StreamInfo struct {
 // and returns a populated MediaInfo. It returns a non-nil error if the file
 // does not exist, is not a recognized media format, or if ctx is cancelled.
 func Probe(ctx context.Context, path string) (*MediaInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Allocate format context.
 	formatContext := astiav.AllocFormatContext()
 	if formatContext == nil {

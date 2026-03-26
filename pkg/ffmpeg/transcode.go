@@ -87,6 +87,10 @@ type Transcoder struct {
 // context is cancelled, or an error occurs. A cancelled context causes Run to
 // return promptly with ctx.Err().
 func (t *Transcoder) Run(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	effectiveHW := t.resolveHWAccel()
 
 	inputFmt, interrupter, cancelWatch, err := t.openInputContext(ctx)
