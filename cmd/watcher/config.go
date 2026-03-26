@@ -3,26 +3,21 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 )
 
-// WatchEntry maps a filesystem path to a Hatchet workflow name.
-type WatchEntry struct {
-	Path     string `yaml:"path"`
-	Workflow string `yaml:"workflow"`
-}
+// Type aliases so package-level tests and code continue to reference Config/WatchEntry directly.
+type Config = watcherconfig.Config
+type WatchEntry = watcherconfig.WatchEntry
 
-const defaultCronSchedule = "*/5 * * * * *"
+const defaultCronSchedule = watcherconfig.DefaultCronSchedule
 
-// Config is the top-level watcher configuration loaded from the YAML config file.
-type Config struct {
-	// CronSchedule is the Hatchet cron expression controlling how often the watcher
-	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
-	// with a leading seconds field, e.g. "*/5 * * * * *".
-	CronSchedule string       `yaml:"cron_schedule"`
-	Watches      []WatchEntry `yaml:"watches"`
-}
+// sixFieldCron matches a cron expression with exactly 6 space-separated fields.
+var sixFieldCron = regexp.MustCompile(`^(\S+ ){5}\S+$`)
 
 // loadConfig reads and parses the watcher YAML config file at path.
 func loadConfig(path string) (*Config, error) {
@@ -34,6 +29,19 @@ func loadConfig(path string) (*Config, error) {
 	cfg := Config{CronSchedule: defaultCronSchedule}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("cannot parse config file %q: %w", path, err)
+	}
+
+	for i, w := range cfg.Watches {
+		if w.Path == "" {
+			return nil, fmt.Errorf("watch entry %d: path must not be empty", i)
+		}
+		if w.Workflow == "" {
+			return nil, fmt.Errorf("watch entry %d: workflow must not be empty", i)
+		}
+	}
+
+	if cfg.CronSchedule != "" && !sixFieldCron.MatchString(cfg.CronSchedule) {
+		return nil, fmt.Errorf("cron_schedule %q is not a valid 6-field cron expression (e.g. \"*/5 * * * * *\")", cfg.CronSchedule)
 	}
 
 	return &cfg, nil

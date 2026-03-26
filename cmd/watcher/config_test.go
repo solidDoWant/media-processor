@@ -62,6 +62,43 @@ watches: []
 			content: "{ this is: [not valid yaml",
 			errFunc: require.Error,
 		},
+		{
+			name: "empty path in watch entry returns error",
+			content: `
+watches:
+  - path: ""
+    workflow: MovieWorkflow
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "empty workflow in watch entry returns error",
+			content: `
+watches:
+  - path: /watch/movies
+    workflow: ""
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "invalid cron expression returns error",
+			content: `
+cron_schedule: "* * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "valid 6-field cron expression is accepted",
+			content: `
+cron_schedule: "0 30 9 * * *"
+watches: []
+`,
+			expected: Config{
+				CronSchedule: "0 30 9 * * *",
+				Watches:      []WatchEntry{},
+			},
+		},
 	}
 
 	for _, tt := range tests {
