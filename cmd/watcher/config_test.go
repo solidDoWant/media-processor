@@ -28,15 +28,15 @@ func TestLoadConfig(t *testing.T) {
 			content: `
 watches:
   - path: /watch/movies
-    workflow: MovieWorkflow
+    workflow: Movie
   - path: /watch/shows
-    workflow: ShowWorkflow
+    workflow: Show
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Path: "/watch/movies", Workflow: "MovieWorkflow"},
-					{Path: "/watch/shows", Workflow: "ShowWorkflow"},
+					{Path: "/watch/movies", Workflow: "Movie"},
+					{Path: "/watch/shows", Workflow: "Show"},
 				},
 			},
 		},
@@ -69,7 +69,7 @@ watches: []
 			content: `
 watches:
   - path: ""
-    workflow: MovieWorkflow
+    workflow: Movie
 `,
 			errFunc: require.Error,
 		},

@@ -19,15 +19,15 @@ func (CronExpression) JSONSchema() *jsonschema.Schema {
 type WorkflowName string
 
 const (
-	// MovieWorkflow is the workflow for processing movie files.
-	MovieWorkflow WorkflowName = "movie"
-	// ShowWorkflow is the workflow for processing TV show files.
-	ShowWorkflow WorkflowName = "show"
+	// Movie is the workflow for processing movie files.
+	Movie WorkflowName = "Movie"
+	// Show is the workflow for processing TV show episodes.
+	Show WorkflowName = "Show"
 )
 
 // validWorkflowNames is the authoritative list of WorkflowName values accepted in config.
 // It drives both JSON Schema enum generation and runtime validation.
-var validWorkflowNames = []WorkflowName{MovieWorkflow, ShowWorkflow}
+var validWorkflowNames = []WorkflowName{Movie, Show}
 
 // JSONSchema returns a JSON Schema for WorkflowName derived from validWorkflowNames,
 // so enum values are defined in one place rather than duplicated in struct tags.
@@ -55,7 +55,7 @@ type Config struct {
 	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
 	CronSchedule CronExpression `yaml:"cron_schedule,omitempty" validate:"omitempty,hatchetcron"`
 	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
-	Watches []WatchEntry `yaml:"watches" validate:"dive"`
+	Watches []WatchEntry `yaml:"watches,omitempty" validate:"dive"`
 }
 
 // SetDefaults implements defaults.Setter to initialize Config fields from package constants,

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	movieWorkflowName = "MovieWorkflow"
+	movieWorkflowName = "Movie"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
 )

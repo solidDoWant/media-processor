@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	showWorkflowName = "ShowWorkflow"
+	showWorkflowName = "Show"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
 )

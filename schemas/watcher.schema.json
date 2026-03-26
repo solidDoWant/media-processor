@@ -16,10 +16,7 @@
         }
       },
       "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "watches"
-      ]
+      "type": "object"
     },
     "CronExpression": {
       "type": "string",
@@ -45,8 +42,8 @@
     "WorkflowName": {
       "type": "string",
       "enum": [
-        "movie",
-        "show"
+        "Movie",
+        "Show"
       ]
     }
   }
