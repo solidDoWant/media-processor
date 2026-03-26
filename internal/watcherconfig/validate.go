@@ -1,18 +1,18 @@
 package watcherconfig
 
 import (
-	"regexp"
-
 	"github.com/go-playground/validator/v10"
+	"github.com/robfig/cron/v3"
 )
 
-// sixFieldCronPattern is the canonical regex for a Hatchet 6-field cron expression.
-// It is used by both CronExpression.JSONSchema() (schema generation) and
-// validateHatchetCron (runtime validation) to keep the regex in one place.
+// sixFieldCronPattern is a regex for a 6-field cron expression (seconds-leading).
+// Used only by CronExpression.JSONSchema() to embed a structural pattern in the
+// generated schema for editor tooling. Runtime validation uses the cron library.
 const sixFieldCronPattern = `^(\S+ ){5}\S+$`
 
-// sixFieldCron is the compiled form of sixFieldCronPattern.
-var sixFieldCron = regexp.MustCompile(sixFieldCronPattern)
+// cronParser parses Hatchet's seconds-leading 6-field cron expressions,
+// matching the format Hatchet registers with robfig/cron internally.
+var cronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 // NewValidator returns a validator configured with custom validators for WorkflowName
 // values (workflowname) and Hatchet 6-field cron expressions (hatchetcron).
@@ -38,7 +38,9 @@ func validateWorkflowName(fl validator.FieldLevel) bool {
 	return false
 }
 
-// validateHatchetCron checks that the field value is a valid Hatchet 6-field cron expression.
+// validateHatchetCron checks that the field value is a valid Hatchet 6-field cron expression
+// using robfig/cron — the same library Hatchet uses internally.
 func validateHatchetCron(fl validator.FieldLevel) bool {
-	return sixFieldCron.MatchString(fl.Field().String())
+	_, err := cronParser.Parse(fl.Field().String())
+	return err == nil
 }
