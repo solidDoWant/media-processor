@@ -12,8 +12,7 @@ import (
 
 func main() {
 	r := &jsonschema.Reflector{
-		FieldNameTag:               "yaml",
-		RequiredFromJSONSchemaTags: true,
+		FieldNameTag: "yaml",
 	}
 
 	schema := r.Reflect(&watcherconfig.Config{})

@@ -41,10 +41,10 @@ func (WorkflowName) JSONSchema() *jsonschema.Schema {
 
 // WatchEntry maps a filesystem path to a Hatchet workflow name.
 type WatchEntry struct {
-	Path string `yaml:"path" jsonschema:"required,minLength=1" validate:"min=1"`
+	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
 	// Workflow must be one of the values in validWorkflowNames; validated by the workflowname tag.
 	// The validate tag is required for runtime enforcement; JSONSchema() handles schema generation.
-	Workflow WorkflowName `yaml:"workflow" jsonschema:"required" validate:"workflowname"`
+	Workflow WorkflowName `yaml:"workflow" validate:"workflowname"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
@@ -53,9 +53,9 @@ type Config struct {
 	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
 	// with a leading seconds field, e.g. "*/5 * * * * *".
 	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
-	CronSchedule CronExpression `yaml:"cron_schedule" validate:"omitempty,hatchetcron"`
+	CronSchedule CronExpression `yaml:"cron_schedule,omitempty" validate:"omitempty,hatchetcron"`
 	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
-	Watches []WatchEntry `yaml:"watches" jsonschema:"required" validate:"dive"`
+	Watches []WatchEntry `yaml:"watches" validate:"dive"`
 }
 
 // SetDefaults implements defaults.Setter to initialize Config fields from package constants,
