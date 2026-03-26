@@ -45,8 +45,8 @@
     "WorkflowName": {
       "type": "string",
       "enum": [
-        "MovieWorkflow",
-        "ShowWorkflow"
+        "Movie",
+        "Show"
       ]
     }
   }
