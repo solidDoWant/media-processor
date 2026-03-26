@@ -83,9 +83,34 @@ watches:
 			errFunc: require.Error,
 		},
 		{
+			name: "unrecognized workflow name returns error",
+			content: `
+watches:
+  - path: /watch/movies
+    workflow: UnknownWorkflow
+`,
+			errFunc: require.Error,
+		},
+		{
 			name: "invalid cron expression returns error",
 			content: `
 cron_schedule: "* * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "five-field cron expression returns error",
+			content: `
+cron_schedule: "* * * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "seven-field cron expression returns error",
+			content: `
+cron_schedule: "* * * * * * *"
 watches: []
 `,
 			errFunc: require.Error,
