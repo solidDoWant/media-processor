@@ -41,15 +41,15 @@ Assess whether the issue is large before doing anything else. It is large if any
 2. **Post plan**: Draft a brief written implementation plan covering: approach, files to change, and how each acceptance criterion will be satisfied. Do not use plan mode or take any action yet — just think and write. Then follow this approval loop:
 
    **If no plan exists yet in the task file:**
-   - Post the plan as an issue comment.
-   - Write the plan to `.claude/tasks/$ISSUE_NUMBER.md` with `status: pending-approval`.
+   - Post the plan as an issue comment using `gh api repos/{owner}/{repo}/issues/$ISSUE_NUMBER/comments --method POST --field body="..." --jq '.id'` and capture the returned comment ID.
+   - Write the plan to `.claude/tasks/$ISSUE_NUMBER.md` with `status: pending-approval` and `plan_comment_id: <id>`.
    - Stop and ask the user (in the chat) to review the plan. Do not write any code until approved.
 
    **If a plan exists with `status: pending-approval`:**
    - Read all issue comments posted after the plan comment.
    - **Check for explicit approval**: a comment counts as approval only if it clearly and unconditionally says to proceed — e.g. "approved", "lgtm", "looks good, proceed", "go ahead". When in doubt, treat it as feedback, not approval.
    - If the latest relevant comment is explicit approval (and no subsequent comment adds new feedback): update the task file to `status: approved` and proceed to Step 3.
-   - Otherwise (comment contains questions, change requests, or ambiguous language — or there are no new comments): treat as feedback. Revise the plan to address each piece of feedback, post the revised plan as a **new** issue comment, overwrite the plan in the task file (keeping `status: pending-approval`), and stop — ask the user to review the updated plan.
+   - Otherwise (comment contains questions, change requests, or ambiguous language — or there are no new comments): treat as feedback. Revise the plan to address each piece of feedback, edit the existing plan comment in-place using `gh api repos/{owner}/{repo}/issues/comments/{plan_comment_id} --method PATCH --field body="..."` (read `plan_comment_id` from the task file), overwrite the plan in the task file (keeping `status: pending-approval`), and stop — ask the user to review the updated plan.
 
    **If the task file has `status: approved`:** skip directly to Step 3.
 
