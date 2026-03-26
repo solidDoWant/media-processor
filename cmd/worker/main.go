@@ -11,9 +11,10 @@ import (
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
+	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows"
-	"github.com/solidDoWant/media-processor/workflows/movie"
+	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
 func main() {
@@ -31,9 +32,9 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
 
-	movieOutputDir := os.Getenv("MOVIE_OUTPUT_DIR")
-	if movieOutputDir == "" {
-		return fmt.Errorf("MOVIE_OUTPUT_DIR is not set")
+	mediaOutputDir := os.Getenv("MEDIA_OUTPUT_DIR")
+	if mediaOutputDir == "" {
+		return fmt.Errorf("MEDIA_OUTPUT_DIR is not set")
 	}
 
 	radarrURL := os.Getenv("RADARR_URL")
@@ -46,11 +47,28 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("RADARR_API_KEY is not set")
 	}
 
+	sonarrURL := os.Getenv("SONARR_URL")
+	if sonarrURL == "" {
+		return fmt.Errorf("SONARR_URL is not set")
+	}
+
+	sonarrAPIKey := os.Getenv("SONARR_API_KEY")
+	if sonarrAPIKey == "" {
+		return fmt.Errorf("SONARR_API_KEY is not set")
+	}
+
 	radarrClient := radarr.New(radarr.Config{
 		URL:              radarrURL,
 		APIKey:           radarrAPIKey,
 		LocalPathPrefix:  os.Getenv("RADARR_LOCAL_PATH_PREFIX"),
 		RemotePathPrefix: os.Getenv("RADARR_REMOTE_PATH_PREFIX"),
+	})
+
+	sonarrClient := sonarr.New(sonarr.Config{
+		URL:              sonarrURL,
+		APIKey:           sonarrAPIKey,
+		LocalPathPrefix:  os.Getenv("SONARR_LOCAL_PATH_PREFIX"),
+		RemotePathPrefix: os.Getenv("SONARR_REMOTE_PATH_PREFIX"),
 	})
 
 	webhookClient := &webhook.Client{
@@ -62,14 +80,14 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet client: %w", err)
 	}
 
-	movieWorkflow := movie.NewMovieWorkflow(client, movie.MovieWorkflowConfig{
-		OutputDir:  movieOutputDir,
+	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
+		OutputDir:  mediaOutputDir,
 		WebhookURL: webhookClient.URL,
-	}, radarrClient, webhookClient)
+	}, radarrClient, sonarrClient, webhookClient)
 
 	worker, err := client.NewWorker(
 		"mediaprocessor-worker",
-		hatchet.WithWorkflows(workflows.NewPlaceholder(client), movieWorkflow),
+		hatchet.WithWorkflows(workflows.NewPlaceholder(client), mediaWorkflow),
 	)
 	if err != nil {
 		return fmt.Errorf("create Hatchet worker: %w", err)

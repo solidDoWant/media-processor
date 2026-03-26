@@ -18,12 +18,12 @@ const sixFieldCronPattern = `^(\S+ ){5}\S+$`
 // matching the format Hatchet registers with robfig/cron internally.
 var cronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
-// NewValidator returns a validator configured with custom validators for WorkflowName
-// values (workflowname) and Hatchet 6-field cron expressions (hatchetcron).
+// NewValidator returns a validator configured with custom validators for MediaType
+// values (mediatype) and Hatchet 6-field cron expressions (hatchetcron).
 func NewValidator() *validator.Validate {
 	v := validator.New(validator.WithRequiredStructEnabled())
-	if err := v.RegisterValidation("workflowname", validateWorkflowName); err != nil {
-		panic("failed to register validation \"workflowname\": " + err.Error())
+	if err := v.RegisterValidation("mediatype", validateMediaType); err != nil {
+		panic("failed to register validation \"mediatype\": " + err.Error())
 	}
 	if err := v.RegisterValidation("hatchetcron", validateHatchetCron); err != nil {
 		panic("failed to register validation \"hatchetcron\": " + err.Error())
@@ -31,11 +31,11 @@ func NewValidator() *validator.Validate {
 	return v
 }
 
-// validateWorkflowName checks that the field value is one of the values in validWorkflowNames.
-func validateWorkflowName(fl validator.FieldLevel) bool {
-	wn := WorkflowName(fl.Field().String())
-	for _, valid := range validWorkflowNames {
-		if wn == valid {
+// validateMediaType checks that the field value is one of the values in validMediaTypes.
+func validateMediaType(fl validator.FieldLevel) bool {
+	mt := MediaType(fl.Field().String())
+	for _, valid := range validMediaTypes {
+		if mt == valid {
 			return true
 		}
 	}

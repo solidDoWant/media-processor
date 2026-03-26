@@ -1,4 +1,4 @@
-package show
+package media
 
 import (
 	"context"
@@ -24,6 +24,22 @@ func copyTestVideo(t *testing.T) string {
 	dst := filepath.Join(t.TempDir(), "video.mp4")
 	require.NoError(t, os.WriteFile(dst, src, 0o600))
 	return dst
+}
+
+// stubMovieLibrary implements medialib.MovieLibrary for testing.
+type stubMovieLibrary struct {
+	movie        medialib.Movie
+	err          error
+	refreshCalls []int64
+}
+
+func (s *stubMovieLibrary) GetMovieByFilePath(_ context.Context, _ string) (medialib.Movie, error) {
+	return s.movie, s.err
+}
+
+func (s *stubMovieLibrary) RefreshMovie(_ context.Context, id int64) error {
+	s.refreshCalls = append(s.refreshCalls, id)
+	return s.err
 }
 
 // stubEpisodeLibrary implements medialib.EpisodeLibrary for testing.

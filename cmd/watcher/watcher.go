@@ -10,12 +10,13 @@ import (
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
-// dispatchFunc submits a workflow run for the given absolute file path.
-type dispatchFunc func(ctx context.Context, workflowName, filePath string) error
+// dispatchFunc submits a workflow run for the given absolute file path and media type.
+type dispatchFunc func(ctx context.Context, filePath string, mediaType watcherconfig.MediaType) error
 
 // NewScanWorkflow returns a Hatchet standalone task that scans all configured watch
 // directories on the configured cron schedule and spawns a child workflow run for
@@ -30,11 +31,14 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 	return client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, workflowName, filePath string) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType watcherconfig.MediaType) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
-					workflowName,
-					map[string]string{"file_path": filePath},
+					media.MediaWorkflowName,
+					map[string]string{
+						"file_path":  filePath,
+						"media_type": string(mediaType),
+					},
 					hatchet.WithRunKey(filePath),
 				)
 				return err
@@ -85,11 +89,6 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 			return err
 		}
 
-		// Actual workflow names are title-cased (e.g. "Movie") but config values are lowercase (e.g. "movie").
-		// They are title cased in the actual workflow definitions for UI reasons, but lowercase in the config
-		// to align with YAML conventions.
-		workflowName := cases.Title(language.AmericanEnglish).String(string(w.Workflow))
-
 		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -110,8 +109,8 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 				return nil
 			}
 
-			if dispatchErr := dispatch(ctx, workflowName, absPath); dispatchErr != nil {
-				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", workflowName, absPath, dispatchErr))
+			if dispatchErr := dispatch(ctx, absPath, w.MediaType); dispatchErr != nil {
+				errs = append(errs, fmt.Errorf("dispatch workflow for %q: %w", absPath, dispatchErr))
 			}
 
 			return nil
