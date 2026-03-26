@@ -58,19 +58,6 @@ func NewMediaWorkflow(
 		}),
 	)
 
-	// getLibrary selects the appropriate library client based on the media type.
-	// Defined once here so all steps share the same dispatch logic.
-	getLibrary := func(mediaType medialib.MediaType) (medialib.LibraryClient, error) {
-		switch mediaType {
-		case medialib.MovieType:
-			return radarrClient, nil
-		case medialib.ShowType:
-			return sonarrClient, nil
-		default:
-			return nil, fmt.Errorf("unknown media type %q", mediaType)
-		}
-	}
-
 	// probe: read codec/container info. Deletes the file and returns IsValidMedia=false
 	// (without error) when the file is not a recognisable media file or has no video stream,
 	// which causes all downstream steps to be skipped via WithSkipIf.
@@ -86,7 +73,7 @@ func NewMediaWorkflow(
 
 	// lookup: identify the media in Radarr (movie) or Sonarr (show); fails with ErrNotFound if unrecognised.
 	lookupTask := wf.NewTask("lookup", func(ctx hatchet.Context, input MediaInput) (lookupOutput, error) {
-		library, err := getLibrary(input.MediaType)
+		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return lookupOutput{}, err
 		}
@@ -113,7 +100,7 @@ func NewMediaWorkflow(
 			return struct{}{}, fmt.Errorf("get lookup output: %w", err)
 		}
 
-		library, err := getLibrary(input.MediaType)
+		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return struct{}{}, err
 		}

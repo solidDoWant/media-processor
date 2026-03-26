@@ -51,12 +51,14 @@ type Episode struct {
 
 // MovieLibrary provides operations for movie media items.
 type MovieLibrary interface {
+	LibraryClient
 	GetMovieByFilePath(ctx context.Context, path string) (Movie, error)
 	RefreshMovie(ctx context.Context, id int64) error
 }
 
 // EpisodeLibrary provides operations for episode media items.
 type EpisodeLibrary interface {
+	LibraryClient
 	GetEpisodeByFilePath(ctx context.Context, path string) (Episode, error)
 	RefreshSeries(ctx context.Context, seriesID int64) error
 }
