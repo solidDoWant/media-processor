@@ -61,7 +61,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubEpisodeLibrary{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Movie})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -88,7 +88,7 @@ func TestMediaWorkflow_Movie_RefreshMovieIsCalledAfterTranscode(t *testing.T) {
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubEpisodeLibrary{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Movie})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
 	assert.Equal(t, []int64{42}, radarrStub.refreshCalls, "RefreshMovie should be called once with the movie ID")
@@ -109,7 +109,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubMovieLibrary{}, sonarrStub, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Show})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -136,7 +136,7 @@ func TestMediaWorkflow_Show_RefreshSeriesIsCalledAfterTranscode(t *testing.T) {
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubMovieLibrary{}, sonarrStub, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Show})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
 	require.NoError(t, err)
 
 	assert.Equal(t, []int64{42}, sonarrStub.refreshCalls, "RefreshSeries should be called once with the series ID")
@@ -158,7 +158,7 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubEpisodeLibrary{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Movie})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(inputPath)
@@ -184,7 +184,7 @@ func TestMediaWorkflow_LookupFailureCausesWorkflowToFail(t *testing.T) {
 	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubEpisodeLibrary{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: Movie})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	assert.Error(t, err, "workflow should fail when the movie is not found in Radarr")
 
 	_, statErr := os.Stat(inputPath)

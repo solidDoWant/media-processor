@@ -19,14 +19,6 @@ const (
 	defaultTaskRetries = 3
 )
 
-// MediaType identifies whether a file is a movie or a TV show episode.
-type MediaType string
-
-const (
-	Movie MediaType = "movie"
-	Show  MediaType = "show"
-)
-
 // MediaWorkflowConfig holds the configuration for the media processing workflow.
 type MediaWorkflowConfig struct {
 	// OutputDir is the local directory where transcoded files are written.
@@ -37,8 +29,8 @@ type MediaWorkflowConfig struct {
 
 // MediaInput is the workflow's trigger payload.
 type MediaInput struct {
-	FilePath  string    `json:"file_path"`
-	MediaType MediaType `json:"media_type"`
+	FilePath  string             `json:"file_path"`
+	MediaType medialib.MediaType `json:"media_type"`
 }
 
 // NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV
@@ -81,7 +73,11 @@ func NewMediaWorkflow(
 
 	// lookup: identify the media in Radarr (movie) or Sonarr (show); fails with ErrNotFound if unrecognised.
 	lookupTask := wf.NewTask("lookup", func(ctx hatchet.Context, input MediaInput) (lookupOutput, error) {
-		return runLookup(ctx, input.FilePath, input.MediaType, radarrClient, sonarrClient)
+		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
+		if err != nil {
+			return lookupOutput{}, err
+		}
+		return runLookup(ctx, input.FilePath, library)
 	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
@@ -104,17 +100,13 @@ func NewMediaWorkflow(
 			return struct{}{}, fmt.Errorf("get lookup output: %w", err)
 		}
 
-		switch input.MediaType {
-		case Movie:
-			if err := radarrClient.RefreshMovie(ctx, lu.MediaID); err != nil {
-				return struct{}{}, fmt.Errorf("notify radarr: %w", err)
-			}
-		case Show:
-			if err := sonarrClient.RefreshSeries(ctx, lu.MediaID); err != nil {
-				return struct{}{}, fmt.Errorf("notify sonarr: %w", err)
-			}
-		default:
-			return struct{}{}, fmt.Errorf("unknown media type %q", input.MediaType)
+		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
+		if err != nil {
+			return struct{}{}, err
+		}
+
+		if err := library.Refresh(ctx, lu.MediaID); err != nil {
+			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, lookupTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))

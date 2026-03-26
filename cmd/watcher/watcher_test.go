@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // TestValidateWatchDirs verifies that validateWatchDirs returns a descriptive error
@@ -94,16 +94,16 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: watcherconfig.Movie},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	type call struct {
 		filePath  string
-		mediaType watcherconfig.MediaType
+		mediaType medialib.MediaType
 	}
 	var calls []call
-	dispatch := func(_ context.Context, fp string, mt watcherconfig.MediaType) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
 		calls = append(calls, call{fp, mt})
 		return nil
 	}
@@ -111,7 +111,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
 	require.Len(t, calls, 1)
 	assert.Equal(t, filePath, calls[0].filePath)
-	assert.Equal(t, watcherconfig.Movie, calls[0].mediaType)
+	assert.Equal(t, medialib.MovieType, calls[0].mediaType)
 }
 
 // TestScan_SubdirectoryFilesUseParentMapping verifies that files within subdirectories
@@ -127,12 +127,12 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: watcherconfig.Show},
+			{Path: dir, MediaType: medialib.ShowType},
 		},
 	}
 
 	var dispatched []string
-	dispatch := func(_ context.Context, fp string, _ watcherconfig.MediaType) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -158,7 +158,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 	}
 
 	var count int
-	dispatch := func(_ context.Context, _ string, _ watcherconfig.MediaType) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -185,7 +185,7 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, func(_ context.Context, _ string, _ watcherconfig.MediaType) error { return nil })
+	err := scan(ctx, cfg, func(_ context.Context, _ string, _ medialib.MediaType) error { return nil })
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -201,19 +201,19 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: movieDir, MediaType: watcherconfig.Movie},
-			{Path: showDir, MediaType: watcherconfig.Show},
+			{Path: movieDir, MediaType: medialib.MovieType},
+			{Path: showDir, MediaType: medialib.ShowType},
 		},
 	}
 
-	dispatched := make(map[string]watcherconfig.MediaType) // path → media type
-	dispatch := func(_ context.Context, fp string, mt watcherconfig.MediaType) error {
+	dispatched := make(map[string]medialib.MediaType) // path → media type
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
 		dispatched[fp] = mt
 		return nil
 	}
 
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
 
-	assert.Equal(t, watcherconfig.Movie, dispatched[filepath.Join(movieDir, "movie.mkv")])
-	assert.Equal(t, watcherconfig.Show, dispatched[filepath.Join(showDir, "show.mkv")])
+	assert.Equal(t, medialib.MovieType, dispatched[filepath.Join(movieDir, "movie.mkv")])
+	assert.Equal(t, medialib.ShowType, dispatched[filepath.Join(showDir, "show.mkv")])
 }

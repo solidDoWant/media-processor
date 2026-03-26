@@ -11,12 +11,12 @@ import (
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
-	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
 // dispatchFunc submits a workflow run for the given absolute file path and media type.
-type dispatchFunc func(ctx context.Context, filePath string, mediaType watcherconfig.MediaType) error
+type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType) error
 
 // NewScanWorkflow returns a Hatchet standalone task that scans all configured watch
 // directories on the configured cron schedule and spawns a child workflow run for
@@ -31,7 +31,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 	return client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType watcherconfig.MediaType) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
 					media.MediaWorkflowName,

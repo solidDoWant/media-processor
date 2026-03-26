@@ -3,6 +3,8 @@ package watcherconfig
 import (
 	"github.com/go-playground/validator/v10"
 	"github.com/robfig/cron/v3"
+
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // sixFieldCronPattern is a loose structural regex for a 6-field cron expression
@@ -33,7 +35,7 @@ func NewValidator() *validator.Validate {
 
 // validateMediaType checks that the field value is one of the values in validMediaTypes.
 func validateMediaType(fl validator.FieldLevel) bool {
-	mt := MediaType(fl.Field().String())
+	mt := medialib.MediaType(fl.Field().String())
 	for _, valid := range validMediaTypes {
 		if mt == valid {
 			return true

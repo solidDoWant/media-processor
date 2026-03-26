@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // TestLoadConfig verifies that the watcher correctly parses its YAML config file,
@@ -35,8 +36,8 @@ watches:
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Path: "/watch/movies", MediaType: watcherconfig.Movie},
-					{Path: "/watch/shows", MediaType: watcherconfig.Show},
+					{Path: "/watch/movies", MediaType: medialib.MovieType},
+					{Path: "/watch/shows", MediaType: medialib.ShowType},
 				},
 			},
 		},

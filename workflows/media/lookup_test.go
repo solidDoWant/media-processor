@@ -1,65 +1,53 @@
 package media
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
+
+// stubLibraryClient implements LibraryClient for testing.
+type stubLibraryClient struct {
+	id           int64
+	err          error
+	refreshCalls []int64
+}
+
+func (s *stubLibraryClient) GetIDByFilePath(_ context.Context, _ string) (int64, error) {
+	return s.id, s.err
+}
+
+func (s *stubLibraryClient) Refresh(_ context.Context, id int64) error {
+	s.refreshCalls = append(s.refreshCalls, id)
+	return s.err
+}
 
 func TestRunLookup(t *testing.T) {
 	tests := []struct {
-		name           string
-		mediaType      MediaType
-		movieLibrary   *stubMovieLibrary
-		episodeLibrary *stubEpisodeLibrary
-		expected       lookupOutput
-		errFunc        require.ErrorAssertionFunc
+		name     string
+		stub     *stubLibraryClient
+		expected lookupOutput
+		errFunc  require.ErrorAssertionFunc
 	}{
 		{
-			name:           "movie: found returns movie ID",
-			mediaType:      Movie,
-			movieLibrary:   &stubMovieLibrary{movie: medialib.Movie{ID: 42, Title: "Interstellar"}},
-			episodeLibrary: &stubEpisodeLibrary{},
-			expected:       lookupOutput{MediaID: 42},
-			errFunc:        require.NoError,
+			name:     "found returns ID",
+			stub:     &stubLibraryClient{id: 42},
+			expected: lookupOutput{MediaID: 42},
+			errFunc:  require.NoError,
 		},
 		{
-			name:           "movie: ErrNotFound propagates",
-			mediaType:      Movie,
-			movieLibrary:   &stubMovieLibrary{err: medialib.ErrNotFound},
-			episodeLibrary: &stubEpisodeLibrary{},
-			errFunc:        require.Error,
-		},
-		{
-			name:           "show: found returns series ID",
-			mediaType:      Show,
-			movieLibrary:   &stubMovieLibrary{},
-			episodeLibrary: &stubEpisodeLibrary{episode: medialib.Episode{ID: 10, SeriesID: 42, SeriesTitle: "Breaking Bad"}},
-			expected:       lookupOutput{MediaID: 42},
-			errFunc:        require.NoError,
-		},
-		{
-			name:           "show: ErrNotFound propagates",
-			mediaType:      Show,
-			movieLibrary:   &stubMovieLibrary{},
-			episodeLibrary: &stubEpisodeLibrary{err: medialib.ErrNotFound},
-			errFunc:        require.Error,
-		},
-		{
-			name:           "unknown media type returns error",
-			mediaType:      MediaType("unknown"),
-			movieLibrary:   &stubMovieLibrary{},
-			episodeLibrary: &stubEpisodeLibrary{},
-			errFunc:        require.Error,
+			name:    "ErrNotFound propagates",
+			stub:    &stubLibraryClient{err: errors.New("not found")},
+			errFunc: require.Error,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := runLookup(t.Context(), "/media/file.mkv", tt.mediaType, tt.movieLibrary, tt.episodeLibrary)
+			got, err := runLookup(t.Context(), "/media/file.mkv", tt.stub)
 			tt.errFunc(t, err)
 			assert.Equal(t, tt.expected, got)
 		})
