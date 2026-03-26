@@ -65,12 +65,18 @@ Assess whether the issue is large before doing anything else. It is large if any
    After creating the PR, record the PR number in `.claude/tasks/$ISSUE_NUMBER.md`.
 
 6. **PR feedback loop**: On re-invocation after a PR is open, check for reviewer feedback:
-   - Look up the PR using the PR number stored in the task file, or via `gh pr list --head <branch> --json number,state`.
-   - Fetch review comments and threads: `gh pr view <PR_NUMBER> --json reviews,comments,reviewThreads`.
-   - For each unresolved review thread or comment that has not yet been replied to by this agent:
-     1. Make the necessary code change(s) to address the comment.
-     2. Commit the change with a descriptive message.
-     3. Reply to the specific thread on the PR using `gh api repos/{owner}/{repo}/pulls/{PR_NUMBER}/comments` with `in_reply_to` set to the comment ID, briefly describing what was changed.
+   - Look up the PR number from `.claude/tasks/$ISSUE_NUMBER.md`, or find it via `gh pr list --head <branch> --json number,state --jq '.[0].number'`.
+   - Fetch **all** comments using the GitHub MCP tools — do **not** construct ad-hoc `gh` CLI invocations, jq pipelines, or inline scripts:
+     - PR details, inline review comments, and review summaries: `pull_request_read` (owner, repo, pullNumber)
+     - General PR comments (non-review): `list_issues` with the PR number, or use the `comments` field from `pull_request_read`
+   - Read `.claude/tasks/$ISSUE_NUMBER.md` and check the `replied_comment_ids` list (treat as `[]` if absent). Skip any comment whose ID is already in that list.
+   - For each comment not yet in `replied_comment_ids`:
+     1. Make the necessary code change(s) to address it.
+     2. Commit with a descriptive message.
+     3. Reply using the appropriate MCP tool:
+        - Inline review comment (has `path`/`position` fields): `add_reply_to_pull_request_comment` (owner, repo, pullNumber, commentId, body)
+        - General PR comment: `add_issue_comment` (owner, repo, issueNumber = PR number, body)
+     4. Append the comment ID to `replied_comment_ids` in `.claude/tasks/$ISSUE_NUMBER.md`.
    - After addressing all comments, push the updated branch.
    - If all threads are resolved or there are no unaddressed comments, report status to the user and stop.
    - **On merge**: delete the task file: `rm .claude/tasks/$ISSUE_NUMBER.md`.
