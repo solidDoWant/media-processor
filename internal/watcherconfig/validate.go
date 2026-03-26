@@ -18,8 +18,12 @@ var sixFieldCron = regexp.MustCompile(sixFieldCronPattern)
 // values (workflowname) and Hatchet 6-field cron expressions (hatchetcron).
 func NewValidator() *validator.Validate {
 	v := validator.New(validator.WithRequiredStructEnabled())
-	_ = v.RegisterValidation("workflowname", validateWorkflowName)
-	_ = v.RegisterValidation("hatchetcron", validateHatchetCron)
+	if err := v.RegisterValidation("workflowname", validateWorkflowName); err != nil {
+		panic("failed to register validation \"workflowname\": " + err.Error())
+	}
+	if err := v.RegisterValidation("hatchetcron", validateHatchetCron); err != nil {
+		panic("failed to register validation \"hatchetcron\": " + err.Error())
+	}
 	return v
 }
 

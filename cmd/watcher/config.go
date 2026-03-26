@@ -22,12 +22,12 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := defaults.Set(&cfg); err != nil {
-		return nil, fmt.Errorf("cannot set config defaults: %w", err)
-	}
-
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("cannot parse config file %q: %w", path, err)
+	}
+
+	if err := defaults.Set(&cfg); err != nil {
+		return nil, fmt.Errorf("cannot set config defaults: %w", err)
 	}
 
 	if err := watcherconfig.NewValidator().Struct(cfg); err != nil {
