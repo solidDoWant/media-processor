@@ -105,7 +105,7 @@ func NewMovieWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
-		return struct{}{}, shared.NotifyWorkflowFailure(ctx, movieWorkflowName, input.FilePath, webhookClient)
+		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), movieWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf

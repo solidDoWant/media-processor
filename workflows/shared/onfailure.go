@@ -1,22 +1,20 @@
 package shared
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
 
 // NotifyWorkflowFailure sends an aggregated failure notification to webhookClient.
-// It is intended to be called from a workflow's OnFailure handler.
+// stepErrors is the map returned by ctx.StepRunErrors() in an OnFailure handler.
 // workflowName is included in the webhook payload; filePath is the file being processed.
-// Returns nil (no-op) when there are no step errors.
-func NotifyWorkflowFailure(ctx hatchet.Context, workflowName, filePath string, webhookClient *webhook.Client) error {
-	stepErrors := ctx.StepRunErrors()
+// Returns nil (no-op) when stepErrors is empty.
+func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, workflowName, filePath string, webhookClient *webhook.Client) error {
 	if len(stepErrors) == 0 {
 		return nil
 	}

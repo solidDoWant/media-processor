@@ -105,7 +105,7 @@ func NewShowWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input ShowInput) (struct{}, error) {
-		return struct{}{}, shared.NotifyWorkflowFailure(ctx, showWorkflowName, input.FilePath, webhookClient)
+		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), showWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf
