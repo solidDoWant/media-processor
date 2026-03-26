@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	showWorkflowName = "ShowWorkflow"
+	ShowWorkflowName = "Show"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
 )
@@ -46,7 +46,7 @@ func NewShowWorkflow(
 	maxRuns := int32(1)
 	cancelNewest := types.CancelNewest
 
-	wf := client.NewWorkflow(showWorkflowName,
+	wf := client.NewWorkflow(ShowWorkflowName,
 		hatchet.WithWorkflowConcurrency(types.Concurrency{
 			Expression:    "input.file_path",
 			MaxRuns:       &maxRuns,
@@ -105,7 +105,7 @@ func NewShowWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input ShowInput) (struct{}, error) {
-		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), showWorkflowName, input.FilePath, webhookClient)
+		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), ShowWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf

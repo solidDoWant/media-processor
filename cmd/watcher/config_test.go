@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 )
 
 // TestLoadConfig verifies that the watcher correctly parses its YAML config file,
@@ -26,15 +28,15 @@ func TestLoadConfig(t *testing.T) {
 			content: `
 watches:
   - path: /watch/movies
-    workflow: MovieWorkflow
+    workflow: movie
   - path: /watch/shows
-    workflow: ShowWorkflow
+    workflow: show
 `,
 			expected: Config{
-				CronSchedule: defaultCronSchedule,
+				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Path: "/watch/movies", Workflow: "MovieWorkflow"},
-					{Path: "/watch/shows", Workflow: "ShowWorkflow"},
+					{Path: "/watch/movies", Workflow: watcherconfig.Movie},
+					{Path: "/watch/shows", Workflow: watcherconfig.Show},
 				},
 			},
 		},
@@ -53,7 +55,7 @@ watches: []
 			name:    "cron_schedule defaults to every 5 seconds when omitted",
 			content: "watches: []",
 			expected: Config{
-				CronSchedule: defaultCronSchedule,
+				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches:      []WatchEntry{},
 			},
 		},
@@ -61,6 +63,68 @@ watches: []
 			name:    "invalid YAML returns error",
 			content: "{ this is: [not valid yaml",
 			errFunc: require.Error,
+		},
+		{
+			name: "empty path in watch entry returns error",
+			content: `
+watches:
+  - path: ""
+    workflow: movie
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "empty workflow in watch entry returns error",
+			content: `
+watches:
+  - path: /watch/movies
+    workflow: ""
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "unrecognized workflow name returns error",
+			content: `
+watches:
+  - path: /watch/movies
+    workflow: UnknownWorkflow
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "invalid cron expression returns error",
+			content: `
+cron_schedule: "* * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "five-field cron expression returns error",
+			content: `
+cron_schedule: "* * * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "seven-field cron expression returns error",
+			content: `
+cron_schedule: "* * * * * * *"
+watches: []
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "valid 6-field cron expression is accepted",
+			content: `
+cron_schedule: "0 30 9 * * *"
+watches: []
+`,
+			expected: Config{
+				CronSchedule: "0 30 9 * * *",
+				Watches:      []WatchEntry{},
+			},
 		},
 	}
 

@@ -54,6 +54,13 @@ lint: ## Run golangci-lint.
 lint-fix: ## Run golangci-lint and perform fixes.
 	golangci-lint run --fix ./...
 
+##@ Code Generation
+
+.PHONY: generate-schema
+generate-schema: ## Generate JSON schema for the watcher config file.
+	@mkdir -p schemas
+	go run ./cmd/gen-config-schema | jq > schemas/watcher.schema.json
+
 ##@ Build
 
 # Note: CGO is required. FFmpeg 8 development headers must be available via pkg-config.

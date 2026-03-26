@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/solidDoWant/media-processor/internal/watcherconfig/config",
+  "$ref": "#/$defs/Config",
+  "$defs": {
+    "Config": {
+      "properties": {
+        "cron_schedule": {
+          "$ref": "#/$defs/CronExpression"
+        },
+        "watches": {
+          "items": {
+            "$ref": "#/$defs/WatchEntry"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "CronExpression": {
+      "type": "string",
+      "pattern": "^(\\S+ ){5}\\S+$"
+    },
+    "WatchEntry": {
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflow": {
+          "$ref": "#/$defs/WorkflowName"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "path",
+        "workflow"
+      ]
+    },
+    "WorkflowName": {
+      "type": "string",
+      "enum": [
+        "movie",
+        "show"
+      ]
+    }
+  }
+}

@@ -10,6 +10,8 @@ import (
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // dispatchFunc submits a workflow run for the given absolute file path.
@@ -39,7 +41,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 			}
 			return struct{}{}, scan(ctx, cfg, dispatch)
 		},
-		hatchet.WithWorkflowCron(cfg.CronSchedule),
+		hatchet.WithWorkflowCron(string(cfg.CronSchedule)),
 		hatchet.WithWorkflowConcurrency(types.Concurrency{
 			// Constant expression groups all scan runs under a single concurrency slot.
 			Expression:    `"scan"`,
@@ -83,6 +85,11 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 			return err
 		}
 
+		// Actual workflow names are title-cased (e.g. "Movie") but config values are lowercase (e.g. "movie").
+		// They are title cased in the actual workflow definitions for UI reasons, but lowercase in the config
+		// to align with YAML conventions.
+		workflowName := cases.Title(language.AmericanEnglish).String(string(w.Workflow))
+
 		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -103,8 +110,8 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 				return nil
 			}
 
-			if dispatchErr := dispatch(ctx, w.Workflow, absPath); dispatchErr != nil {
-				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", w.Workflow, absPath, dispatchErr))
+			if dispatchErr := dispatch(ctx, workflowName, absPath); dispatchErr != nil {
+				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", workflowName, absPath, dispatchErr))
 			}
 
 			return nil
