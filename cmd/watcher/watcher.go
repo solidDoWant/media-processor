@@ -111,7 +111,7 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 			}
 
 			if dispatchErr := dispatch(ctx, workflowName, absPath); dispatchErr != nil {
-				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", w.Workflow, absPath, dispatchErr))
+				errs = append(errs, fmt.Errorf("dispatch workflow %q for %q: %w", workflowName, absPath, dispatchErr))
 			}
 
 			return nil

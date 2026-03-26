@@ -5,9 +5,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// sixFieldCronPattern is a regex for a 6-field cron expression (seconds-leading).
-// Used only by CronExpression.JSONSchema() to embed a structural pattern in the
-// generated schema for editor tooling. Runtime validation uses the cron library.
+// sixFieldCronPattern is a loose structural regex for a 6-field cron expression
+// (seconds-leading). It merely enforces six whitespace-separated fields and does
+// not validate field contents such as ranges, numeric values, or names — many
+// syntactically invalid expressions will still match. Used only by
+// CronExpression.JSONSchema() to embed an approximate pattern in the generated
+// schema for editor tooling. Runtime validation uses cronParser (robfig/cron)
+// and is the authoritative source of validity.
 const sixFieldCronPattern = `^(\S+ ){5}\S+$`
 
 // cronParser parses Hatchet's seconds-leading 6-field cron expressions,
