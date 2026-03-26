@@ -130,14 +130,24 @@ func TestGetMovieByFilePath(t *testing.T) {
 	}
 }
 
-func TestRefreshMovie(t *testing.T) {
-	srv := newTestServer(t, nil)
+func TestRefreshByFilePath(t *testing.T) {
+	srv := newTestServer(t, &parseResponse{Movie: &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}})
 	t.Cleanup(srv.Close)
 
 	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	err := client.RefreshMovie(t.Context(), 42)
+	err := client.RefreshByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
 	require.NoError(t, err)
+}
+
+func TestRefreshByFilePath_ErrNotFound(t *testing.T) {
+	srv := newTestServer(t, &parseResponse{Movie: nil})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	err := client.RefreshByFilePath(t.Context(), "/movies/Unknown.mkv")
+	require.ErrorIs(t, err, medialib.ErrNotFound)
 }
 
 func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
@@ -147,10 +157,10 @@ func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRefreshMovie_UnreachableURL(t *testing.T) {
+func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
 	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.RefreshMovie(t.Context(), 42)
+	err := client.RefreshByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
 	require.Error(t, err)
 }
 
