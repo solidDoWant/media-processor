@@ -3,7 +3,7 @@ package watcherconfig
 import "github.com/invopop/jsonschema"
 
 // DefaultCronSchedule is the Hatchet cron expression used when none is specified in the config.
-const DefaultCronSchedule = "*/5 * * * * *"
+const DefaultCronSchedule CronExpression = "*/5 * * * * *"
 
 // CronExpression is a Hatchet 6-field cron expression (seconds-leading, e.g. "*/5 * * * * *").
 // It implements JSONSchema to embed the pattern constraint in the generated schema, keeping the
@@ -53,7 +53,15 @@ type Config struct {
 	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
 	// with a leading seconds field, e.g. "*/5 * * * * *".
 	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
-	CronSchedule CronExpression `yaml:"cron_schedule" default:"*/5 * * * * *" validate:"omitempty,hatchetcron"`
+	CronSchedule CronExpression `yaml:"cron_schedule" validate:"omitempty,hatchetcron"`
 	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
 	Watches []WatchEntry `yaml:"watches" jsonschema:"required" validate:"dive"`
+}
+
+// SetDefaults implements defaults.Setter to initialize Config fields from package constants,
+// avoiding duplicate literal values in struct tags.
+func (cfg *Config) SetDefaults() {
+	if cfg.CronSchedule == "" {
+		cfg.CronSchedule = DefaultCronSchedule
+	}
 }
