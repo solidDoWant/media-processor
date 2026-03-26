@@ -29,8 +29,10 @@ func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 // The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string) error {
-	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
+// videoCodecName and format are the codec name and container format from ffprobe
+// (e.g. "h264", "matroska,webm").
+func RunTranscode(ctx context.Context, filePath, videoCodecName, format, outputDir string) error {
+	videoCodec := SelectVideoCodec(videoCodecName, format)
 
 	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"

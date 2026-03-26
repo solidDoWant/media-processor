@@ -2,10 +2,7 @@
 package show
 
 import (
-	"errors"
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -85,7 +82,7 @@ func NewShowWorkflow(
 			return struct{}{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir)
+		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe.VideoCodec, probe.Format, cfg.OutputDir)
 	}, hatchet.WithParents(probeTask, lookupTask), skipIfInvalid)
 
 	// notify-sonarr: trigger a Sonarr library rescan for the series.
@@ -108,32 +105,7 @@ func NewShowWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input ShowInput) (struct{}, error) {
-		stepErrors := ctx.StepRunErrors()
-		if len(stepErrors) == 0 {
-			return struct{}{}, nil
-		}
-
-		steps := make([]string, 0, len(stepErrors))
-		for stepName := range stepErrors {
-			steps = append(steps, stepName)
-		}
-		sort.Strings(steps)
-
-		errs := make([]error, 0, len(stepErrors))
-		for _, stepName := range steps {
-			errs = append(errs, fmt.Errorf("%s: %s", stepName, stepErrors[stepName]))
-		}
-
-		if err := webhookClient.NotifyFailure(ctx, webhook.FailureEvent{
-			Workflow: showWorkflowName,
-			FilePath: input.FilePath,
-			Step:     strings.Join(steps, ", "),
-			Err:      errors.Join(errs...),
-		}); err != nil {
-			return struct{}{}, fmt.Errorf("notify failure: %w", err)
-		}
-
-		return struct{}{}, nil
+		return struct{}{}, shared.NotifyWorkflowFailure(ctx, showWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf
