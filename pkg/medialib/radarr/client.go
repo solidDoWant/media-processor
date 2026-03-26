@@ -16,7 +16,7 @@ import (
 
 // Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.LibraryClient.
 var _ medialib.MovieLibrary = (*Client)(nil)
-var _ medialib.LibraryClient = (*Client)(nil)
+var _ medialib.Library = (*Client)(nil)
 
 // Config holds the configuration for a Radarr client.
 type Config struct {

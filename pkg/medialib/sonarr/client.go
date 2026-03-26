@@ -15,7 +15,7 @@ import (
 
 // Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.LibraryClient.
 var _ medialib.EpisodeLibrary = (*Client)(nil)
-var _ medialib.LibraryClient = (*Client)(nil)
+var _ medialib.Library = (*Client)(nil)
 
 // Config holds the configuration for a Sonarr client.
 type Config struct {

@@ -15,7 +15,7 @@ type lookupOutput struct {
 // runLookup identifies the media file at filePath using library and returns the
 // ID needed for a subsequent library refresh. It returns an error wrapping
 // medialib.ErrNotFound if the file is not recognised.
-func runLookup(ctx context.Context, filePath string, library medialib.LibraryClient) (lookupOutput, error) {
+func runLookup(ctx context.Context, filePath string, library medialib.Library) (lookupOutput, error) {
 	id, err := library.GetIDByFilePath(ctx, filePath)
 	if err != nil {
 		return lookupOutput{}, fmt.Errorf("lookup media: %w", err)

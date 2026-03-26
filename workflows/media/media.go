@@ -43,8 +43,8 @@ type MediaInput struct {
 func NewMediaWorkflow(
 	client *hatchet.Client,
 	cfg MediaWorkflowConfig,
-	radarrClient medialib.LibraryClient,
-	sonarrClient medialib.LibraryClient,
+	radarrClient medialib.Library,
+	sonarrClient medialib.Library,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
 	maxRuns := int32(1)

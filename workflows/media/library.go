@@ -9,7 +9,7 @@ import (
 // selectLibrary returns the LibraryClient corresponding to mediaType, using
 // radarrClient for movies and sonarrClient for TV episodes. It is the single
 // dispatch point for media-type selection in the workflow.
-func selectLibrary(mediaType medialib.MediaType, radarrClient, sonarrClient medialib.LibraryClient) (medialib.LibraryClient, error) {
+func selectLibrary(mediaType medialib.MediaType, radarrClient, sonarrClient medialib.Library) (medialib.Library, error) {
 	switch mediaType {
 	case medialib.MovieType:
 		return radarrClient, nil
