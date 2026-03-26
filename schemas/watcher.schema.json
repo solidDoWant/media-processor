@@ -29,11 +29,7 @@
           "minLength": 1
         },
         "workflow": {
-          "type": "string",
-          "enum": [
-            "MovieWorkflow",
-            "ShowWorkflow"
-          ]
+          "$ref": "#/$defs/WorkflowName"
         }
       },
       "additionalProperties": false,
@@ -41,6 +37,13 @@
       "required": [
         "path",
         "workflow"
+      ]
+    },
+    "WorkflowName": {
+      "type": "string",
+      "enum": [
+        "MovieWorkflow",
+        "ShowWorkflow"
       ]
     }
   }

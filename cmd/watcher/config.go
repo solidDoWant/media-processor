@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/go-playground/validator/v10"
+	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
@@ -21,12 +21,16 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("cannot read config file %q: %w", path, err)
 	}
 
-	cfg := Config{CronSchedule: watcherconfig.DefaultCronSchedule}
+	var cfg Config
+	if err := defaults.Set(&cfg); err != nil {
+		return nil, fmt.Errorf("cannot set config defaults: %w", err)
+	}
+
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("cannot parse config file %q: %w", path, err)
 	}
 
-	if err := validator.New(validator.WithRequiredStructEnabled()).Struct(cfg); err != nil {
+	if err := watcherconfig.NewValidator().Struct(cfg); err != nil {
 		return nil, fmt.Errorf("invalid config %q: %w", path, err)
 	}
 

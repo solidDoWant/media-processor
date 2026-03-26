@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/asticode/go-astiav v0.40.0
+	github.com/creasty/defaults v1.8.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/hatchet-dev/hatchet v0.83.1
 	github.com/invopop/jsonschema v0.13.0
@@ -25,7 +26,6 @@ require (
 	github.com/cockroachdb/errors v1.12.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506 // indirect
 	github.com/cockroachdb/redact v1.1.8 // indirect
-	github.com/creasty/defaults v1.8.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
