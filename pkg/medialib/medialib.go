@@ -60,3 +60,16 @@ type EpisodeLibrary interface {
 	GetEpisodeByFilePath(ctx context.Context, path string) (Episode, error)
 	RefreshSeries(ctx context.Context, seriesID int64) error
 }
+
+// LibraryClient is a unified interface for looking up a media file and refreshing
+// its entry in the backing library service (Radarr for movies, Sonarr for shows).
+// It abstracts the type-specific calls so workflow steps need no media-type switch.
+type LibraryClient interface {
+	// GetIDByFilePath looks up the media item at path and returns the ID needed
+	// to trigger a library refresh. For movies this is the movie ID; for shows
+	// this is the series ID.
+	GetIDByFilePath(ctx context.Context, path string) (int64, error)
+	// Refresh triggers the backing library service to rescan the item with the
+	// given ID.
+	Refresh(ctx context.Context, id int64) error
+}

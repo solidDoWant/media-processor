@@ -13,8 +13,9 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// Compile-time assertion that *Client implements medialib.EpisodeLibrary.
+// Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.LibraryClient.
 var _ medialib.EpisodeLibrary = (*Client)(nil)
+var _ medialib.LibraryClient = (*Client)(nil)
 
 // Config holds the configuration for a Sonarr client.
 type Config struct {
@@ -78,6 +79,22 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 		SeasonNumber:  ep.SeasonNumber,
 		EpisodeNumber: ep.EpisodeNumber,
 	}, nil
+}
+
+// GetIDByFilePath implements medialib.LibraryClient. It looks up the episode
+// by file path and returns the series ID (used for library refresh).
+func (c *Client) GetIDByFilePath(ctx context.Context, path string) (int64, error) {
+	episode, err := c.GetEpisodeByFilePath(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+	return episode.SeriesID, nil
+}
+
+// Refresh implements medialib.LibraryClient by triggering a Sonarr library
+// rescan for the given series ID.
+func (c *Client) Refresh(ctx context.Context, id int64) error {
+	return c.RefreshSeries(ctx, id)
 }
 
 // RefreshSeries triggers a Sonarr library rescan for the given series ID.
