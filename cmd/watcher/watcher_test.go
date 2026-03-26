@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/workflows/movie"
+	"github.com/solidDoWant/media-processor/workflows/show"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,7 +108,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
 	require.Len(t, calls, 1)
-	assert.Equal(t, "Movie", calls[0].workflow)
+	assert.Equal(t, movie.MovieWorkflowName, calls[0].workflow)
 	assert.Equal(t, filePath, calls[0].path)
 }
 
@@ -122,7 +125,7 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, Workflow: "Show"},
+			{Path: dir, Workflow: show.ShowWorkflowName},
 		},
 	}
 
@@ -196,8 +199,8 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: movieDir, Workflow: "Movie"},
-			{Path: showDir, Workflow: "Show"},
+			{Path: movieDir, Workflow: watcherconfig.Movie},
+			{Path: showDir, Workflow: watcherconfig.Show},
 		},
 	}
 
@@ -208,6 +211,6 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 	}
 
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
-	assert.Equal(t, "Movie", dispatched[filepath.Join(movieDir, "movie.mkv")])
-	assert.Equal(t, "Show", dispatched[filepath.Join(showDir, "show.mkv")])
+	assert.Equal(t, movie.MovieWorkflowName, dispatched[filepath.Join(movieDir, "movie.mkv")])
+	assert.Equal(t, show.ShowWorkflowName, dispatched[filepath.Join(showDir, "show.mkv")])
 }

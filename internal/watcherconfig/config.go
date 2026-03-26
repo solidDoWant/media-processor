@@ -20,9 +20,9 @@ type WorkflowName string
 
 const (
 	// Movie is the workflow for processing movie files.
-	Movie WorkflowName = "Movie"
+	Movie WorkflowName = "movie"
 	// Show is the workflow for processing TV show episodes.
-	Show WorkflowName = "Show"
+	Show WorkflowName = "show"
 )
 
 // validWorkflowNames is the authoritative list of WorkflowName values accepted in config.

@@ -9,6 +9,7 @@ require (
 	github.com/hatchet-dev/hatchet v0.83.1
 	github.com/invopop/jsonschema v0.13.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/text v0.35.0
 	golift.io/starr v1.3.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -92,7 +93,6 @@ require (
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/grpc v1.79.3 // indirect

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	movieWorkflowName = "Movie"
+	MovieWorkflowName = "Movie"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
 )
@@ -46,7 +46,7 @@ func NewMovieWorkflow(
 	maxRuns := int32(1)
 	cancelNewest := types.CancelNewest
 
-	wf := client.NewWorkflow(movieWorkflowName,
+	wf := client.NewWorkflow(MovieWorkflowName,
 		hatchet.WithWorkflowConcurrency(types.Concurrency{
 			Expression:    "input.file_path",
 			MaxRuns:       &maxRuns,
@@ -105,7 +105,7 @@ func NewMovieWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MovieInput) (struct{}, error) {
-		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), movieWorkflowName, input.FilePath, webhookClient)
+		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MovieWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf
