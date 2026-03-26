@@ -6,9 +6,13 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-// sixFieldCron matches a cron expression with exactly 6 space-separated fields,
-// as required by Hatchet's seconds-leading format (e.g. "*/5 * * * * *").
-var sixFieldCron = regexp.MustCompile(`^(\S+ ){5}\S+$`)
+// sixFieldCronPattern is the canonical regex for a Hatchet 6-field cron expression.
+// It is used by both CronExpression.JSONSchema() (schema generation) and
+// validateHatchetCron (runtime validation) to keep the regex in one place.
+const sixFieldCronPattern = `^(\S+ ){5}\S+$`
+
+// sixFieldCron is the compiled form of sixFieldCronPattern.
+var sixFieldCron = regexp.MustCompile(sixFieldCronPattern)
 
 // NewValidator returns a validator configured with custom validators for WorkflowName
 // values (workflowname) and Hatchet 6-field cron expressions (hatchetcron).

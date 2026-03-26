@@ -6,8 +6,7 @@
     "Config": {
       "properties": {
         "cron_schedule": {
-          "type": "string",
-          "pattern": "^(\\S+ ){5}\\S+$"
+          "$ref": "#/$defs/CronExpression"
         },
         "watches": {
           "items": {
@@ -21,6 +20,10 @@
       "required": [
         "watches"
       ]
+    },
+    "CronExpression": {
+      "type": "string",
+      "pattern": "^(\\S+ ){5}\\S+$"
     },
     "WatchEntry": {
       "properties": {

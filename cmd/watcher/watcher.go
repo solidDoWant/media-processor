@@ -39,7 +39,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 			}
 			return struct{}{}, scan(ctx, cfg, dispatch)
 		},
-		hatchet.WithWorkflowCron(cfg.CronSchedule),
+		hatchet.WithWorkflowCron(string(cfg.CronSchedule)),
 		hatchet.WithWorkflowConcurrency(types.Concurrency{
 			// Constant expression groups all scan runs under a single concurrency slot.
 			Expression:    `"scan"`,

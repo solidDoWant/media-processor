@@ -5,6 +5,16 @@ import "github.com/invopop/jsonschema"
 // DefaultCronSchedule is the Hatchet cron expression used when none is specified in the config.
 const DefaultCronSchedule = "*/5 * * * * *"
 
+// CronExpression is a Hatchet 6-field cron expression (seconds-leading, e.g. "*/5 * * * * *").
+// It implements JSONSchema to embed the pattern constraint in the generated schema, keeping the
+// regex defined in validate.go as the single source of truth for both schema and runtime checks.
+type CronExpression string
+
+// JSONSchema returns a JSON Schema for CronExpression using the canonical Hatchet cron regex.
+func (CronExpression) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{Type: "string", Pattern: sixFieldCronPattern}
+}
+
 // WorkflowName identifies a Hatchet workflow that the watcher can trigger.
 type WorkflowName string
 
@@ -33,6 +43,7 @@ func (WorkflowName) JSONSchema() *jsonschema.Schema {
 type WatchEntry struct {
 	Path string `yaml:"path" jsonschema:"required,minLength=1" validate:"min=1"`
 	// Workflow must be one of the values in validWorkflowNames; validated by the workflowname tag.
+	// The validate tag is required for runtime enforcement; JSONSchema() handles schema generation.
 	Workflow WorkflowName `yaml:"workflow" jsonschema:"required" validate:"workflowname"`
 }
 
@@ -41,7 +52,8 @@ type Config struct {
 	// CronSchedule is the Hatchet cron expression controlling how often the watcher
 	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
 	// with a leading seconds field, e.g. "*/5 * * * * *".
-	CronSchedule string `yaml:"cron_schedule" default:"*/5 * * * * *" jsonschema:"pattern=^(\\S+ ){5}\\S+$" validate:"omitempty,hatchetcron"`
+	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
+	CronSchedule CronExpression `yaml:"cron_schedule" default:"*/5 * * * * *" validate:"omitempty,hatchetcron"`
 	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
 	Watches []WatchEntry `yaml:"watches" jsonschema:"required" validate:"dive"`
 }
