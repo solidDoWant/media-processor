@@ -71,7 +71,8 @@ type Library interface {
 	// to trigger a library refresh. For movies this is the movie ID; for shows
 	// this is the series ID.
 	GetIDByFilePath(ctx context.Context, path string) (int64, error)
-	// Refresh triggers the backing library service to rescan the item with the
-	// given ID.
+	// Refresh triggers the backing library service to rescan using the ID
+	// returned by GetIDByFilePath. For movies this is the movie ID; for shows
+	// this is the series ID (Sonarr only supports series-level refresh).
 	Refresh(ctx context.Context, id int64) error
 }

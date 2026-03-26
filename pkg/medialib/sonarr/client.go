@@ -91,10 +91,12 @@ func (c *Client) GetIDByFilePath(ctx context.Context, path string) (int64, error
 	return episode.SeriesID, nil
 }
 
-// Refresh implements medialib.LibraryClient by triggering a Sonarr library
-// rescan for the given series ID.
-func (c *Client) Refresh(ctx context.Context, id int64) error {
-	return c.RefreshSeries(ctx, id)
+// Refresh implements medialib.Library by triggering a Sonarr library rescan
+// for the given series ID. The id parameter is the series ID (as returned by
+// GetIDByFilePath), not the episode ID, because Sonarr only supports
+// series-level refresh.
+func (c *Client) Refresh(ctx context.Context, seriesID int64) error {
+	return c.RefreshSeries(ctx, seriesID)
 }
 
 // RefreshSeries triggers a Sonarr library rescan for the given series ID.
