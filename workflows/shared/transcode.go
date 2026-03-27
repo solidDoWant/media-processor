@@ -49,6 +49,19 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 	return exclude
 }
 
+// nonEnglishSubtitleIndices returns the input stream indices of all subtitle
+// streams not tagged "eng", including untagged streams. Unlike audio, there is
+// no safe-fallback: subtitles are always excluded unless explicitly tagged "eng".
+func nonEnglishSubtitleIndices(streams []SubtitleStreamInfo) []int {
+	var exclude []int
+	for _, s := range streams {
+		if s.Language != "eng" {
+			exclude = append(exclude, s.Index)
+		}
+	}
+	return exclude
+}
+
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
@@ -57,7 +70,7 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 // probe is the output of RunProbe for filePath.
 func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string) error {
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
-	excludeIndices := nonEnglishAudioIndices(probe.AudioStreams)
+	excludeIndices := append(nonEnglishAudioIndices(probe.AudioStreams), nonEnglishSubtitleIndices(probe.SubtitleStreams)...)
 
 	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"

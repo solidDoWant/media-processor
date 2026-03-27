@@ -16,6 +16,12 @@ type AudioStreamInfo struct {
 	Language string `json:"language"`
 }
 
+// SubtitleStreamInfo holds the input stream index and language tag for one subtitle stream.
+type SubtitleStreamInfo struct {
+	Index    int    `json:"index"`
+	Language string `json:"language"`
+}
+
 // ProbeOutput is the output of the probe step.
 type ProbeOutput struct {
 	// IsValidMedia is false when the file is not a recognisable media file with a
@@ -30,6 +36,9 @@ type ProbeOutput struct {
 	// AudioStreams lists every audio stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
 	AudioStreams []AudioStreamInfo `json:"audio_streams,omitempty"`
+	// SubtitleStreams lists every subtitle stream found in the file, in stream order.
+	// Only meaningful when IsValidMedia is true.
+	SubtitleStreams []SubtitleStreamInfo `json:"subtitle_streams,omitempty"`
 }
 
 // RunProbe reads codec and container info for filePath. If the file is not a
@@ -52,9 +61,16 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	}
 
 	var audioStreams []AudioStreamInfo
+	var subtitleStreams []SubtitleStreamInfo
 	for _, s := range info.Streams {
-		if s.CodecType == ffprobe.CodecTypeAudio {
+		switch s.CodecType {
+		case ffprobe.CodecTypeAudio:
 			audioStreams = append(audioStreams, AudioStreamInfo{
+				Index:    s.Index,
+				Language: s.Tags["language"],
+			})
+		case ffprobe.CodecTypeSubtitle:
+			subtitleStreams = append(subtitleStreams, SubtitleStreamInfo{
 				Index:    s.Index,
 				Language: s.Tags["language"],
 			})
@@ -64,10 +80,11 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	for _, s := range info.Streams {
 		if s.CodecType == ffprobe.CodecTypeVideo {
 			return ProbeOutput{
-				IsValidMedia: true,
-				VideoCodec:   s.CodecName,
-				Format:       info.Format,
-				AudioStreams: audioStreams,
+				IsValidMedia:    true,
+				VideoCodec:      s.CodecName,
+				Format:          info.Format,
+				AudioStreams:    audioStreams,
+				SubtitleStreams: subtitleStreams,
 			}, nil
 		}
 	}

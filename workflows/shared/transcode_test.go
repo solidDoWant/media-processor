@@ -116,6 +116,55 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 	}
 }
 
+func TestNonEnglishSubtitleIndices(t *testing.T) {
+	tests := []struct {
+		name     string
+		streams  []SubtitleStreamInfo
+		expected []int
+	}{
+		{
+			name: "mixed languages with at least one eng keeps only eng streams",
+			streams: []SubtitleStreamInfo{
+				{Index: 2, Language: "eng"},
+				{Index: 3, Language: "jpn"},
+				{Index: 4, Language: "fra"},
+			},
+			expected: []int{3, 4},
+		},
+		{
+			name: "all eng streams returns empty exclusion list",
+			streams: []SubtitleStreamInfo{
+				{Index: 2, Language: "eng"},
+				{Index: 3, Language: "eng"},
+			},
+			expected: nil,
+		},
+		{
+			name: "no language tags removes all streams",
+			streams: []SubtitleStreamInfo{
+				{Index: 2, Language: ""},
+				{Index: 3, Language: ""},
+			},
+			expected: []int{2, 3},
+		},
+		{
+			name: "no eng languages removes all streams",
+			streams: []SubtitleStreamInfo{
+				{Index: 2, Language: "jpn"},
+				{Index: 3, Language: "fra"},
+			},
+			expected: []int{2, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nonEnglishSubtitleIndices(tt.streams)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
 func TestRunTranscode(t *testing.T) {
 	// The fixture video has one audio stream (index 1) tagged "und" (undefined
 	// language). nonEnglishAudioIndices returns nil when no "eng" stream is
