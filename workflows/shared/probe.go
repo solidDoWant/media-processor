@@ -65,9 +65,16 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case ffprobe.CodecTypeAudio:
+			channelCount := s.AudioChannelCount
+			if channelCount == 0 {
+				// ffprobe reports 0 when the channel layout is unknown. Treat
+				// conservatively as surround (6) so the downmix check does not
+				// incorrectly suppress synthesis by matching the stereo threshold.
+				channelCount = 6
+			}
 			audioStreams = append(audioStreams, AudioStreamInfo{
 				StreamInfo:   StreamInfo{Index: s.Index, Language: s.Tags["language"]},
-				ChannelCount: s.AudioChannelCount,
+				ChannelCount: channelCount,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{

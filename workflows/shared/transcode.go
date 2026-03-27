@@ -53,10 +53,12 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 // AudioStreamInfo element with ChannelCount >= 4, when no retained audio stream
 // has ChannelCount <= 3 (stereo-compatible). Returns nil if any stream is
 // stereo-compatible, if no surround stream exists, or if the slice is empty.
+// A ChannelCount of 0 means unknown and is skipped by both checks so that
+// streams with undetectable layouts do not block or trigger downmix synthesis.
 func downmixSourceIndex(streams []AudioStreamInfo) *int {
 	var firstSurround *int
 	for _, s := range streams {
-		if s.ChannelCount <= 3 {
+		if s.ChannelCount > 0 && s.ChannelCount <= 3 {
 			return nil
 		}
 		if s.ChannelCount >= 4 && firstSurround == nil {

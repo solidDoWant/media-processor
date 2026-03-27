@@ -269,6 +269,16 @@ func TestDownmixSourceIndex(t *testing.T) {
 			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 4)},
 			want:    intPtr(1),
 		},
+		{
+			name:    "zero channel count (unknown layout) is skipped, not treated as stereo-compatible",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0), audioStreamInfo(2, "eng", 6)},
+			want:    intPtr(2),
+		},
+		{
+			name:    "all streams with zero channel count return nil (no known surround)",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0)},
+			want:    nil,
+		},
 	}
 
 	for _, tt := range tests {
