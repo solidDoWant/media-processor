@@ -65,9 +65,9 @@ func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 // firstEnglishIndex returns a pointer to the input stream Index of the first
 // StreamInfo element tagged "eng", or nil when no English stream is found.
 func firstEnglishIndex(streams []StreamInfo) *int {
-	for _, s := range streams {
-		if s.Language == "eng" {
-			return &s.Index
+	for _, stream := range streams {
+		if stream.Language == "eng" {
+			return &stream.Index
 		}
 	}
 	return nil
