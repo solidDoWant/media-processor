@@ -117,9 +117,9 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 }
 
 func TestRunTranscode(t *testing.T) {
-	// The fixture video has one audio stream (index 1) with no language tag.
-	// nonEnglishAudioIndices returns nil for untagged streams (safe fallback),
-	// so all streams are preserved — no behavioural change from prior tests.
+	// The fixture video has one audio stream (index 1) tagged "und" (undefined
+	// language). nonEnglishAudioIndices returns nil when no "eng" stream is
+	// present (safe fallback), so all streams are preserved.
 	h264Probe := ProbeOutput{
 		IsValidMedia: true,
 		VideoCodec:   "h264",
