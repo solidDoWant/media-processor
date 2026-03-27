@@ -67,8 +67,7 @@ func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 func firstEnglishIndex(streams []StreamInfo) *int {
 	for _, s := range streams {
 		if s.Language == "eng" {
-			idx := s.Index
-			return &idx
+			return &s.Index
 		}
 	}
 	return nil
@@ -89,18 +88,14 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
-	builder := ffmpeg.NewTranscode(filePath, tempPath).
+	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
-		ExcludeStreams(excludeIndices...)
-	if idx := firstEnglishIndex(probe.AudioStreams); idx != nil {
-		builder = builder.WithDefaultAudioStream(*idx)
-	}
-	if idx := firstEnglishIndex(probe.SubtitleStreams); idx != nil {
-		builder = builder.WithDefaultSubtitleStream(*idx)
-	}
-
-	if err := builder.Build().Run(ctx); err != nil {
+		ExcludeStreams(excludeIndices...).
+		WithDefaultAudioStream(firstEnglishIndex(probe.AudioStreams)).
+		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
+		Build().
+		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return errors.Join(
 				fmt.Errorf("transcode: %w", err),

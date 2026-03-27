@@ -300,7 +300,7 @@ func TestTranscode_WithDefaultAudioStream(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "out.mkv")
 			require.NoError(t, ffmpeg.NewTranscode(testVideoPath, output).
 				ToContainer(ffmpeg.ContainerMKV).
-				WithDefaultAudioStream(tt.audioIdx).
+				WithDefaultAudioStream(&tt.audioIdx).
 				Build().
 				Run(t.Context()))
 

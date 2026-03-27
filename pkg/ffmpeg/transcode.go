@@ -89,19 +89,19 @@ func (b *TranscodeBuilder) ExcludeStreams(indices ...int) *TranscodeBuilder {
 
 // WithDefaultAudioStream marks the audio stream at the given input stream index
 // as the default audio track in the output. All other audio stream dispositions
-// have their default flag cleared. If not called, audio stream dispositions are
-// copied from the input unchanged.
-func (b *TranscodeBuilder) WithDefaultAudioStream(idx int) *TranscodeBuilder {
-	b.defaultAudioStream = &idx
+// have their default flag cleared. A nil argument is a no-op: audio stream
+// dispositions are copied from the input unchanged.
+func (b *TranscodeBuilder) WithDefaultAudioStream(idx *int) *TranscodeBuilder {
+	b.defaultAudioStream = idx
 	return b
 }
 
 // WithDefaultSubtitleStream marks the subtitle stream at the given input stream
 // index as the default subtitle track in the output. All other subtitle stream
-// dispositions have their default flag cleared. If not called, subtitle stream
-// dispositions are copied from the input unchanged.
-func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx int) *TranscodeBuilder {
-	b.defaultSubtitleStream = &idx
+// dispositions have their default flag cleared. A nil argument is a no-op:
+// subtitle stream dispositions are copied from the input unchanged.
+func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder {
+	b.defaultSubtitleStream = idx
 	return b
 }
 
