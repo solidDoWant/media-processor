@@ -15,7 +15,7 @@ import (
 
 // Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.LibraryClient.
 var _ medialib.EpisodeLibrary = (*Client)(nil)
-var _ medialib.Library = (*Client)(nil)
+var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Sonarr client.
 type Config struct {
@@ -89,17 +89,13 @@ func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	return c.RefreshSeries(ctx, episode.SeriesID)
-}
 
-// RefreshSeries triggers a Sonarr library rescan for the given series ID.
-func (c *Client) RefreshSeries(ctx context.Context, seriesID int64) error {
-	_, err := c.sonarr.SendCommandContext(ctx, &sonarrlib.CommandRequest{
+	_, err = c.sonarr.SendCommandContext(ctx, &sonarrlib.CommandRequest{
 		Name:      "RefreshSeries",
-		SeriesIDs: []int64{seriesID},
+		SeriesIDs: []int64{episode.SeriesID},
 	})
 	if err != nil {
-		return fmt.Errorf("refresh series %d: %w", seriesID, err)
+		return fmt.Errorf("refresh series %d: %w", episode.SeriesID, err)
 	}
 
 	return nil

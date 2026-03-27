@@ -51,22 +51,18 @@ type Episode struct {
 
 // MovieLibrary provides operations for movie media items.
 type MovieLibrary interface {
-	Library
 	GetMovieByFilePath(ctx context.Context, path string) (Movie, error)
-	RefreshMovie(ctx context.Context, id int64) error
 }
 
 // EpisodeLibrary provides operations for episode media items.
 type EpisodeLibrary interface {
-	Library
 	GetEpisodeByFilePath(ctx context.Context, path string) (Episode, error)
-	RefreshSeries(ctx context.Context, seriesID int64) error
 }
 
-// Library is a unified interface for refreshing a media item in the backing
+// ArrLibrary is a unified interface for refreshing a media item in the backing
 // library service (Radarr for movies, Sonarr for shows). It abstracts the
 // type-specific lookup-and-refresh calls so workflow steps need no media-type switch.
-type Library interface {
+type ArrLibrary interface {
 	// RefreshByFilePath looks up the media item at path in the backing library
 	// service and triggers a rescan. For Sonarr, the rescan is at series level
 	// (Sonarr does not support episode-level refresh).

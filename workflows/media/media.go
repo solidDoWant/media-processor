@@ -43,8 +43,8 @@ type MediaInput struct {
 func NewMediaWorkflow(
 	client *hatchet.Client,
 	cfg MediaWorkflowConfig,
-	radarrClient medialib.Library,
-	sonarrClient medialib.Library,
+	radarrClient medialib.ArrLibrary,
+	sonarrClient medialib.ArrLibrary,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
 	maxRuns := int32(1)
@@ -87,7 +87,7 @@ func NewMediaWorkflow(
 	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library
 	// rescan. Fails with ErrNotFound if the file is not recognised by the library service.
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		library, err := selectLibrary(input.MediaType, radarrClient, sonarrClient)
+		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return struct{}{}, err
 		}
@@ -108,4 +108,18 @@ func NewMediaWorkflow(
 	})
 
 	return wf
+}
+
+// getArrLibrary returns the LibraryClient corresponding to mediaType, using
+// radarrClient for movies and sonarrClient for TV episodes. It is the single
+// dispatch point for media-type selection in the workflow.
+func getArrLibrary(mediaType medialib.MediaType, radarrClient, sonarrClient medialib.ArrLibrary) (medialib.ArrLibrary, error) {
+	switch mediaType {
+	case medialib.MovieType:
+		return radarrClient, nil
+	case medialib.ShowType:
+		return sonarrClient, nil
+	default:
+		return nil, fmt.Errorf("unknown media type %q", mediaType)
+	}
 }

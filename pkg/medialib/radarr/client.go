@@ -16,7 +16,7 @@ import (
 
 // Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.LibraryClient.
 var _ medialib.MovieLibrary = (*Client)(nil)
-var _ medialib.Library = (*Client)(nil)
+var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Radarr client.
 type Config struct {
@@ -104,17 +104,13 @@ func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	return c.RefreshMovie(ctx, movie.ID)
-}
 
-// RefreshMovie triggers a Radarr library rescan for the given movie ID.
-func (c *Client) RefreshMovie(ctx context.Context, id int64) error {
-	_, err := c.radarr.SendCommandContext(ctx, &radarrlib.CommandRequest{
+	_, err = c.radarr.SendCommandContext(ctx, &radarrlib.CommandRequest{
 		Name:     "RefreshMovie",
-		MovieIDs: []int64{id},
+		MovieIDs: []int64{movie.ID},
 	})
 	if err != nil {
-		return fmt.Errorf("refresh movie %d: %w", id, err)
+		return fmt.Errorf("refresh movie %d: %w", movie.ID, err)
 	}
 
 	return nil
