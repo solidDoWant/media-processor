@@ -18,9 +18,10 @@ type audioEncoderState struct {
 	targetChannelLayout *astiav.ChannelLayout // if set, overrides decoder layout selection
 	// fifo and fifoFrame are used for fixed-frame-size encoders (e.g. AC-3) to
 	// buffer resampled samples and drain them in exact encoder-frame-sized chunks.
-	fifo      *astiav.AudioFifo
-	fifoFrame *astiav.Frame
-	nextPts   int64 // running PTS counter for fixed-frame-size encoding
+	fifo               *astiav.AudioFifo
+	fifoFrame          *astiav.Frame
+	nextPts            int64 // running PTS counter for fixed-frame-size encoding
+	nextPtsInitialized bool  // true after nextPts is seeded from the first source frame
 }
 
 // audioStreamState decodes and re-encodes an audio stream.
@@ -260,6 +261,16 @@ func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *as
 		}
 
 		if ass.encoder.fifo != nil {
+			// Seed the PTS counter from the first source frame so the downmix
+			// track is aligned with the source timeline.
+			if !ass.encoder.nextPtsInitialized && frame.Pts() != astiav.NoPtsValue {
+				ass.encoder.nextPts = astiav.RescaleQ(
+					frame.Pts(),
+					ass.decoder.codecContext.TimeBase(),
+					ass.encoder.codecContext.TimeBase(),
+				)
+				ass.encoder.nextPtsInitialized = true
+			}
 			// Fixed-frame-size path: buffer in FIFO and drain in encoder-sized chunks.
 			if _, err := ass.encoder.fifo.Write(ass.encoder.frame); err != nil {
 				ass.encoder.frame.Unref()
@@ -339,20 +350,49 @@ func (ass *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh c
 
 	// Flush any samples remaining in the resampler's internal delay buffer.
 	if ass.encoder.resampleContext != nil && ass.encoder.fifo != nil {
-		if err := ass.encoder.resampleContext.ConvertFrame(nil, ass.encoder.frame); err == nil {
-			if ass.encoder.frame.NbSamples() > 0 {
-				_, _ = ass.encoder.fifo.Write(ass.encoder.frame)
-				ass.encoder.frame.Unref()
-				ass.encoder.frame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
-				ass.encoder.frame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
-				ass.encoder.frame.SetSampleRate(ass.encoder.codecContext.SampleRate())
+		if err := ass.encoder.resampleContext.ConvertFrame(nil, ass.encoder.frame); err != nil {
+			ass.encoder.frame.Unref()
+			if !errors.Is(err, astiav.ErrEagain) && !errors.Is(err, astiav.ErrEof) {
+				return fmt.Errorf("ffmpeg: flushing resampled audio: %w", err)
 			}
+		} else if ass.encoder.frame.NbSamples() > 0 {
+			if _, err := ass.encoder.fifo.Write(ass.encoder.frame); err != nil {
+				ass.encoder.frame.Unref()
+				return fmt.Errorf("ffmpeg: writing flushed resampled audio to FIFO: %w", err)
+			}
+			ass.encoder.frame.Unref()
+			ass.encoder.frame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
+			ass.encoder.frame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
+			ass.encoder.frame.SetSampleRate(ass.encoder.codecContext.SampleRate())
 		}
 		// Drain any complete frames remaining in the FIFO.
 		if err := ass.drainFifo(outputFmt, progressCh, totalDuration); err != nil {
 			return err
 		}
-		// Remaining samples below frameSize are dropped (sub-frame tail).
+		// Encode any remaining sub-frame tail padded with silence so no audio is
+		// truncated at end-of-stream.
+		if remaining := ass.encoder.fifo.Size(); remaining > 0 {
+			frameSize := ass.encoder.codecContext.FrameSize()
+			ass.encoder.fifoFrame.SetNbSamples(frameSize)
+			if err := ass.encoder.fifoFrame.SamplesFillSilence(); err != nil {
+				return fmt.Errorf("ffmpeg: zeroing tail audio frame: %w", err)
+			}
+			// Read only the remaining samples so they land at the start of the
+			// silence-padded buffer.
+			ass.encoder.fifoFrame.SetNbSamples(remaining)
+			if _, err := ass.encoder.fifo.Read(ass.encoder.fifoFrame); err != nil {
+				return fmt.Errorf("ffmpeg: reading tail samples from audio FIFO: %w", err)
+			}
+			// Restore full frame size so the encoder receives a complete frame.
+			ass.encoder.fifoFrame.SetNbSamples(frameSize)
+			ass.encoder.fifoFrame.SetPts(ass.encoder.nextPts)
+			if err := ass.encoder.codecContext.SendFrame(ass.encoder.fifoFrame); err != nil {
+				return fmt.Errorf("ffmpeg: sending tail audio frame to encoder: %w", err)
+			}
+			if err := ass.receiveAndWritePackets(ass.encoder.codecContext, ass.encoder.packet, outputFmt, progressCh, totalDuration); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Flush the encoder.

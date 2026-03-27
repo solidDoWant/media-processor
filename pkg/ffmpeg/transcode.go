@@ -493,17 +493,19 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 		// If this packet feeds the downmix pipeline, clone it first so that
 		// the downmix decoder can rescale timestamps independently.
 		if downmix != nil && packet.StreamIndex() == downmix.inStream.Index() {
-			if err := downmixPkt.Ref(packet); err == nil {
-				if dmErr := downmix.processPacket(downmixPkt, outputFmt, t.progressCh, totalDuration); dmErr != nil {
-					downmixPkt.Unref()
-					packet.Unref()
-					if interrupter.Interrupted() {
-						return ctx.Err()
-					}
-					return dmErr
-				}
-				downmixPkt.Unref()
+			if err := downmixPkt.Ref(packet); err != nil {
+				packet.Unref()
+				return fmt.Errorf("ffmpeg: cloning packet for downmix: %w", err)
 			}
+			if dmErr := downmix.processPacket(downmixPkt, outputFmt, t.progressCh, totalDuration); dmErr != nil {
+				downmixPkt.Unref()
+				packet.Unref()
+				if interrupter.Interrupted() {
+					return ctx.Err()
+				}
+				return dmErr
+			}
+			downmixPkt.Unref()
 		}
 
 		s, ok := streams[packet.StreamIndex()]
