@@ -12,6 +12,8 @@ const (
 	CodecH264 Codec = astiav.CodecIDH264
 	// CodecH265 encodes video as H.265/HEVC (libx265 for software, or hardware variant).
 	CodecH265 Codec = astiav.CodecIDH265
+	// CodecAC3 encodes audio as Dolby AC-3.
+	CodecAC3 Codec = astiav.CodecIDAc3
 	// CodecCopy copies the stream without re-encoding.
 	CodecCopy Codec = astiav.CodecIDNone
 )

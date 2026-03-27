@@ -319,6 +319,79 @@ func TestTranscode_WithDefaultAudioStream(t *testing.T) {
 	}
 }
 
+// TestTranscode_WithDownmix verifies that WithDownmix appends an additional
+// AC-3 encoded audio stream derived from the nominated source stream, inherits
+// the source stream's language tag, and only receives the default disposition
+// when no other audio stream is already marked default.
+func TestTranscode_WithDownmix(t *testing.T) {
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	audioIndex := -1
+	for _, s := range inputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio {
+			audioIndex = s.Index
+			break
+		}
+	}
+	require.NotEqual(t, -1, audioIndex, "test fixture must have at least one audio stream")
+
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	err = ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithDownmix(&audioIndex).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	// Expect one more stream than the input (the downmix).
+	assert.Equal(t, len(inputInfo.Streams)+1, len(outputInfo.Streams),
+		"output must contain one additional stream from the downmix")
+
+	// Locate the AC-3 downmix stream and verify its properties.
+	var ac3Stream *ffprobe.StreamInfo
+	var regularAudioStream *ffprobe.StreamInfo
+	for i, s := range outputInfo.Streams {
+		if s.CodecType != ffprobe.CodecTypeAudio {
+			continue
+		}
+		if s.CodecName == "ac3" {
+			ac3Stream = &outputInfo.Streams[i]
+		} else if regularAudioStream == nil {
+			regularAudioStream = &outputInfo.Streams[i]
+		}
+	}
+	require.NotNil(t, ac3Stream, "output must contain an AC-3 audio stream from the downmix")
+
+	// Language tag must match the regular output audio stream. Both are derived
+	// from the same source, so the MKV muxer produces the same tag for both
+	// (e.g. both empty when the source is "und", both "eng" when tagged "eng").
+	if regularAudioStream != nil {
+		assert.Equal(t, regularAudioStream.Tags["language"], ac3Stream.Tags["language"],
+			"downmix stream language must match the regular output audio stream")
+	}
+
+	// Determine whether any non-downmix audio stream is already default so we
+	// can assert the correct default disposition on the downmix.
+	outputDisps := probeStreamDispositions(t, output)
+	var existingDefault bool
+	for _, s := range outputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio && s.CodecName != "ac3" {
+			if outputDisps[s.Index].Has(astiav.DispositionFlagDefault) {
+				existingDefault = true
+				break
+			}
+		}
+	}
+	// Downmix should be default only when no other audio stream is default.
+	assert.Equal(t, !existingDefault,
+		outputDisps[ac3Stream.Index].Has(astiav.DispositionFlagDefault),
+		"downmix default disposition must be set iff no other audio stream is already default")
+}
+
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
 // returns only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present.

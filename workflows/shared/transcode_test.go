@@ -20,6 +20,11 @@ func mkvOutputName(inputPath string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base)) + ".mkv"
 }
 
+// audioStreamInfo is a test helper that builds an AudioStreamInfo with the given fields.
+func audioStreamInfo(index int, lang string, channels int) AudioStreamInfo {
+	return AudioStreamInfo{StreamInfo: StreamInfo{Index: index, Language: lang}, ChannelCount: channels}
+}
+
 func TestSelectVideoCodec(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -70,39 +75,39 @@ func TestSelectVideoCodec(t *testing.T) {
 func TestNonEnglishAudioIndices(t *testing.T) {
 	tests := []struct {
 		name     string
-		streams  []StreamInfo
+		streams  []AudioStreamInfo
 		expected []int
 	}{
 		{
 			name: "mixed languages with at least one eng keeps only eng streams",
-			streams: []StreamInfo{
-				{Index: 1, Language: "eng"},
-				{Index: 2, Language: "jpn"},
-				{Index: 3, Language: "fra"},
+			streams: []AudioStreamInfo{
+				audioStreamInfo(1, "eng", 2),
+				audioStreamInfo(2, "jpn", 2),
+				audioStreamInfo(3, "fra", 2),
 			},
 			expected: []int{2, 3},
 		},
 		{
 			name: "all eng streams returns empty exclusion list",
-			streams: []StreamInfo{
-				{Index: 1, Language: "eng"},
-				{Index: 2, Language: "eng"},
+			streams: []AudioStreamInfo{
+				audioStreamInfo(1, "eng", 2),
+				audioStreamInfo(2, "eng", 2),
 			},
 			expected: nil,
 		},
 		{
 			name: "no language tags preserves all streams via safe fallback",
-			streams: []StreamInfo{
-				{Index: 1, Language: ""},
-				{Index: 2, Language: ""},
+			streams: []AudioStreamInfo{
+				audioStreamInfo(1, "", 2),
+				audioStreamInfo(2, "", 2),
 			},
 			expected: nil,
 		},
 		{
 			name: "all non-eng languages preserves all streams via safe fallback",
-			streams: []StreamInfo{
-				{Index: 1, Language: "jpn"},
-				{Index: 2, Language: "fra"},
+			streams: []AudioStreamInfo{
+				audioStreamInfo(1, "jpn", 2),
+				audioStreamInfo(2, "fra", 2),
 			},
 			expected: nil,
 		},
@@ -214,6 +219,76 @@ func TestFirstEnglishIndex(t *testing.T) {
 	}
 }
 
+func TestDownmixSourceIndex(t *testing.T) {
+	intPtr := func(i int) *int { return &i }
+	tests := []struct {
+		name    string
+		streams []AudioStreamInfo
+		want    *int
+	}{
+		{
+			name:    "empty slice returns nil",
+			streams: nil,
+			want:    nil,
+		},
+		{
+			name:    "single stereo stream returns nil (stereo-compatible present)",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 2)},
+			want:    nil,
+		},
+		{
+			name:    "stereo-compatible stream among surround returns nil",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 6), audioStreamInfo(2, "eng", 2)},
+			want:    nil,
+		},
+		{
+			name:    "single surround stream returns its index",
+			streams: []AudioStreamInfo{audioStreamInfo(3, "eng", 6)},
+			want:    intPtr(3),
+		},
+		{
+			name: "multiple surround streams returns first index",
+			streams: []AudioStreamInfo{
+				audioStreamInfo(2, "eng", 6),
+				audioStreamInfo(4, "eng", 8),
+			},
+			want: intPtr(2),
+		},
+		{
+			name:    "mono stream (1 channel) is stereo-compatible, returns nil",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 1)},
+			want:    nil,
+		},
+		{
+			name:    "3-channel stream is stereo-compatible, returns nil",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 3)},
+			want:    nil,
+		},
+		{
+			name:    "4-channel stream triggers downmix",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 4)},
+			want:    intPtr(1),
+		},
+		{
+			name:    "zero channel count (unknown layout) is skipped, not treated as stereo-compatible",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0), audioStreamInfo(2, "eng", 6)},
+			want:    intPtr(2),
+		},
+		{
+			name:    "all streams with zero channel count return nil (no known surround)",
+			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0)},
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := downmixSourceIndex(tt.streams)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestRunTranscode(t *testing.T) {
 	// The fixture video has one audio stream (index 1) tagged "und" (undefined
 	// language). nonEnglishAudioIndices returns nil when no "eng" stream is
@@ -222,7 +297,7 @@ func TestRunTranscode(t *testing.T) {
 		IsValidMedia: true,
 		VideoCodec:   "h264",
 		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
-		AudioStreams: []StreamInfo{{Index: 1, Language: "und"}},
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
 	tests := []struct {
@@ -312,6 +387,32 @@ func TestRunTranscode(t *testing.T) {
 			},
 			probe:   h264Probe,
 			errFunc: require.Error,
+		},
+		{
+			name: "surround-only probe triggers downmix stream in output",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
+			},
+			// Report the fixture audio as surround so downmixSourceIndex returns non-nil.
+			probe: ProbeOutput{
+				IsValidMedia: true,
+				VideoCodec:   "h264",
+				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+				AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 6)},
+			},
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := filepath.Join(outputDir, mkvOutputName(inputPath))
+				info, err := ffprobe.Probe(t.Context(), out)
+				require.NoError(t, err)
+				var audioCount int
+				for _, s := range info.Streams {
+					if s.CodecType == ffprobe.CodecTypeAudio {
+						audioCount++
+					}
+				}
+				assert.Equal(t, 2, audioCount, "output should contain original audio stream plus one downmixed stream")
+			},
 		},
 	}
 

@@ -25,7 +25,9 @@ func TestRunProbe(t *testing.T) {
 				IsValidMedia: true,
 				VideoCodec:   "h264",
 				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
-				AudioStreams: []StreamInfo{{Index: 1, Language: "und"}},
+				AudioStreams: []AudioStreamInfo{
+					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2},
+				},
 			},
 			errFunc:     require.NoError,
 			fileDeleted: false,

@@ -16,6 +16,12 @@ type StreamInfo struct {
 	Language string `json:"language"`
 }
 
+// AudioStreamInfo holds stream info for an audio stream, including channel count.
+type AudioStreamInfo struct {
+	StreamInfo
+	ChannelCount int `json:"channel_count"`
+}
+
 // ProbeOutput is the output of the probe step.
 type ProbeOutput struct {
 	// IsValidMedia is false when the file is not a recognisable media file with a
@@ -29,7 +35,7 @@ type ProbeOutput struct {
 	Format string `json:"format"`
 	// AudioStreams lists every audio stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
-	AudioStreams []StreamInfo `json:"audio_streams,omitempty"`
+	AudioStreams []AudioStreamInfo `json:"audio_streams,omitempty"`
 	// SubtitleStreams lists every subtitle stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
 	SubtitleStreams []StreamInfo `json:"subtitle_streams,omitempty"`
@@ -54,14 +60,21 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 		return ProbeOutput{IsValidMedia: false}, nil
 	}
 
-	var audioStreams []StreamInfo
+	var audioStreams []AudioStreamInfo
 	var subtitleStreams []StreamInfo
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case ffprobe.CodecTypeAudio:
-			audioStreams = append(audioStreams, StreamInfo{
-				Index:    s.Index,
-				Language: s.Tags["language"],
+			channelCount := s.AudioChannelCount
+			if channelCount == 0 {
+				// ffprobe reports 0 when the channel layout is unknown. Treat
+				// conservatively as surround (6) so the downmix check does not
+				// incorrectly suppress synthesis by matching the stereo threshold.
+				channelCount = 6
+			}
+			audioStreams = append(audioStreams, AudioStreamInfo{
+				StreamInfo:   StreamInfo{Index: s.Index, Language: s.Tags["language"]},
+				ChannelCount: channelCount,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{
