@@ -13,7 +13,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.LibraryClient.
+// Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.ArrLibrary.
 var _ medialib.EpisodeLibrary = (*Client)(nil)
 var _ medialib.ArrLibrary = (*Client)(nil)
 

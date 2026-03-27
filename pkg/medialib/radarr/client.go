@@ -14,7 +14,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.LibraryClient.
+// Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.ArrLibrary.
 var _ medialib.MovieLibrary = (*Client)(nil)
 var _ medialib.ArrLibrary = (*Client)(nil)
 

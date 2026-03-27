@@ -110,7 +110,7 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 			}
 
 			if dispatchErr := dispatch(ctx, absPath, w.MediaType); dispatchErr != nil {
-				errs = append(errs, fmt.Errorf("dispatch workflow for %q: %w", absPath, dispatchErr))
+				errs = append(errs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
 			}
 
 			return nil
