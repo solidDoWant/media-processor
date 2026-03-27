@@ -39,9 +39,11 @@ type MediaInfo struct {
 
 // StreamInfo holds per-stream metadata.
 type StreamInfo struct {
+	Index         int
 	CodecName     string
 	CodecType     CodecType
 	BitsPerSecond int64
+	Tags          map[string]string
 	// Video-only fields (zero for non-video streams).
 	WidthPixels     int
 	HeightPixels    int
@@ -113,9 +115,11 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 	for _, stream := range formatContext.Streams() {
 		codecParams := stream.CodecParameters()
 		streamInfo := StreamInfo{
+			Index:         stream.Index(),
 			CodecName:     codecParams.CodecID().Name(),
 			CodecType:     CodecType(codecParams.MediaType().String()),
 			BitsPerSecond: codecParams.BitRate(),
+			Tags:          dictionaryToMap(stream.Metadata()),
 		}
 		switch codecParams.MediaType() {
 		case astiav.MediaTypeVideo:

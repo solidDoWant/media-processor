@@ -10,6 +10,12 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
 
+// AudioStreamInfo holds the input stream index and language tag for one audio stream.
+type AudioStreamInfo struct {
+	Index    int    `json:"index"`
+	Language string `json:"language"`
+}
+
 // ProbeOutput is the output of the probe step.
 type ProbeOutput struct {
 	// IsValidMedia is false when the file is not a recognisable media file with a
@@ -21,6 +27,9 @@ type ProbeOutput struct {
 	// Format is the container format name as reported by ffprobe (e.g. "matroska,webm").
 	// Only meaningful when IsValidMedia is true.
 	Format string `json:"format"`
+	// AudioStreams lists every audio stream found in the file, in stream order.
+	// Only meaningful when IsValidMedia is true.
+	AudioStreams []AudioStreamInfo `json:"audio_streams,omitempty"`
 }
 
 // RunProbe reads codec and container info for filePath. If the file is not a
@@ -42,12 +51,23 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 		return ProbeOutput{IsValidMedia: false}, nil
 	}
 
+	var audioStreams []AudioStreamInfo
+	for _, s := range info.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio {
+			audioStreams = append(audioStreams, AudioStreamInfo{
+				Index:    s.Index,
+				Language: s.Tags["language"],
+			})
+		}
+	}
+
 	for _, s := range info.Streams {
 		if s.CodecType == ffprobe.CodecTypeVideo {
 			return ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   s.CodecName,
 				Format:       info.Format,
+				AudioStreams: audioStreams,
 			}, nil
 		}
 	}

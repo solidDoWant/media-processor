@@ -67,11 +67,64 @@ func TestSelectVideoCodec(t *testing.T) {
 	}
 }
 
+func TestNonEnglishAudioIndices(t *testing.T) {
+	tests := []struct {
+		name     string
+		streams  []AudioStreamInfo
+		expected []int
+	}{
+		{
+			name: "mixed languages with at least one eng keeps only eng streams",
+			streams: []AudioStreamInfo{
+				{Index: 1, Language: "eng"},
+				{Index: 2, Language: "jpn"},
+				{Index: 3, Language: "fra"},
+			},
+			expected: []int{2, 3},
+		},
+		{
+			name: "all eng streams returns empty exclusion list",
+			streams: []AudioStreamInfo{
+				{Index: 1, Language: "eng"},
+				{Index: 2, Language: "eng"},
+			},
+			expected: nil,
+		},
+		{
+			name: "no language tags preserves all streams via safe fallback",
+			streams: []AudioStreamInfo{
+				{Index: 1, Language: ""},
+				{Index: 2, Language: ""},
+			},
+			expected: nil,
+		},
+		{
+			name: "all non-eng languages preserves all streams via safe fallback",
+			streams: []AudioStreamInfo{
+				{Index: 1, Language: "jpn"},
+				{Index: 2, Language: "fra"},
+			},
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nonEnglishAudioIndices(tt.streams)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
 func TestRunTranscode(t *testing.T) {
+	// The fixture video has one audio stream (index 1) tagged "und" (undefined
+	// language). nonEnglishAudioIndices returns nil when no "eng" stream is
+	// present (safe fallback), so all streams are preserved.
 	h264Probe := ProbeOutput{
 		IsValidMedia: true,
 		VideoCodec:   "h264",
 		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{{Index: 1, Language: "und"}},
 	}
 
 	tests := []struct {
@@ -168,7 +221,7 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			err := RunTranscode(t.Context(), inputPath, tt.probe.VideoCodec, tt.probe.Format, outputDir)
+			err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir)
 
 			tt.errFunc(t, err)
 			if tt.check != nil {
