@@ -350,24 +350,23 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 // override configured via WithDefaultAudioStream or WithDefaultSubtitleStream.
 func (t *Transcoder) outputDisposition(inStream *astiav.Stream) astiav.DispositionFlags {
 	disp := inStream.DispositionFlags()
+
+	var defaultStream *int
 	switch inStream.CodecParameters().MediaType() {
 	case astiav.MediaTypeAudio:
-		if t.defaultAudioStream != nil {
-			if inStream.Index() == *t.defaultAudioStream {
-				disp = disp.Add(astiav.DispositionFlagDefault)
-			} else {
-				disp = disp.Del(astiav.DispositionFlagDefault)
-			}
-		}
+		defaultStream = t.defaultAudioStream
 	case astiav.MediaTypeSubtitle:
-		if t.defaultSubtitleStream != nil {
-			if inStream.Index() == *t.defaultSubtitleStream {
-				disp = disp.Add(astiav.DispositionFlagDefault)
-			} else {
-				disp = disp.Del(astiav.DispositionFlagDefault)
-			}
+		defaultStream = t.defaultSubtitleStream
+	}
+
+	if defaultStream != nil {
+		if inStream.Index() == *defaultStream {
+			disp = disp.Add(astiav.DispositionFlagDefault)
+		} else {
+			disp = disp.Del(astiav.DispositionFlagDefault)
 		}
 	}
+
 	return disp
 }
 
