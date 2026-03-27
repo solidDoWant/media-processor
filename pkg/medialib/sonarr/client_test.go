@@ -135,14 +135,36 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 	}
 }
 
-func TestRefreshSeries(t *testing.T) {
-	srv := newSonarrTestServer(t, nil)
+func TestRefreshByFilePath(t *testing.T) {
+	knownParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	srv := newSonarrTestServer(t, knownParseOutput)
 	t.Cleanup(srv.Close)
 
 	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	err := client.RefreshSeries(t.Context(), 10)
+	err := client.RefreshByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
 	require.NoError(t, err)
+}
+
+func TestRefreshByFilePath_ErrNotFound(t *testing.T) {
+	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	err := client.RefreshByFilePath(t.Context(), "/tv/Unknown.S01E01.mkv")
+	require.ErrorIs(t, err, medialib.ErrNotFound)
 }
 
 func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
@@ -152,10 +174,10 @@ func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRefreshSeries_UnreachableURL(t *testing.T) {
+func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
 	client := sonarr.New(sonarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.RefreshSeries(t.Context(), 10)
+	err := client.RefreshByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
 	require.Error(t, err)
 }
 

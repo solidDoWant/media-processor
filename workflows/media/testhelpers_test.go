@@ -1,4 +1,4 @@
-package show
+package media
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // testVideoPath points to the small H.264/MP4 clip shared with the ffprobe package.
@@ -26,18 +24,13 @@ func copyTestVideo(t *testing.T) string {
 	return dst
 }
 
-// stubEpisodeLibrary implements medialib.EpisodeLibrary for testing.
-type stubEpisodeLibrary struct {
-	episode      medialib.Episode
+// stubLibraryClient implements medialib.Library for testing.
+type stubLibraryClient struct {
 	err          error
-	refreshCalls []int64
+	refreshCalls []string
 }
 
-func (s *stubEpisodeLibrary) GetEpisodeByFilePath(_ context.Context, _ string) (medialib.Episode, error) {
-	return s.episode, s.err
-}
-
-func (s *stubEpisodeLibrary) RefreshSeries(_ context.Context, seriesID int64) error {
-	s.refreshCalls = append(s.refreshCalls, seriesID)
+func (s *stubLibraryClient) RefreshByFilePath(_ context.Context, path string) error {
+	s.refreshCalls = append(s.refreshCalls, path)
 	return s.err
 }

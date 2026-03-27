@@ -21,11 +21,13 @@ func TestWorkerConnectsToHatchet(t *testing.T) {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
 
-	// Provide the env vars required by run() that were added with the movie workflow.
-	// The Radarr client is not exercised by this test — dummy values are sufficient.
-	t.Setenv("MOVIE_OUTPUT_DIR", t.TempDir())
+	// Provide the env vars required by run(). Neither Radarr nor Sonarr is exercised
+	// by this test — dummy values are sufficient.
+	t.Setenv("MEDIA_OUTPUT_DIR", t.TempDir())
 	t.Setenv("RADARR_URL", "http://localhost:9999")
 	t.Setenv("RADARR_API_KEY", "test-key")
+	t.Setenv("SONARR_URL", "http://localhost:9998")
+	t.Setenv("SONARR_API_KEY", "test-key")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

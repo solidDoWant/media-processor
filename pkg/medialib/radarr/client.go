@@ -14,8 +14,9 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// Compile-time assertion that *Client implements medialib.MovieLibrary.
+// Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.ArrLibrary.
 var _ medialib.MovieLibrary = (*Client)(nil)
+var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Radarr client.
 type Config struct {
@@ -96,14 +97,20 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 	return output.Movie, nil
 }
 
-// RefreshMovie triggers a Radarr library rescan for the given movie ID.
-func (c *Client) RefreshMovie(ctx context.Context, id int64) error {
-	_, err := c.radarr.SendCommandContext(ctx, &radarrlib.CommandRequest{
+// RefreshByFilePath implements medialib.ArrLibrary. It looks up the movie by
+// file path and triggers a Radarr library rescan for that movie.
+func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
+	movie, err := c.GetMovieByFilePath(ctx, path)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.radarr.SendCommandContext(ctx, &radarrlib.CommandRequest{
 		Name:     "RefreshMovie",
-		MovieIDs: []int64{id},
+		MovieIDs: []int64{movie.ID},
 	})
 	if err != nil {
-		return fmt.Errorf("refresh movie %d: %w", id, err)
+		return fmt.Errorf("refresh movie %d: %w", movie.ID, err)
 	}
 
 	return nil

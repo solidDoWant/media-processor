@@ -9,10 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // TestLoadConfig verifies that the watcher correctly parses its YAML config file,
-// loading directory-to-workflow mappings for valid input and returning a descriptive
+// loading directory-to-media-type mappings for valid input and returning a descriptive
 // error for invalid or missing files.
 func TestLoadConfig(t *testing.T) {
 	t.Parallel()
@@ -28,15 +29,15 @@ func TestLoadConfig(t *testing.T) {
 			content: `
 watches:
   - path: /watch/movies
-    workflow: movie
+    media_type: movie
   - path: /watch/shows
-    workflow: show
+    media_type: show
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Path: "/watch/movies", Workflow: watcherconfig.Movie},
-					{Path: "/watch/shows", Workflow: watcherconfig.Show},
+					{Path: "/watch/movies", MediaType: medialib.MovieType},
+					{Path: "/watch/shows", MediaType: medialib.ShowType},
 				},
 			},
 		},
@@ -69,25 +70,25 @@ watches: []
 			content: `
 watches:
   - path: ""
-    workflow: movie
+    media_type: movie
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "empty workflow in watch entry returns error",
+			name: "empty media_type in watch entry returns error",
 			content: `
 watches:
   - path: /watch/movies
-    workflow: ""
+    media_type: ""
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "unrecognized workflow name returns error",
+			name: "unrecognized media_type returns error",
 			content: `
 watches:
   - path: /watch/movies
-    workflow: UnknownWorkflow
+    media_type: UnknownType
 `,
 			errFunc: require.Error,
 		},

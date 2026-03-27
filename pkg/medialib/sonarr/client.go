@@ -13,8 +13,9 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// Compile-time assertion that *Client implements medialib.EpisodeLibrary.
+// Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.ArrLibrary.
 var _ medialib.EpisodeLibrary = (*Client)(nil)
+var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Sonarr client.
 type Config struct {
@@ -80,14 +81,21 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	}, nil
 }
 
-// RefreshSeries triggers a Sonarr library rescan for the given series ID.
-func (c *Client) RefreshSeries(ctx context.Context, seriesID int64) error {
-	_, err := c.sonarr.SendCommandContext(ctx, &sonarrlib.CommandRequest{
+// RefreshByFilePath implements medialib.ArrLibrary. It looks up the episode by
+// file path and triggers a Sonarr series rescan. Sonarr only supports
+// series-level refresh, so the series ID (not the episode ID) is used.
+func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
+	episode, err := c.GetEpisodeByFilePath(ctx, path)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.sonarr.SendCommandContext(ctx, &sonarrlib.CommandRequest{
 		Name:      "RefreshSeries",
-		SeriesIDs: []int64{seriesID},
+		SeriesIDs: []int64{episode.SeriesID},
 	})
 	if err != nil {
-		return fmt.Errorf("refresh series %d: %w", seriesID, err)
+		return fmt.Errorf("refresh series %d: %w", episode.SeriesID, err)
 	}
 
 	return nil

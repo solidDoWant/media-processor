@@ -7,11 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/solidDoWant/media-processor/internal/watcherconfig"
-	"github.com/solidDoWant/media-processor/workflows/movie"
-	"github.com/solidDoWant/media-processor/workflows/show"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // TestValidateWatchDirs verifies that validateWatchDirs returns a descriptive error
@@ -28,7 +27,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "existing directory passes",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: t.TempDir(), Workflow: "W"},
+					{Path: t.TempDir(), MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.NoError,
@@ -37,7 +36,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "missing directory returns error",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/path/abc123", Workflow: "W"},
+					{Path: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.Error,
@@ -46,8 +45,8 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "all errors reported when multiple dirs are missing",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/alpha", Workflow: "W"},
-					{Path: "/nonexistent/beta", Workflow: "W"},
+					{Path: "/nonexistent/alpha", MediaType: medialib.MovieType},
+					{Path: "/nonexistent/beta", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -67,7 +66,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				f, err := os.CreateTemp(t.TempDir(), "notadir")
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
-				return &Config{Watches: []WatchEntry{{Path: f.Name(), Workflow: "W"}}}
+				return &Config{Watches: []WatchEntry{{Path: f.Name(), MediaType: medialib.MovieType}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.Error(t, err, msgAndArgs...)
@@ -85,7 +84,7 @@ func TestValidateWatchDirs(t *testing.T) {
 }
 
 // TestScan_FileInWatchedDir verifies that a file present in a configured watch directory
-// is dispatched with the correct workflow name and absolute file path.
+// is dispatched with the correct media type and absolute file path.
 func TestScan_FileInWatchedDir(t *testing.T) {
 	t.Parallel()
 
@@ -95,25 +94,28 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, Workflow: "Movie"},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
-	type call struct{ workflow, path string }
+	type call struct {
+		filePath  string
+		mediaType medialib.MediaType
+	}
 	var calls []call
-	dispatch := func(_ context.Context, workflow, path string) error {
-		calls = append(calls, call{workflow, path})
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
+		calls = append(calls, call{fp, mt})
 		return nil
 	}
 
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
 	require.Len(t, calls, 1)
-	assert.Equal(t, movie.MovieWorkflowName, calls[0].workflow)
-	assert.Equal(t, filePath, calls[0].path)
+	assert.Equal(t, filePath, calls[0].filePath)
+	assert.Equal(t, medialib.MovieType, calls[0].mediaType)
 }
 
 // TestScan_SubdirectoryFilesUseParentMapping verifies that files within subdirectories
-// of a configured watch path are dispatched using the parent watch entry's workflow.
+// of a configured watch path are dispatched using the parent watch entry's media type.
 func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 	t.Parallel()
 
@@ -125,13 +127,13 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, Workflow: show.ShowWorkflowName},
+			{Path: dir, MediaType: medialib.ShowType},
 		},
 	}
 
 	var dispatched []string
-	dispatch := func(_ context.Context, _, path string) error {
-		dispatched = append(dispatched, path)
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType) error {
+		dispatched = append(dispatched, fp)
 		return nil
 	}
 
@@ -151,12 +153,12 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, Workflow: "W"},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	var count int
-	dispatch := func(_ context.Context, _, _ string) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -176,19 +178,19 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, Workflow: "W"},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, func(_ context.Context, _, _ string) error { return nil })
+	err := scan(ctx, cfg, func(_ context.Context, _ string, _ medialib.MediaType) error { return nil })
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // TestScan_MultipleWatchEntries verifies that files in separate watch directories are
-// each dispatched with their respective configured workflow names.
+// each dispatched with their respective configured media types.
 func TestScan_MultipleWatchEntries(t *testing.T) {
 	t.Parallel()
 
@@ -199,18 +201,19 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: movieDir, Workflow: watcherconfig.Movie},
-			{Path: showDir, Workflow: watcherconfig.Show},
+			{Path: movieDir, MediaType: medialib.MovieType},
+			{Path: showDir, MediaType: medialib.ShowType},
 		},
 	}
 
-	dispatched := make(map[string]string) // path → workflow
-	dispatch := func(_ context.Context, workflow, path string) error {
-		dispatched[path] = workflow
+	dispatched := make(map[string]medialib.MediaType) // path → media type
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
+		dispatched[fp] = mt
 		return nil
 	}
 
 	require.NoError(t, scan(t.Context(), cfg, dispatch))
-	assert.Equal(t, movie.MovieWorkflowName, dispatched[filepath.Join(movieDir, "movie.mkv")])
-	assert.Equal(t, show.ShowWorkflowName, dispatched[filepath.Join(showDir, "show.mkv")])
+
+	assert.Equal(t, medialib.MovieType, dispatched[filepath.Join(movieDir, "movie.mkv")])
+	assert.Equal(t, medialib.ShowType, dispatched[filepath.Join(showDir, "show.mkv")])
 }

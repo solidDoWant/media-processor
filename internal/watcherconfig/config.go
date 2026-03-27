@@ -1,6 +1,10 @@
 package watcherconfig
 
-import "github.com/invopop/jsonschema"
+import (
+	"github.com/invopop/jsonschema"
+
+	"github.com/solidDoWant/media-processor/pkg/medialib"
+)
 
 // DefaultCronSchedule is the Hatchet cron expression used when none is specified in the config.
 const DefaultCronSchedule CronExpression = "*/5 * * * * *"
@@ -15,36 +19,16 @@ func (CronExpression) JSONSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "string", Pattern: sixFieldCronPattern}
 }
 
-// WorkflowName identifies a Hatchet workflow that the watcher can trigger.
-type WorkflowName string
+// validMediaTypes is the authoritative list of medialib.MediaType values accepted in config.
+// It drives runtime validation; JSON Schema enum generation is handled by medialib.MediaType.JSONSchema.
+var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType}
 
-const (
-	// Movie is the workflow for processing movie files.
-	Movie WorkflowName = "movie"
-	// Show is the workflow for processing TV show episodes.
-	Show WorkflowName = "show"
-)
-
-// validWorkflowNames is the authoritative list of WorkflowName values accepted in config.
-// It drives both JSON Schema enum generation and runtime validation.
-var validWorkflowNames = []WorkflowName{Movie, Show}
-
-// JSONSchema returns a JSON Schema for WorkflowName derived from validWorkflowNames,
-// so enum values are defined in one place rather than duplicated in struct tags.
-func (WorkflowName) JSONSchema() *jsonschema.Schema {
-	enum := make([]any, len(validWorkflowNames))
-	for i, v := range validWorkflowNames {
-		enum[i] = string(v)
-	}
-	return &jsonschema.Schema{Type: "string", Enum: enum}
-}
-
-// WatchEntry maps a filesystem path to a Hatchet workflow name.
+// WatchEntry maps a filesystem path to a media type for dispatch.
 type WatchEntry struct {
 	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
-	// Workflow must be one of the values in validWorkflowNames; validated by the workflowname tag.
-	// The validate tag is required for runtime enforcement; JSONSchema() handles schema generation.
-	Workflow WorkflowName `yaml:"workflow" validate:"workflowname"`
+	// MediaType must be one of the values in validMediaTypes; validated by the mediatype tag.
+	// The validate tag is required for runtime enforcement; medialib.MediaType.JSONSchema handles schema generation.
+	MediaType medialib.MediaType `yaml:"media_type" validate:"mediatype"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
