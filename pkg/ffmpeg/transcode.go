@@ -417,9 +417,12 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 		if meta := downmix.inStream.Metadata(); meta != nil {
 			if srcLang := meta.Get("language", nil, astiav.NewDictionaryFlags()); srcLang != nil {
 				langDict := astiav.NewDictionary()
-				if err := langDict.Set("language", srcLang.Value(), astiav.NewDictionaryFlags()); err == nil {
-					downmixOut.SetMetadata(langDict)
+				if err := langDict.Set("language", srcLang.Value(), astiav.NewDictionaryFlags()); err != nil {
+					langDict.Free()
+					outputFmt.Free()
+					return nil, noopClose, fmt.Errorf("ffmpeg: setting language metadata for downmix stream: %w", err)
 				}
+				downmixOut.SetMetadata(langDict)
 			}
 		}
 	}
