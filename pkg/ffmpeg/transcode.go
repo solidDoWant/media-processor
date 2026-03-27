@@ -359,15 +359,15 @@ func (t *Transcoder) outputDisposition(inStream *astiav.Stream) astiav.Dispositi
 		defaultStream = t.defaultSubtitleStream
 	}
 
-	if defaultStream != nil {
-		if inStream.Index() == *defaultStream {
-			disp = disp.Add(astiav.DispositionFlagDefault)
-		} else {
-			disp = disp.Del(astiav.DispositionFlagDefault)
-		}
+	if defaultStream == nil {
+		return disp
 	}
 
-	return disp
+	if inStream.Index() == *defaultStream {
+		return disp.Add(astiav.DispositionFlagDefault)
+	}
+
+	return disp.Del(astiav.DispositionFlagDefault)
 }
 
 // readAllPackets is the main decode/encode loop.
