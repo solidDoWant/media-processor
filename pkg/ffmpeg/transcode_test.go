@@ -201,6 +201,41 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 	}
 }
 
+// TestTranscode_ExcludeStreams verifies that a stream index passed to
+// ExcludeStreams is absent from the output file.
+func TestTranscode_ExcludeStreams(t *testing.T) {
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	// Locate the first audio stream index to exclude.
+	audioIndex := -1
+	for _, s := range inputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio {
+			audioIndex = s.Index
+			break
+		}
+	}
+	require.NotEqual(t, -1, audioIndex, "test fixture must have at least one audio stream")
+
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	err = ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		ExcludeStreams(audioIndex).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	for _, s := range outputInfo.Streams {
+		assert.NotEqual(t, ffprobe.CodecTypeAudio, s.CodecType,
+			"excluded audio stream must not appear in the output")
+	}
+	assert.Equal(t, len(inputInfo.Streams)-1, len(outputInfo.Streams),
+		"output must have one fewer stream than the input")
+}
+
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
 // returns only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present.

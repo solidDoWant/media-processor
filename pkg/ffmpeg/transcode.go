@@ -17,6 +17,7 @@ type TranscodeBuilder struct {
 	hwAccel               HWAccel
 	progressCh            chan<- Progress
 	startHook             func()
+	excludeStreams        map[int]bool
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -69,6 +70,18 @@ func (b *TranscodeBuilder) WithProgressChan(ch chan<- Progress) *TranscodeBuilde
 // deterministic point) and light instrumentation.
 func (b *TranscodeBuilder) WithStartHook(fn func()) *TranscodeBuilder {
 	b.startHook = fn
+	return b
+}
+
+// ExcludeStreams marks the given input stream indices to be dropped from the
+// output. Packets from excluded streams are silently discarded during muxing.
+func (b *TranscodeBuilder) ExcludeStreams(indices ...int) *TranscodeBuilder {
+	if b.excludeStreams == nil {
+		b.excludeStreams = make(map[int]bool)
+	}
+	for _, idx := range indices {
+		b.excludeStreams[idx] = true
+	}
 	return b
 }
 
@@ -204,6 +217,10 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 	streams := make(map[int]stream)
 
 	for _, inStream := range inputFmt.Streams() {
+		if t.excludeStreams[inStream.Index()] {
+			continue
+		}
+
 		mediaType := inStream.CodecParameters().MediaType()
 		base := copyStreamState{inStream: inStream}
 

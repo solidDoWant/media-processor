@@ -31,6 +31,7 @@ func TestProbe_ValidFile(t *testing.T) {
 	require.Len(t, info.Streams, 2)
 
 	video := info.Streams[0]
+	assert.Equal(t, 0, video.Index)
 	assert.Equal(t, "h264", video.CodecName)
 	assert.Equal(t, ffprobe.CodecTypeVideo, video.CodecType)
 	assert.Equal(t, int64(441324), video.BitsPerSecond)
@@ -39,8 +40,11 @@ func TestProbe_ValidFile(t *testing.T) {
 	assert.Equal(t, 24.0, video.FramesPerSecond)
 	assert.Zero(t, video.AudioSampleRateHz)
 	assert.Zero(t, video.AudioChannelCount)
+	assert.Equal(t, "VideoHandler", video.Tags["handler_name"])
+	assert.Equal(t, "und", video.Tags["language"])
 
 	audio := info.Streams[1]
+	assert.Equal(t, 1, audio.Index)
 	assert.Equal(t, "aac", audio.CodecName)
 	assert.Equal(t, ffprobe.CodecTypeAudio, audio.CodecType)
 	assert.Equal(t, int64(161052), audio.BitsPerSecond)
@@ -49,6 +53,8 @@ func TestProbe_ValidFile(t *testing.T) {
 	assert.Zero(t, audio.FramesPerSecond)
 	assert.Equal(t, 48000, audio.AudioSampleRateHz)
 	assert.Equal(t, 2, audio.AudioChannelCount)
+	assert.Equal(t, "SoundHandler", audio.Tags["handler_name"])
+	assert.Equal(t, "und", audio.Tags["language"])
 }
 
 func TestProbe_NonExistentFile(t *testing.T) {

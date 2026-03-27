@@ -24,15 +24,40 @@ func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 	return ffmpeg.CodecH265
 }
 
+// nonEnglishAudioIndices returns the input stream indices of non-English audio
+// streams. If at least one stream carries the "eng" language tag, all streams
+// without that tag are returned so they can be excluded from the output.
+// If no stream is tagged "eng" (including the case where no streams carry any
+// language tag), nil is returned so all streams are preserved as a safe fallback.
+func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
+	hasEnglish := false
+	for _, s := range streams {
+		if s.Language == "eng" {
+			hasEnglish = true
+			break
+		}
+	}
+	if !hasEnglish {
+		return nil
+	}
+	var exclude []int
+	for _, s := range streams {
+		if s.Language != "eng" {
+			exclude = append(exclude, s.Index)
+		}
+	}
+	return exclude
+}
+
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
-// videoCodecName and format are the codec name and container format from ffprobe
-// (e.g. "h264", "matroska,webm").
-func RunTranscode(ctx context.Context, filePath, videoCodecName, format, outputDir string) error {
-	videoCodec := SelectVideoCodec(videoCodecName, format)
+// probe is the output of RunProbe for filePath.
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string) error {
+	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
+	excludeIndices := nonEnglishAudioIndices(probe.AudioStreams)
 
 	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
@@ -42,6 +67,7 @@ func RunTranscode(ctx context.Context, filePath, videoCodecName, format, outputD
 	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
+		ExcludeStreams(excludeIndices...).
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {

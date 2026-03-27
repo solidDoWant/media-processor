@@ -81,7 +81,7 @@ func NewMediaWorkflow(
 			return struct{}{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe.VideoCodec, probe.Format, cfg.OutputDir)
+		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir)
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
 	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library
