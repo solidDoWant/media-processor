@@ -102,8 +102,19 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 		return errors.New("failed to allocate audio encoder codec context")
 	}
 
-	// Preserve sample rate and channel layout.
-	ass.encoder.codecContext.SetSampleRate(ass.decoder.codecContext.SampleRate())
+	// Select a sample rate supported by the encoder. Prefer the decoder's rate;
+	// fall back to 48 kHz (a standard AC-3/AAC rate) then the first supported rate.
+	sampleRate := ass.decoder.codecContext.SampleRate()
+	if supported := ass.encoder.codec.SupportedSampleRates(); len(supported) > 0 {
+		if !slices.Contains(supported, sampleRate) {
+			if slices.Contains(supported, 48000) {
+				sampleRate = 48000
+			} else {
+				sampleRate = supported[0]
+			}
+		}
+	}
+	ass.encoder.codecContext.SetSampleRate(sampleRate)
 
 	// Determine channel layout: if a target is requested, prefer it; then the
 	// decoder's layout; fall back to the encoder's first supported layout.
