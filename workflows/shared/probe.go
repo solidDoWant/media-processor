@@ -19,7 +19,9 @@ type StreamInfo struct {
 // AudioStreamInfo holds stream info for an audio stream, including channel count.
 type AudioStreamInfo struct {
 	StreamInfo
-	ChannelCount int `json:"channel_count"`
+	ChannelCount int    `json:"channel_count"`
+	Title        string `json:"title,omitempty"`
+	HasLFE       bool   `json:"has_lfe,omitempty"`
 }
 
 // ProbeOutput is the output of the probe step.
@@ -75,6 +77,8 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 			audioStreams = append(audioStreams, AudioStreamInfo{
 				StreamInfo:   StreamInfo{Index: s.Index, Language: s.Tags["language"]},
 				ChannelCount: channelCount,
+				Title:        s.Tags["title"],
+				HasLFE:       s.HasLFE,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{

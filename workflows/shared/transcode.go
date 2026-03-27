@@ -128,6 +128,13 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
+	// Build per-stream title map for retained audio streams.
+	audioTitles := make(map[int]string, len(retainedAudio))
+	for _, s := range retainedAudio {
+		label := channelConfigLabel(s.ChannelCount, s.HasLFE)
+		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, label)
+	}
+
 	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
@@ -135,6 +142,8 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		WithDefaultAudioStream(firstEnglishIndex(audioBaseStreams)).
 		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
 		WithDownmix(downmixSourceIndex(retainedAudio)).
+		WithAudioStreamTitles(audioTitles).
+		WithAutoDownmixTitle().
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
