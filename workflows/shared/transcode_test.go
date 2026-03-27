@@ -166,11 +166,11 @@ func TestNonEnglishSubtitleIndices(t *testing.T) {
 }
 
 func TestFirstEnglishIndex(t *testing.T) {
+	intPtr := func(i int) *int { return &i }
 	tests := []struct {
-		name      string
-		streams   []StreamInfo
-		wantIdx   int
-		wantFound bool
+		name    string
+		streams []StreamInfo
+		want    *int
 	}{
 		{
 			name: "first eng stream is returned when multiple languages are present",
@@ -179,42 +179,37 @@ func TestFirstEnglishIndex(t *testing.T) {
 				{Index: 3, Language: "eng"},
 				{Index: 4, Language: "eng"},
 			},
-			wantIdx:   3,
-			wantFound: true,
+			want: intPtr(3),
 		},
 		{
-			name:      "single eng stream is returned",
-			streams:   []StreamInfo{{Index: 5, Language: "eng"}},
-			wantIdx:   5,
-			wantFound: true,
+			name:    "single eng stream is returned",
+			streams: []StreamInfo{{Index: 5, Language: "eng"}},
+			want:    intPtr(5),
 		},
 		{
-			name: "no eng stream returns not found",
+			name: "no eng stream returns nil",
 			streams: []StreamInfo{
 				{Index: 1, Language: "jpn"},
 				{Index: 2, Language: "fra"},
 			},
-			wantFound: false,
+			want: nil,
 		},
 		{
-			name:      "empty slice returns not found",
-			streams:   nil,
-			wantFound: false,
+			name:    "empty slice returns nil",
+			streams: nil,
+			want:    nil,
 		},
 		{
-			name:      "untagged stream is not treated as English",
-			streams:   []StreamInfo{{Index: 1, Language: ""}},
-			wantFound: false,
+			name:    "untagged stream is not treated as English",
+			streams: []StreamInfo{{Index: 1, Language: ""}},
+			want:    nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIdx, gotFound := firstEnglishIndex(tt.streams)
-			assert.Equal(t, tt.wantFound, gotFound)
-			if tt.wantFound {
-				assert.Equal(t, tt.wantIdx, gotIdx)
-			}
+			got := firstEnglishIndex(tt.streams)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

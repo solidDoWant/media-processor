@@ -62,16 +62,16 @@ func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 	return exclude
 }
 
-// firstEnglishIndex returns the input stream Index of the first StreamInfo
-// element tagged "eng". The second return value is false when no English stream
-// is found.
-func firstEnglishIndex(streams []StreamInfo) (int, bool) {
+// firstEnglishIndex returns a pointer to the input stream Index of the first
+// StreamInfo element tagged "eng", or nil when no English stream is found.
+func firstEnglishIndex(streams []StreamInfo) *int {
 	for _, s := range streams {
 		if s.Language == "eng" {
-			return s.Index, true
+			idx := s.Index
+			return &idx
 		}
 	}
-	return 0, false
+	return nil
 }
 
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
@@ -93,11 +93,11 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		ExcludeStreams(excludeIndices...)
-	if idx, ok := firstEnglishIndex(probe.AudioStreams); ok {
-		builder = builder.WithDefaultAudioStream(idx)
+	if idx := firstEnglishIndex(probe.AudioStreams); idx != nil {
+		builder = builder.WithDefaultAudioStream(*idx)
 	}
-	if idx, ok := firstEnglishIndex(probe.SubtitleStreams); ok {
-		builder = builder.WithDefaultSubtitleStream(idx)
+	if idx := firstEnglishIndex(probe.SubtitleStreams); idx != nil {
+		builder = builder.WithDefaultSubtitleStream(*idx)
 	}
 
 	if err := builder.Build().Run(ctx); err != nil {
