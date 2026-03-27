@@ -107,11 +107,12 @@ func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder
 }
 
 // WithDownmix synthesizes an additional downmixed audio stream from the input
-// stream at sourceStreamIndex. The downmix targets a 2.1 channel layout with
+// stream at the given index. The downmix targets a 2.1 channel layout with
 // AC-3 encoding; if the encoder does not support 2.1, stereo is used instead.
 // The synthesized stream is appended after all other output streams.
-func (b *TranscodeBuilder) WithDownmix(sourceStreamIndex int) *TranscodeBuilder {
-	b.downmixSourceIdx = &sourceStreamIndex
+// A nil argument is a no-op: no downmix stream is synthesized.
+func (b *TranscodeBuilder) WithDownmix(idx *int) *TranscodeBuilder {
+	b.downmixSourceIdx = idx
 	return b
 }
 

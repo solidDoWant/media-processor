@@ -126,18 +126,15 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
-	builder := ffmpeg.NewTranscode(filePath, tempPath).
+	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		ExcludeStreams(excludeIndices...).
 		WithDefaultAudioStream(firstEnglishIndex(audioBaseStreams)).
-		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams))
-
-	if src := downmixSourceIndex(retainedAudio); src != nil {
-		builder = builder.WithDownmix(*src)
-	}
-
-	if err := builder.Build().Run(ctx); err != nil {
+		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
+		WithDownmix(downmixSourceIndex(retainedAudio)).
+		Build().
+		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return errors.Join(
 				fmt.Errorf("transcode: %w", err),

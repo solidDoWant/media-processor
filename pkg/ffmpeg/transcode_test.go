@@ -337,7 +337,7 @@ func TestTranscode_WithDownmix(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
 	err = ffmpeg.NewTranscode(testVideoPath, output).
 		ToContainer(ffmpeg.ContainerMKV).
-		WithDownmix(audioIndex).
+		WithDownmix(&audioIndex).
 		Build().
 		Run(t.Context())
 	require.NoError(t, err)
