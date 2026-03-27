@@ -29,7 +29,7 @@ func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 // without that tag are returned so they can be excluded from the output.
 // If no stream is tagged "eng" (including the case where no streams carry any
 // language tag), nil is returned so all streams are preserved as a safe fallback.
-func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
+func nonEnglishAudioIndices(streams []StreamInfo) []int {
 	hasEnglish := false
 	for _, s := range streams {
 		if s.Language == "eng" {
@@ -52,7 +52,7 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 // nonEnglishSubtitleIndices returns the input stream indices of all subtitle
 // streams not tagged "eng", including untagged streams. Unlike audio, there is
 // no safe-fallback: subtitles are always excluded unless explicitly tagged "eng".
-func nonEnglishSubtitleIndices(streams []SubtitleStreamInfo) []int {
+func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 	var exclude []int
 	for _, s := range streams {
 		if s.Language != "eng" {

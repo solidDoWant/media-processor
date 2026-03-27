@@ -70,12 +70,12 @@ func TestSelectVideoCodec(t *testing.T) {
 func TestNonEnglishAudioIndices(t *testing.T) {
 	tests := []struct {
 		name     string
-		streams  []AudioStreamInfo
+		streams  []StreamInfo
 		expected []int
 	}{
 		{
 			name: "mixed languages with at least one eng keeps only eng streams",
-			streams: []AudioStreamInfo{
+			streams: []StreamInfo{
 				{Index: 1, Language: "eng"},
 				{Index: 2, Language: "jpn"},
 				{Index: 3, Language: "fra"},
@@ -84,7 +84,7 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 		},
 		{
 			name: "all eng streams returns empty exclusion list",
-			streams: []AudioStreamInfo{
+			streams: []StreamInfo{
 				{Index: 1, Language: "eng"},
 				{Index: 2, Language: "eng"},
 			},
@@ -92,7 +92,7 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 		},
 		{
 			name: "no language tags preserves all streams via safe fallback",
-			streams: []AudioStreamInfo{
+			streams: []StreamInfo{
 				{Index: 1, Language: ""},
 				{Index: 2, Language: ""},
 			},
@@ -100,7 +100,7 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 		},
 		{
 			name: "all non-eng languages preserves all streams via safe fallback",
-			streams: []AudioStreamInfo{
+			streams: []StreamInfo{
 				{Index: 1, Language: "jpn"},
 				{Index: 2, Language: "fra"},
 			},
@@ -119,12 +119,12 @@ func TestNonEnglishAudioIndices(t *testing.T) {
 func TestNonEnglishSubtitleIndices(t *testing.T) {
 	tests := []struct {
 		name     string
-		streams  []SubtitleStreamInfo
+		streams  []StreamInfo
 		expected []int
 	}{
 		{
 			name: "mixed languages with at least one eng keeps only eng streams",
-			streams: []SubtitleStreamInfo{
+			streams: []StreamInfo{
 				{Index: 2, Language: "eng"},
 				{Index: 3, Language: "jpn"},
 				{Index: 4, Language: "fra"},
@@ -133,7 +133,7 @@ func TestNonEnglishSubtitleIndices(t *testing.T) {
 		},
 		{
 			name: "all eng streams returns empty exclusion list",
-			streams: []SubtitleStreamInfo{
+			streams: []StreamInfo{
 				{Index: 2, Language: "eng"},
 				{Index: 3, Language: "eng"},
 			},
@@ -141,7 +141,7 @@ func TestNonEnglishSubtitleIndices(t *testing.T) {
 		},
 		{
 			name: "no language tags removes all streams",
-			streams: []SubtitleStreamInfo{
+			streams: []StreamInfo{
 				{Index: 2, Language: ""},
 				{Index: 3, Language: ""},
 			},
@@ -149,7 +149,7 @@ func TestNonEnglishSubtitleIndices(t *testing.T) {
 		},
 		{
 			name: "no eng languages removes all streams",
-			streams: []SubtitleStreamInfo{
+			streams: []StreamInfo{
 				{Index: 2, Language: "jpn"},
 				{Index: 3, Language: "fra"},
 			},
@@ -173,7 +173,7 @@ func TestRunTranscode(t *testing.T) {
 		IsValidMedia: true,
 		VideoCodec:   "h264",
 		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
-		AudioStreams: []AudioStreamInfo{{Index: 1, Language: "und"}},
+		AudioStreams: []StreamInfo{{Index: 1, Language: "und"}},
 	}
 
 	tests := []struct {
