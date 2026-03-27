@@ -27,7 +27,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "existing directory passes",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: t.TempDir(), MediaType: "M"},
+					{Path: t.TempDir(), MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.NoError,
@@ -36,7 +36,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "missing directory returns error",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/path/abc123", MediaType: "M"},
+					{Path: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.Error,
@@ -45,8 +45,8 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "all errors reported when multiple dirs are missing",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/alpha", MediaType: "M"},
-					{Path: "/nonexistent/beta", MediaType: "M"},
+					{Path: "/nonexistent/alpha", MediaType: medialib.MovieType},
+					{Path: "/nonexistent/beta", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -66,7 +66,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				f, err := os.CreateTemp(t.TempDir(), "notadir")
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
-				return &Config{Watches: []WatchEntry{{Path: f.Name(), MediaType: "M"}}}
+				return &Config{Watches: []WatchEntry{{Path: f.Name(), MediaType: medialib.MovieType}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.Error(t, err, msgAndArgs...)
@@ -153,7 +153,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: "M"},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -178,7 +178,7 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: "M"},
+			{Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 

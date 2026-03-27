@@ -22,28 +22,28 @@
       "type": "string",
       "pattern": "^(\\S+ ){5}\\S+$"
     },
+    "MediaType": {
+      "type": "string",
+      "enum": [
+        "movie",
+        "show"
+      ]
+    },
     "WatchEntry": {
       "properties": {
         "path": {
           "type": "string",
           "minLength": 1
         },
-        "workflow": {
-          "$ref": "#/$defs/WorkflowName"
+        "media_type": {
+          "$ref": "#/$defs/MediaType"
         }
       },
       "additionalProperties": false,
       "type": "object",
       "required": [
         "path",
-        "workflow"
-      ]
-    },
-    "WorkflowName": {
-      "type": "string",
-      "enum": [
-        "movie",
-        "show"
+        "media_type"
       ]
     }
   }

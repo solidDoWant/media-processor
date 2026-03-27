@@ -97,8 +97,8 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 	return output.Movie, nil
 }
 
-// RefreshByFilePath implements medialib.Library. It looks up the movie by file
-// path and triggers a Radarr library rescan for that movie.
+// RefreshByFilePath implements medialib.ArrLibrary. It looks up the movie by
+// file path and triggers a Radarr library rescan for that movie.
 func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
 	movie, err := c.GetMovieByFilePath(ctx, path)
 	if err != nil {

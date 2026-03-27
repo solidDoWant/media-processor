@@ -81,7 +81,7 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	}, nil
 }
 
-// RefreshByFilePath implements medialib.Library. It looks up the episode by
+// RefreshByFilePath implements medialib.ArrLibrary. It looks up the episode by
 // file path and triggers a Sonarr series rescan. Sonarr only supports
 // series-level refresh, so the series ID (not the episode ID) is used.
 func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
