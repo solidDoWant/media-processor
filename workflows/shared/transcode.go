@@ -62,6 +62,17 @@ func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 	return exclude
 }
 
+// firstEnglishIndex returns a pointer to the input stream Index of the first
+// StreamInfo element tagged "eng", or nil when no English stream is found.
+func firstEnglishIndex(streams []StreamInfo) *int {
+	for _, stream := range streams {
+		if stream.Language == "eng" {
+			return &stream.Index
+		}
+	}
+	return nil
+}
+
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
@@ -81,6 +92,8 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		ExcludeStreams(excludeIndices...).
+		WithDefaultAudioStream(firstEnglishIndex(probe.AudioStreams)).
+		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {

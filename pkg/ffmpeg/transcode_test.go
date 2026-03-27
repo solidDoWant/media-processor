@@ -7,12 +7,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asticode/go-astiav"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
+
+// probeStreamDispositions opens a media file and returns a map of stream index
+// to DispositionFlags by reading stream metadata via go-astiav directly.
+// This is used in tests because ffprobe.StreamInfo does not expose disposition.
+func probeStreamDispositions(t *testing.T, path string) map[int]astiav.DispositionFlags {
+	t.Helper()
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx, "failed to allocate format context")
+	defer fmtCtx.Free()
+	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
+	defer fmtCtx.CloseInput()
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+	result := make(map[int]astiav.DispositionFlags)
+	for _, s := range fmtCtx.Streams() {
+		result[s.Index()] = s.DispositionFlags()
+	}
+	return result
+}
 
 // testVideoPath is the shared input file for all transcode tests.
 const testVideoPath = "../../pkg/ffprobe/testdata/video.mp4"
@@ -234,6 +253,70 @@ func TestTranscode_ExcludeStreams(t *testing.T) {
 	}
 	assert.Equal(t, len(inputInfo.Streams)-1, len(outputInfo.Streams),
 		"output must have one fewer stream than the input")
+}
+
+// TestTranscode_DispositionPreserved verifies that input stream dispositions
+// are copied to output streams unchanged when no WithDefault* setter is called.
+func TestTranscode_DispositionPreserved(t *testing.T) {
+	inputDisps := probeStreamDispositions(t, testVideoPath)
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	require.NoError(t, ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context()))
+
+	outputDisps := probeStreamDispositions(t, output)
+	require.Len(t, outputDisps, len(inputDisps), "stream count must match")
+	for idx, inputDisp := range inputDisps {
+		assert.Equal(t, inputDisp, outputDisps[idx],
+			"stream %d: disposition must be preserved from input", idx)
+	}
+}
+
+// TestTranscode_WithDefaultAudioStream verifies that WithDefaultAudioStream
+// marks the specified audio stream as default and clears the flag from all
+// other audio streams.
+func TestTranscode_WithDefaultAudioStream(t *testing.T) {
+	// Test fixture (video.mp4): stream 0 = video, stream 1 = audio (both default=1 in input).
+	tests := []struct {
+		name        string
+		audioIdx    int
+		wantDefault bool
+	}{
+		{
+			name:        "specified audio stream index is marked default",
+			audioIdx:    1, // audio stream index in test fixture
+			wantDefault: true,
+		},
+		{
+			name:        "audio stream loses default when a different index is designated",
+			audioIdx:    999, // nonexistent; stream 1 is the only audio and loses its default
+			wantDefault: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "out.mkv")
+			require.NoError(t, ffmpeg.NewTranscode(testVideoPath, output).
+				ToContainer(ffmpeg.ContainerMKV).
+				WithDefaultAudioStream(&tt.audioIdx).
+				Build().
+				Run(t.Context()))
+
+			outInfo, err := ffprobe.Probe(t.Context(), output)
+			require.NoError(t, err)
+			disps := probeStreamDispositions(t, output)
+
+			for _, s := range outInfo.Streams {
+				if s.CodecType == ffprobe.CodecTypeAudio {
+					assert.Equal(t, tt.wantDefault,
+						disps[s.Index].Has(astiav.DispositionFlagDefault),
+						"audio stream %d: default disposition mismatch", s.Index)
+				}
+			}
+		})
+	}
 }
 
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders

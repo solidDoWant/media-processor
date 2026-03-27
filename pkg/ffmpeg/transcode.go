@@ -18,6 +18,8 @@ type TranscodeBuilder struct {
 	progressCh            chan<- Progress
 	startHook             func()
 	excludeStreams        map[int]bool
+	defaultAudioStream    *int // input stream index to mark as default audio; nil = preserve input dispositions
+	defaultSubtitleStream *int // input stream index to mark as default subtitle; nil = preserve input dispositions
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -82,6 +84,24 @@ func (b *TranscodeBuilder) ExcludeStreams(indices ...int) *TranscodeBuilder {
 	for _, idx := range indices {
 		b.excludeStreams[idx] = true
 	}
+	return b
+}
+
+// WithDefaultAudioStream marks the audio stream at the given input stream index
+// as the default audio track in the output. All other audio stream dispositions
+// have their default flag cleared. A nil argument is a no-op: audio stream
+// dispositions are copied from the input unchanged.
+func (b *TranscodeBuilder) WithDefaultAudioStream(idx *int) *TranscodeBuilder {
+	b.defaultAudioStream = idx
+	return b
+}
+
+// WithDefaultSubtitleStream marks the subtitle stream at the given input stream
+// index as the default subtitle track in the output. All other subtitle stream
+// dispositions have their default flag cleared. A nil argument is a no-op:
+// subtitle stream dispositions are copied from the input unchanged.
+func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder {
+	b.defaultSubtitleStream = idx
 	return b
 }
 
@@ -284,6 +304,9 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 		}
 		s.setOutputStream(outStream)
 
+		// Copy disposition from the input stream and apply any default-flag overrides.
+		outStream.SetDispositionFlags(t.outputDisposition(inStream))
+
 		if encCtx := s.encoderContext(); encCtx != nil {
 			// Re-encoded stream: populate output parameters from the encoder.
 			if err := outStream.CodecParameters().FromCodecContext(encCtx); err != nil {
@@ -320,6 +343,31 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 	}
 
 	return outputFmt, closeIO, nil
+}
+
+// outputDisposition computes the disposition flags for an output stream by
+// copying from the corresponding input stream and applying any default-flag
+// override configured via WithDefaultAudioStream or WithDefaultSubtitleStream.
+func (t *Transcoder) outputDisposition(inStream *astiav.Stream) astiav.DispositionFlags {
+	disp := inStream.DispositionFlags()
+
+	var defaultStream *int
+	switch inStream.CodecParameters().MediaType() {
+	case astiav.MediaTypeAudio:
+		defaultStream = t.defaultAudioStream
+	case astiav.MediaTypeSubtitle:
+		defaultStream = t.defaultSubtitleStream
+	}
+
+	if defaultStream == nil {
+		return disp
+	}
+
+	if inStream.Index() == *defaultStream {
+		return disp.Add(astiav.DispositionFlagDefault)
+	}
+
+	return disp.Del(astiav.DispositionFlagDefault)
 }
 
 // readAllPackets is the main decode/encode loop.
