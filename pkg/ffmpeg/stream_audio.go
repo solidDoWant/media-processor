@@ -335,6 +335,9 @@ func (ass *audioStreamState) drainFifo(outputFmt *astiav.FormatContext, progress
 		ass.encoder.fifoFrame.SetPts(ass.encoder.nextPts)
 		ass.encoder.nextPts += int64(frameSize)
 
+		if err := ass.encoder.fifoFrame.MakeWritable(); err != nil {
+			return fmt.Errorf("ffmpeg: making FIFO frame writable: %w", err)
+		}
 		if _, err := ass.encoder.fifo.Read(ass.encoder.fifoFrame); err != nil {
 			return fmt.Errorf("ffmpeg: reading from audio FIFO: %w", err)
 		}
@@ -403,6 +406,9 @@ func (ass *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh c
 		// truncated at end-of-stream.
 		if remaining := ass.encoder.fifo.Size(); remaining > 0 {
 			frameSize := ass.encoder.codecContext.FrameSize()
+			if err := ass.encoder.fifoFrame.MakeWritable(); err != nil {
+				return fmt.Errorf("ffmpeg: making tail FIFO frame writable: %w", err)
+			}
 			ass.encoder.fifoFrame.SetNbSamples(frameSize)
 			if err := ass.encoder.fifoFrame.SamplesFillSilence(); err != nil {
 				return fmt.Errorf("ffmpeg: zeroing tail audio frame: %w", err)
