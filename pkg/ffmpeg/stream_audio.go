@@ -9,12 +9,18 @@ import (
 )
 
 type audioEncoderState struct {
-	codecID         astiav.CodecID
-	codec           *astiav.Codec
-	codecContext    *astiav.CodecContext
-	packet          *astiav.Packet
-	resampleContext *astiav.SoftwareResampleContext
-	frame           *astiav.Frame
+	codecID             astiav.CodecID
+	codec               *astiav.Codec
+	codecContext        *astiav.CodecContext
+	packet              *astiav.Packet
+	resampleContext     *astiav.SoftwareResampleContext
+	frame               *astiav.Frame
+	targetChannelLayout *astiav.ChannelLayout // if set, overrides decoder layout selection
+	// fifo and fifoFrame are used for fixed-frame-size encoders (e.g. AC-3) to
+	// buffer resampled samples and drain them in exact encoder-frame-sized chunks.
+	fifo      *astiav.AudioFifo
+	fifoFrame *astiav.Frame
+	nextPts   int64 // running PTS counter for fixed-frame-size encoding
 }
 
 // audioStreamState decodes and re-encodes an audio stream.
@@ -43,6 +49,14 @@ func (ass *audioStreamState) free() {
 
 	if ass.encoder.frame != nil {
 		ass.encoder.frame.Free()
+	}
+
+	if ass.encoder.fifo != nil {
+		ass.encoder.fifo.Free()
+	}
+
+	if ass.encoder.fifoFrame != nil {
+		ass.encoder.fifoFrame.Free()
 	}
 }
 
@@ -90,16 +104,31 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 	// Preserve sample rate and channel layout.
 	ass.encoder.codecContext.SetSampleRate(ass.decoder.codecContext.SampleRate())
 
-	// Prefer the decoder's channel layout if the encoder supports it exactly;
-	// fall back to the encoder's first supported layout otherwise.
+	// Determine channel layout: if a target is requested, prefer it; then the
+	// decoder's layout; fall back to the encoder's first supported layout.
 	channelLayout := ass.decoder.codecContext.ChannelLayout()
+	if ass.encoder.targetChannelLayout != nil {
+		channelLayout = *ass.encoder.targetChannelLayout
+	}
 	if layouts := ass.encoder.codec.SupportedChannelLayouts(); len(layouts) > 0 {
 		supported := slices.ContainsFunc(layouts, func(layout astiav.ChannelLayout) bool {
 			return layout.Equal(channelLayout)
 		})
-
 		if !supported {
-			channelLayout = layouts[0]
+			// If the requested target is not supported, try stereo as a fallback
+			// before taking the encoder's first supported layout.
+			if ass.encoder.targetChannelLayout != nil {
+				stereo := astiav.ChannelLayoutStereo
+				if slices.ContainsFunc(layouts, func(layout astiav.ChannelLayout) bool {
+					return layout.Equal(stereo)
+				}) {
+					channelLayout = stereo
+				} else {
+					channelLayout = layouts[0]
+				}
+			} else {
+				channelLayout = layouts[0]
+			}
 		}
 	}
 	ass.encoder.codecContext.SetChannelLayout(channelLayout)
@@ -145,14 +174,46 @@ func (ass *audioStreamState) setupEncoder(_ HWAccel, outputFmt *astiav.FormatCon
 		ass.encoder.frame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
 		ass.encoder.frame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
 		ass.encoder.frame.SetSampleRate(ass.encoder.codecContext.SampleRate())
-		ass.encoder.frame.SetNbSamples(ass.decoder.codecContext.FrameSize())
 
-		if ass.encoder.frame.NbSamples() <= 0 {
-			ass.encoder.frame.SetNbSamples(1024)
-		}
+		if encoderFrameSize := ass.encoder.codecContext.FrameSize(); encoderFrameSize > 0 {
+			// Fixed-frame-size encoder (e.g. AC-3 requires 1536 samples): buffer
+			// resampled output in an AudioFifo and drain it in exact-frame-size
+			// chunks so the encoder always receives full frames.
+			ass.encoder.fifo = astiav.AllocAudioFifo(
+				ass.encoder.codecContext.SampleFormat(),
+				ass.encoder.codecContext.ChannelLayout().Channels(),
+				encoderFrameSize,
+			)
+			if ass.encoder.fifo == nil {
+				return errors.New("failed to allocate audio FIFO")
+			}
 
-		if err := ass.encoder.frame.AllocBuffer(0); err != nil {
-			return fmt.Errorf("allocating audio resample frame buffer: %w", err)
+			ass.encoder.fifoFrame = astiav.AllocFrame()
+			if ass.encoder.fifoFrame == nil {
+				return errors.New("failed to allocate audio FIFO frame")
+			}
+
+			ass.encoder.fifoFrame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
+			ass.encoder.fifoFrame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
+			ass.encoder.fifoFrame.SetSampleRate(ass.encoder.codecContext.SampleRate())
+			ass.encoder.fifoFrame.SetNbSamples(encoderFrameSize)
+
+			if err := ass.encoder.fifoFrame.AllocBuffer(0); err != nil {
+				return fmt.Errorf("allocating audio FIFO frame buffer: %w", err)
+			}
+			// encoder.frame is used as the resampler output; swr_convert_frame
+			// allocates its buffer dynamically based on the actual input size.
+		} else {
+			// Variable-frame-size encoder: pre-allocate the resample output frame.
+			nbSamples := ass.decoder.codecContext.FrameSize()
+			if nbSamples <= 0 {
+				nbSamples = 1024
+			}
+			ass.encoder.frame.SetNbSamples(nbSamples)
+
+			if err := ass.encoder.frame.AllocBuffer(0); err != nil {
+				return fmt.Errorf("allocating audio resample frame buffer: %w", err)
+			}
 		}
 	}
 
@@ -193,14 +254,31 @@ func (ass *audioStreamState) processPacket(packet *astiav.Packet, outputFmt *ast
 
 // encodeAudioFrame resamples (if needed) and encodes a single decoded audio frame.
 func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	encFrame := frame
-
 	if ass.encoder.resampleContext != nil {
 		if err := ass.encoder.resampleContext.ConvertFrame(frame, ass.encoder.frame); err != nil {
 			return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
 		}
 
+		if ass.encoder.fifo != nil {
+			// Fixed-frame-size path: buffer in FIFO and drain in encoder-sized chunks.
+			if _, err := ass.encoder.fifo.Write(ass.encoder.frame); err != nil {
+				ass.encoder.frame.Unref()
+				return fmt.Errorf("ffmpeg: writing to audio FIFO: %w", err)
+			}
+			// av_frame_unref resets format fields; restore them so the next
+			// swr_convert_frame call sees the expected output parameters.
+			ass.encoder.frame.Unref()
+			ass.encoder.frame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
+			ass.encoder.frame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
+			ass.encoder.frame.SetSampleRate(ass.encoder.codecContext.SampleRate())
+			return ass.drainFifo(outputFmt, progressCh, totalDuration)
+		}
+
 		ass.encoder.frame.SetPts(frame.Pts())
+	}
+
+	encFrame := frame
+	if ass.encoder.resampleContext != nil {
 		encFrame = ass.encoder.frame
 	}
 
@@ -209,6 +287,29 @@ func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *as
 	}
 
 	return ass.receiveAndWritePackets(ass.encoder.codecContext, ass.encoder.packet, outputFmt, progressCh, totalDuration)
+}
+
+// drainFifo reads encoder-frame-sized chunks from the FIFO and encodes them
+// until fewer than a full frame's worth of samples remain.
+func (ass *audioStreamState) drainFifo(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	frameSize := ass.encoder.codecContext.FrameSize()
+	for ass.encoder.fifo.Size() >= frameSize {
+		ass.encoder.fifoFrame.SetPts(ass.encoder.nextPts)
+		ass.encoder.nextPts += int64(frameSize)
+
+		if _, err := ass.encoder.fifo.Read(ass.encoder.fifoFrame); err != nil {
+			return fmt.Errorf("ffmpeg: reading from audio FIFO: %w", err)
+		}
+
+		if err := ass.encoder.codecContext.SendFrame(ass.encoder.fifoFrame); err != nil {
+			return fmt.Errorf("ffmpeg: sending audio frame to encoder: %w", err)
+		}
+
+		if err := ass.receiveAndWritePackets(ass.encoder.codecContext, ass.encoder.packet, outputFmt, progressCh, totalDuration); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // flush implements the stream interface for audio. It first drains any frames
@@ -234,6 +335,24 @@ func (ass *audioStreamState) flush(outputFmt *astiav.FormatContext, progressCh c
 		}
 
 		ass.decoder.frame.Unref()
+	}
+
+	// Flush any samples remaining in the resampler's internal delay buffer.
+	if ass.encoder.resampleContext != nil && ass.encoder.fifo != nil {
+		if err := ass.encoder.resampleContext.ConvertFrame(nil, ass.encoder.frame); err == nil {
+			if ass.encoder.frame.NbSamples() > 0 {
+				_, _ = ass.encoder.fifo.Write(ass.encoder.frame)
+				ass.encoder.frame.Unref()
+				ass.encoder.frame.SetChannelLayout(ass.encoder.codecContext.ChannelLayout())
+				ass.encoder.frame.SetSampleFormat(ass.encoder.codecContext.SampleFormat())
+				ass.encoder.frame.SetSampleRate(ass.encoder.codecContext.SampleRate())
+			}
+		}
+		// Drain any complete frames remaining in the FIFO.
+		if err := ass.drainFifo(outputFmt, progressCh, totalDuration); err != nil {
+			return err
+		}
+		// Remaining samples below frameSize are dropped (sub-frame tail).
 	}
 
 	// Flush the encoder.

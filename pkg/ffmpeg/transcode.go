@@ -20,6 +20,7 @@ type TranscodeBuilder struct {
 	excludeStreams        map[int]bool
 	defaultAudioStream    *int // input stream index to mark as default audio; nil = preserve input dispositions
 	defaultSubtitleStream *int // input stream index to mark as default subtitle; nil = preserve input dispositions
+	downmixSourceIdx      *int // input stream index to synthesize a downmixed audio stream from; nil = no downmix
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -105,6 +106,15 @@ func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder
 	return b
 }
 
+// WithDownmix synthesizes an additional downmixed audio stream from the input
+// stream at sourceStreamIndex. The downmix targets a 2.1 channel layout with
+// AC-3 encoding; if the encoder does not support 2.1, stereo is used instead.
+// The synthesized stream is appended after all other output streams.
+func (b *TranscodeBuilder) WithDownmix(sourceStreamIndex int) *TranscodeBuilder {
+	b.downmixSourceIdx = &sourceStreamIndex
+	return b
+}
+
 // Build returns a runnable Transcoder.
 func (b *TranscodeBuilder) Build() *Transcoder {
 	return &Transcoder{TranscodeBuilder: *b}
@@ -142,7 +152,16 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	}
 	defer freeStreams(streams)
 
-	outputFmt, closeIO, err := t.setupOutputContext(streams, inputFmt, effectiveHW)
+	var downmix *audioStreamState
+	if t.downmixSourceIdx != nil {
+		downmix, err = t.buildDownmixState(inputFmt, *t.downmixSourceIdx)
+		if err != nil {
+			return err
+		}
+		defer downmix.free()
+	}
+
+	outputFmt, closeIO, err := t.setupOutputContext(streams, downmix, inputFmt, effectiveHW)
 	if err != nil {
 		return err
 	}
@@ -157,11 +176,11 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		t.startHook()
 	}
 
-	if err := t.readAllPackets(ctx, inputFmt, outputFmt, streams, interrupter, totalDuration); err != nil {
+	if err := t.readAllPackets(ctx, inputFmt, outputFmt, streams, downmix, interrupter, totalDuration); err != nil {
 		return err
 	}
 
-	if err := t.flushAllEncoders(ctx, outputFmt, streams, interrupter, totalDuration); err != nil {
+	if err := t.flushAllEncoders(ctx, outputFmt, streams, downmix, interrupter, totalDuration); err != nil {
 		return err
 	}
 
@@ -225,6 +244,30 @@ func (t *Transcoder) openInputContext(ctx context.Context) (*astiav.FormatContex
 	return inputFmt, interrupter, cancelWatch, nil
 }
 
+// buildDownmixState creates an audioStreamState that will decode the input
+// stream at sourceIdx and re-encode it as a downmixed AC-3 stream targeting
+// a 2.1 channel layout (with stereo fallback).
+func (t *Transcoder) buildDownmixState(inputFmt *astiav.FormatContext, sourceIdx int) (*audioStreamState, error) {
+	for _, inStream := range inputFmt.Streams() {
+		if inStream.Index() != sourceIdx {
+			continue
+		}
+		layout2Point1 := astiav.ChannelLayout2Point1
+		state := &audioStreamState{
+			copyStreamState: copyStreamState{inStream: inStream},
+			encoder: audioEncoderState{
+				codecID:             CodecAC3,
+				targetChannelLayout: &layout2Point1,
+			},
+		}
+		if err := state.setupDecoder(inStream); err != nil {
+			return nil, fmt.Errorf("ffmpeg: setting up downmix decoder for stream %d: %w", sourceIdx, err)
+		}
+		return state, nil
+	}
+	return nil, fmt.Errorf("ffmpeg: downmix source stream %d not found in input", sourceIdx)
+}
+
 // buildStreamStates creates a stream for every input stream.
 // Audio and video streams are set up with a decoder when re-encoding is
 // requested; the hwAccel hint is passed through so hardware decoders can be
@@ -274,7 +317,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 // sets up encoders for re-encoded streams, and opens the IO context for
 // file-based output. The returned closeIO function must be deferred by the
 // caller — it flushes the IO context's buffers.
-func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav.FormatContext, effectiveHW HWAccel) (*astiav.FormatContext, func(), error) {
+func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioStreamState, inputFmt *astiav.FormatContext, effectiveHW HWAccel) (*astiav.FormatContext, func(), error) {
 	noopClose := func() {}
 
 	outputFmt, err := astiav.AllocOutputFormatContext(nil, string(t.container), t.outputPath)
@@ -329,6 +372,57 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, inputFmt *astiav
 		outStream.SetTimeBase(inStream.TimeBase())
 	}
 
+	// Add the downmix output stream after all regular streams.
+	if downmix != nil {
+		if err := downmix.setupEncoder(effectiveHW, outputFmt); err != nil {
+			outputFmt.Free()
+			return nil, noopClose, fmt.Errorf("ffmpeg: setting up downmix encoder: %w", err)
+		}
+
+		downmixOut := outputFmt.NewStream(nil)
+		if downmixOut == nil {
+			outputFmt.Free()
+			return nil, noopClose, errors.New("ffmpeg: failed to create downmix output stream")
+		}
+		downmix.setOutputStream(downmixOut)
+
+		if err := downmixOut.CodecParameters().FromCodecContext(downmix.encoderContext()); err != nil {
+			outputFmt.Free()
+			return nil, noopClose, fmt.Errorf("ffmpeg: updating codec parameters for downmix stream: %w", err)
+		}
+		downmixOut.SetTimeBase(downmix.encoderContext().TimeBase())
+
+		// Set default disposition only if no regular audio stream is already default.
+		hasDefaultAudio := false
+		for _, inStream := range inputFmt.Streams() {
+			if inStream.CodecParameters().MediaType() != astiav.MediaTypeAudio {
+				continue
+			}
+			if _, ok := streams[inStream.Index()]; !ok {
+				continue
+			}
+			if t.outputDisposition(inStream).Has(astiav.DispositionFlagDefault) {
+				hasDefaultAudio = true
+				break
+			}
+		}
+		downmixDisp := astiav.DispositionFlags(0)
+		if !hasDefaultAudio {
+			downmixDisp = downmixDisp.Add(astiav.DispositionFlagDefault)
+		}
+		downmixOut.SetDispositionFlags(downmixDisp)
+
+		// Inherit language tag from the source stream.
+		if meta := downmix.inStream.Metadata(); meta != nil {
+			if srcLang := meta.Get("language", nil, astiav.NewDictionaryFlags()); srcLang != nil {
+				langDict := astiav.NewDictionary()
+				if err := langDict.Set("language", srcLang.Value(), astiav.NewDictionaryFlags()); err == nil {
+					downmixOut.SetMetadata(langDict)
+				}
+			}
+		}
+	}
+
 	// Open the IO context for file-based output formats.
 	closeIO := noopClose
 	if !outputFmt.OutputFormat().Flags().Has(astiav.IOFormatFlagNofile) {
@@ -371,9 +465,16 @@ func (t *Transcoder) outputDisposition(inStream *astiav.Stream) astiav.Dispositi
 }
 
 // readAllPackets is the main decode/encode loop.
-func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
+func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *astiav.FormatContext, streams map[int]stream, downmix *audioStreamState, interrupter *astiav.IOInterrupter, totalDuration int64) error {
 	packet := astiav.AllocPacket()
 	defer packet.Free()
+
+	// Pre-allocate a packet for downmix cloning to avoid per-packet allocation.
+	var downmixPkt *astiav.Packet
+	if downmix != nil {
+		downmixPkt = astiav.AllocPacket()
+		defer downmixPkt.Free()
+	}
 
 	for {
 		if err := inputFmt.ReadFrame(packet); err != nil {
@@ -386,6 +487,22 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 			}
 
 			return fmt.Errorf("ffmpeg: reading frame: %w", err)
+		}
+
+		// If this packet feeds the downmix pipeline, clone it first so that
+		// the downmix decoder can rescale timestamps independently.
+		if downmix != nil && packet.StreamIndex() == downmix.inStream.Index() {
+			if err := downmixPkt.Ref(packet); err == nil {
+				if dmErr := downmix.processPacket(downmixPkt, outputFmt, t.progressCh, totalDuration); dmErr != nil {
+					downmixPkt.Unref()
+					packet.Unref()
+					if interrupter.Interrupted() {
+						return ctx.Err()
+					}
+					return dmErr
+				}
+				downmixPkt.Unref()
+			}
 		}
 
 		s, ok := streams[packet.StreamIndex()]
@@ -410,8 +527,16 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 }
 
 // flushAllEncoders drains buffered frames from every active encoder.
-func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.FormatContext, streams map[int]stream, interrupter *astiav.IOInterrupter, totalDuration int64) error {
+func (t *Transcoder) flushAllEncoders(ctx context.Context, outputFmt *astiav.FormatContext, streams map[int]stream, downmix *audioStreamState, interrupter *astiav.IOInterrupter, totalDuration int64) error {
+	toFlush := make([]stream, 0, len(streams)+1)
 	for _, s := range streams {
+		toFlush = append(toFlush, s)
+	}
+	if downmix != nil {
+		toFlush = append(toFlush, downmix)
+	}
+
+	for _, s := range toFlush {
 		err := s.flush(outputFmt, t.progressCh, totalDuration)
 
 		if err == nil {

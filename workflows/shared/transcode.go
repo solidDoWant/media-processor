@@ -29,7 +29,7 @@ func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 // without that tag are returned so they can be excluded from the output.
 // If no stream is tagged "eng" (including the case where no streams carry any
 // language tag), nil is returned so all streams are preserved as a safe fallback.
-func nonEnglishAudioIndices(streams []StreamInfo) []int {
+func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 	hasEnglish := false
 	for _, s := range streams {
 		if s.Language == "eng" {
@@ -47,6 +47,24 @@ func nonEnglishAudioIndices(streams []StreamInfo) []int {
 		}
 	}
 	return exclude
+}
+
+// downmixSourceIndex returns a pointer to the input stream Index of the first
+// AudioStreamInfo element with ChannelCount >= 4, when no retained audio stream
+// has ChannelCount <= 3 (stereo-compatible). Returns nil if any stream is
+// stereo-compatible, if no surround stream exists, or if the slice is empty.
+func downmixSourceIndex(streams []AudioStreamInfo) *int {
+	var firstSurround *int
+	for _, s := range streams {
+		if s.ChannelCount <= 3 {
+			return nil
+		}
+		if s.ChannelCount >= 4 && firstSurround == nil {
+			idx := s.Index
+			firstSurround = &idx
+		}
+	}
+	return firstSurround
 }
 
 // nonEnglishSubtitleIndices returns the input stream indices of all subtitle
@@ -81,21 +99,45 @@ func firstEnglishIndex(streams []StreamInfo) *int {
 // probe is the output of RunProbe for filePath.
 func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string) error {
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
-	excludeIndices := append(nonEnglishAudioIndices(probe.AudioStreams), nonEnglishSubtitleIndices(probe.SubtitleStreams)...)
+
+	audioExclude := nonEnglishAudioIndices(probe.AudioStreams)
+	excludeIndices := append(audioExclude, nonEnglishSubtitleIndices(probe.SubtitleStreams)...)
+
+	// Compute retained audio streams to decide whether a downmix is needed.
+	excludeSet := make(map[int]bool, len(audioExclude))
+	for _, idx := range audioExclude {
+		excludeSet[idx] = true
+	}
+	retainedAudio := make([]AudioStreamInfo, 0, len(probe.AudioStreams))
+	for _, s := range probe.AudioStreams {
+		if !excludeSet[s.Index] {
+			retainedAudio = append(retainedAudio, s)
+		}
+	}
+
+	// Extract base StreamInfo slice for generic functions (firstEnglishIndex).
+	audioBaseStreams := make([]StreamInfo, len(probe.AudioStreams))
+	for i, s := range probe.AudioStreams {
+		audioBaseStreams[i] = s.StreamInfo
+	}
 
 	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
-	if err := ffmpeg.NewTranscode(filePath, tempPath).
+	builder := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		ExcludeStreams(excludeIndices...).
-		WithDefaultAudioStream(firstEnglishIndex(probe.AudioStreams)).
-		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
-		Build().
-		Run(ctx); err != nil {
+		WithDefaultAudioStream(firstEnglishIndex(audioBaseStreams)).
+		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams))
+
+	if src := downmixSourceIndex(retainedAudio); src != nil {
+		builder = builder.WithDownmix(*src)
+	}
+
+	if err := builder.Build().Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return errors.Join(
 				fmt.Errorf("transcode: %w", err),

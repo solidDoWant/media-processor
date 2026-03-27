@@ -319,6 +319,47 @@ func TestTranscode_WithDefaultAudioStream(t *testing.T) {
 	}
 }
 
+// TestTranscode_WithDownmix verifies that WithDownmix appends an additional
+// AC-3 encoded audio stream derived from the nominated source stream.
+func TestTranscode_WithDownmix(t *testing.T) {
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	audioIndex := -1
+	for _, s := range inputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio {
+			audioIndex = s.Index
+			break
+		}
+	}
+	require.NotEqual(t, -1, audioIndex, "test fixture must have at least one audio stream")
+
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	err = ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithDownmix(audioIndex).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	// Expect one more stream than the input (the downmix).
+	assert.Equal(t, len(inputInfo.Streams)+1, len(outputInfo.Streams),
+		"output must contain one additional stream from the downmix")
+
+	// The extra stream must be AC-3 audio.
+	var foundAC3 bool
+	for _, s := range outputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeAudio && s.CodecName == "ac3" {
+			foundAC3 = true
+			break
+		}
+	}
+	assert.True(t, foundAC3, "output must contain an AC-3 audio stream from the downmix")
+}
+
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
 // returns only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present.
