@@ -62,6 +62,18 @@ func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 	return exclude
 }
 
+// firstEnglishIndex returns the input stream Index of the first StreamInfo
+// element tagged "eng". The second return value is false when no English stream
+// is found.
+func firstEnglishIndex(streams []StreamInfo) (int, bool) {
+	for _, s := range streams {
+		if s.Language == "eng" {
+			return s.Index, true
+		}
+	}
+	return 0, false
+}
+
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
@@ -77,12 +89,18 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(outputDir, mkvBase)
 
-	if err := ffmpeg.NewTranscode(filePath, tempPath).
+	builder := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
-		ExcludeStreams(excludeIndices...).
-		Build().
-		Run(ctx); err != nil {
+		ExcludeStreams(excludeIndices...)
+	if idx, ok := firstEnglishIndex(probe.AudioStreams); ok {
+		builder = builder.WithDefaultAudioStream(idx)
+	}
+	if idx, ok := firstEnglishIndex(probe.SubtitleStreams); ok {
+		builder = builder.WithDefaultSubtitleStream(idx)
+	}
+
+	if err := builder.Build().Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return errors.Join(
 				fmt.Errorf("transcode: %w", err),

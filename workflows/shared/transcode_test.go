@@ -165,6 +165,60 @@ func TestNonEnglishSubtitleIndices(t *testing.T) {
 	}
 }
 
+func TestFirstEnglishIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		streams   []StreamInfo
+		wantIdx   int
+		wantFound bool
+	}{
+		{
+			name: "first eng stream is returned when multiple languages are present",
+			streams: []StreamInfo{
+				{Index: 2, Language: "jpn"},
+				{Index: 3, Language: "eng"},
+				{Index: 4, Language: "eng"},
+			},
+			wantIdx:   3,
+			wantFound: true,
+		},
+		{
+			name:      "single eng stream is returned",
+			streams:   []StreamInfo{{Index: 5, Language: "eng"}},
+			wantIdx:   5,
+			wantFound: true,
+		},
+		{
+			name: "no eng stream returns not found",
+			streams: []StreamInfo{
+				{Index: 1, Language: "jpn"},
+				{Index: 2, Language: "fra"},
+			},
+			wantFound: false,
+		},
+		{
+			name:      "empty slice returns not found",
+			streams:   nil,
+			wantFound: false,
+		},
+		{
+			name:      "untagged stream is not treated as English",
+			streams:   []StreamInfo{{Index: 1, Language: ""}},
+			wantFound: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIdx, gotFound := firstEnglishIndex(tt.streams)
+			assert.Equal(t, tt.wantFound, gotFound)
+			if tt.wantFound {
+				assert.Equal(t, tt.wantIdx, gotIdx)
+			}
+		})
+	}
+}
+
 func TestRunTranscode(t *testing.T) {
 	// The fixture video has one audio stream (index 1) tagged "und" (undefined
 	// language). nonEnglishAudioIndices returns nil when no "eng" stream is
