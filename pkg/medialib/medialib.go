@@ -42,7 +42,7 @@ type Episode struct {
 	// ID is the internal database ID assigned by the backing TV library service.
 	ID int64
 	// SeriesID is the internal database ID of the series this episode belongs to.
-	// Use this with ArrLibrary.RefreshByFilePath to trigger a library rescan.
+	// Used internally by the Sonarr client for series-level refresh.
 	SeriesID      int64
 	SeriesTitle   string
 	SeasonNumber  int
