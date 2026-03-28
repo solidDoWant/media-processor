@@ -69,12 +69,8 @@ func (b *TranscodeBuilder) HardwareAccel(h HWAccel) *TranscodeBuilder {
 // WithHardwareDevice sets the device path passed to CreateHardwareDeviceContext
 // for both the decoder and encoder hardware device contexts. Typical values are
 // "/dev/dri/renderD128" for VAAPI/QSV or "0"/"1" for CUDA device indices.
-// An empty string is a no-op: the device path remains unset and libav will
-// auto-select the hardware device (preserving existing behaviour).
+// An empty string leaves the path unset (libav auto-selects the hardware device).
 func (b *TranscodeBuilder) WithHardwareDevice(path string) *TranscodeBuilder {
-	if path == "" {
-		return b
-	}
 	b.hardwareDevicePath = path
 	return b
 }
