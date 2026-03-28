@@ -146,8 +146,9 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	}
 
 	// Build per-stream title map for retained subtitle streams.
-	subtitleExcludeSet := make(map[int]bool, len(nonEnglishSubtitleIndices(probe.SubtitleStreams)))
-	for _, idx := range nonEnglishSubtitleIndices(probe.SubtitleStreams) {
+	subtitleExclude := nonEnglishSubtitleIndices(probe.SubtitleStreams)
+	subtitleExcludeSet := make(map[int]bool, len(subtitleExclude))
+	for _, idx := range subtitleExclude {
 		subtitleExcludeSet[idx] = true
 	}
 	subtitleTitles := make(map[int]string, len(probe.SubtitleStreams))

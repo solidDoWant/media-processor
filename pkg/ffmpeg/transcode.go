@@ -150,6 +150,9 @@ func (b *TranscodeBuilder) WithAutoDownmixTitle() *TranscodeBuilder {
 // is a no-op. For example, passing "English" produces "English 2.0" instead
 // of "2.0".
 func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
+	if title == "" {
+		return b
+	}
 	b.downmixTitle = title
 	return b
 }
