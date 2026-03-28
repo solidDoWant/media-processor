@@ -130,15 +130,48 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	finalPath := filepath.Join(outputDir, mkvBase)
 
 	// Build per-stream title map for retained audio streams.
-	// Streams with unknown channel layouts (ReportedChannelCount=0) must not
-	// receive a derived channel config label since the actual layout is not known.
+	// Streams with unknown channel layouts (ReportedChannelCount=0) still receive
+	// a language-only title when a language tag is present; otherwise they are skipped.
 	audioTitles := make(map[int]string, len(retainedAudio))
 	for _, s := range retainedAudio {
+		langName := iso639Name(s.Language)
 		if s.ReportedChannelCount == 0 {
+			if langName != "" {
+				audioTitles[s.Index] = langName
+			}
 			continue
 		}
 		label := channelConfigLabel(s.ReportedChannelCount, s.HasLFE)
-		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, label)
+		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, langName, label)
+	}
+
+	// Build per-stream title map for retained subtitle streams.
+	subtitleExcludeSet := make(map[int]bool, len(nonEnglishSubtitleIndices(probe.SubtitleStreams)))
+	for _, idx := range nonEnglishSubtitleIndices(probe.SubtitleStreams) {
+		subtitleExcludeSet[idx] = true
+	}
+	subtitleTitles := make(map[int]string, len(probe.SubtitleStreams))
+	for _, s := range probe.SubtitleStreams {
+		if subtitleExcludeSet[s.Index] {
+			continue
+		}
+		title := buildSubtitleStreamTitle(s.Title, iso639Name(s.Language))
+		if title != "" {
+			subtitleTitles[s.Index] = title
+		}
+	}
+
+	// Resolve the language name for the downmix source stream so the downmix
+	// title can be prefixed with the human-readable language name.
+	downmixSrcIdx := downmixSourceIndex(retainedAudio)
+	var downmixLangName string
+	if downmixSrcIdx != nil {
+		for _, s := range retainedAudio {
+			if s.Index == *downmixSrcIdx {
+				downmixLangName = iso639Name(s.Language)
+				break
+			}
+		}
 	}
 
 	if err := ffmpeg.NewTranscode(filePath, tempPath).
@@ -147,8 +180,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		ExcludeStreams(excludeIndices...).
 		WithDefaultAudioStream(firstEnglishIndex(audioBaseStreams)).
 		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
-		WithDownmix(downmixSourceIndex(retainedAudio)).
+		WithDownmix(downmixSrcIdx).
 		WithAudioStreamTitles(audioTitles).
+		WithSubtitleStreamTitles(subtitleTitles).
+		WithDownmixLangName(downmixLangName).
 		WithAutoDownmixTitle().
 		Build().
 		Run(ctx); err != nil {
