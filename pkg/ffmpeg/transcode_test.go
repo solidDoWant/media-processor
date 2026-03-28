@@ -69,7 +69,7 @@ func TestTranscode_H265_MKV(t *testing.T) {
 
 // TestWithHardwareDevice_EmptyString verifies that passing an empty string to
 // WithHardwareDevice is a no-op: the transcode completes successfully and
-// produces valid output identical to a build without any device path set.
+// produces valid MKV output.
 func TestWithHardwareDevice_EmptyString(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
 
