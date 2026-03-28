@@ -34,9 +34,10 @@ type videoStreamState struct {
 	copyStreamState
 
 	// Decoder state.
-	decoder    videoDecoderState
-	encoder    videoEncoderState
-	isHWDecode bool
+	decoder            videoDecoderState
+	encoder            videoEncoderState
+	isHWDecode         bool
+	hardwareDevicePath string // device path for CreateHardwareDeviceContext; "" = auto-select
 }
 
 func (vds *videoDecoderState) free() {
@@ -84,7 +85,7 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 		hwDecName := hwDecoderNameForCodec(inStream.CodecParameters().CodecID(), profile)
 		if hwDecName != "" {
 			if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
-				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, "", nil, 0)
+				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
 				if err == nil {
 					vss.decoder.hwDevCtx = hwDevCtx
 					vss.decoder.hwPixFmt = profile.hwPixFmt
@@ -188,7 +189,7 @@ func (vss *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Co
 			// decode→encode path when both sides use the same hardware.
 			hwDevCtx := vss.decoder.hwDevCtx
 			if hwDevCtx == nil {
-				hwDevCtx, err = astiav.CreateHardwareDeviceContext(p.deviceType, "", nil, 0)
+				hwDevCtx, err = astiav.CreateHardwareDeviceContext(p.deviceType, vss.hardwareDevicePath, nil, 0)
 				if err != nil {
 					slog.Debug("ffmpeg: hardware encoder device context creation failed, falling back to software",
 						"encoder", hwEncName, "error", err)

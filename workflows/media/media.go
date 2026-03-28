@@ -25,6 +25,9 @@ type MediaWorkflowConfig struct {
 	OutputDir string
 	// WebhookURL is the endpoint to notify on workflow failure.
 	WebhookURL string
+	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
+	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
+	HardwareDevicePath string
 }
 
 // MediaInput is the workflow's trigger payload.
@@ -81,7 +84,7 @@ func NewMediaWorkflow(
 			return struct{}{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir)
+		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath)
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
 	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library

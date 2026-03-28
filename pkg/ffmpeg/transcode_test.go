@@ -67,6 +67,29 @@ func TestTranscode_H265_MKV(t *testing.T) {
 	assert.True(t, foundH265, "output must contain an H.265 video stream")
 }
 
+// TestWithHardwareDevice_EmptyString verifies that passing an empty string to
+// WithHardwareDevice is a no-op: the transcode completes successfully and
+// produces valid output identical to a build without any device path set.
+func TestWithHardwareDevice_EmptyString(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToAudioCodec(ffmpeg.CodecCopy).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithHardwareDevice("").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(output)
+	require.NoError(t, statErr, "output file must exist")
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+	assert.Equal(t, "matroska,webm", info.Format)
+}
+
 // TestTranscode_DefaultSettings verifies that calling NewTranscode with no
 // additional options (copy-all defaults) produces a valid output whose codec,
 // resolution, frame rate, sample rate, channel count, and bitrate all match
