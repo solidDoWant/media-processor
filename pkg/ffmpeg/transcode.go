@@ -16,6 +16,7 @@ type TranscodeBuilder struct {
 	audioCodec            Codec
 	container             Container
 	hwAccel               HWAccel
+	hardwareDevicePath    string // device path passed to CreateHardwareDeviceContext; "" = auto-select
 	progressCh            chan<- Progress
 	startHook             func()
 	excludeStreams        map[int]bool
@@ -62,6 +63,15 @@ func (b *TranscodeBuilder) ToContainer(c Container) *TranscodeBuilder {
 // HardwareAccel sets the hardware acceleration mode.
 func (b *TranscodeBuilder) HardwareAccel(h HWAccel) *TranscodeBuilder {
 	b.hwAccel = h
+	return b
+}
+
+// WithHardwareDevice sets the device path passed to CreateHardwareDeviceContext
+// for both the decoder and encoder hardware device contexts. Typical values are
+// "/dev/dri/renderD128" for VAAPI/QSV or "0"/"1" for CUDA device indices.
+// An empty string leaves the path unset (libav auto-selects the hardware device).
+func (b *TranscodeBuilder) WithHardwareDevice(path string) *TranscodeBuilder {
+	b.hardwareDevicePath = path
 	return b
 }
 
@@ -342,7 +352,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		var s stream
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}}
+			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath}
 			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)

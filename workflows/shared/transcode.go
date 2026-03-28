@@ -100,7 +100,9 @@ func firstEnglishIndex(streams []StreamInfo) *int {
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
 // probe is the output of RunProbe for filePath.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string) error {
+// hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
+// an empty string uses the libav default (auto-select).
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string) error {
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
 
 	audioExclude := nonEnglishAudioIndices(probe.AudioStreams)
@@ -186,6 +188,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		WithSubtitleStreamTitles(subtitleTitles).
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
+		WithHardwareDevice(hardwareDevicePath).
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {

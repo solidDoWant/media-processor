@@ -492,7 +492,7 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir)
+			err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "")
 
 			tt.errFunc(t, err)
 			if tt.check != nil {
