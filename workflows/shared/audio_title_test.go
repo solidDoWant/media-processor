@@ -43,6 +43,12 @@ func TestChannelConfigLabel(t *testing.T) {
 			hasLFE:       false,
 			expected:     "1.0",
 		},
+		{
+			name:         "zero channel count with LFE flag clamps non-LFE to 0",
+			channelCount: 0,
+			hasLFE:       true,
+			expected:     "0.1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -168,6 +174,16 @@ func TestStripChannelConfigLabel(t *testing.T) {
 			name:     "multiple words with trailing label",
 			title:    "Director Commentary 5.1",
 			expected: "Director Commentary",
+		},
+		{
+			name:     "Dolby Atmos 7.1.4 label is not partially stripped",
+			title:    "Atmos 7.1.4",
+			expected: "Atmos 7.1.4",
+		},
+		{
+			name:     "label with Y digit 2 is not stripped",
+			title:    "English 5.2",
+			expected: "English 5.2",
 		},
 	}
 

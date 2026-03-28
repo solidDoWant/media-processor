@@ -30,8 +30,9 @@ var channelLabelRe = regexp.MustCompile(
 		`(?:\s*[-|]\s*)?` +
 		// Optional opening wrapper character
 		`[\[({<"']?` +
-		// The X.Y label
-		`\d+\.\d+` +
+		// The X.Y label: Y is restricted to 0 or 1 (LFE count). Matches
+		// embedded in larger "X.Y.Z" sequences are filtered in stripChannelConfigLabel.
+		`\d+\.[01]` +
 		// Optional ch/CH suffix with optional preceding space
 		`(?:\s*ch)?` +
 		// Optional closing wrapper character
@@ -48,17 +49,44 @@ func channelConfigLabel(channelCount int, hasLFE bool) string {
 	if hasLFE {
 		lfe = 1
 	}
-	return fmt.Sprintf("%d.%d", channelCount-lfe, lfe)
+	nonLFE := channelCount - lfe
+	if nonLFE < 0 {
+		nonLFE = 0
+	}
+	return fmt.Sprintf("%d.%d", nonLFE, lfe)
 }
 
 // stripChannelConfigLabel removes any channel configuration label (and its
 // associated wrapper characters, ch/CH suffix, and adjacent separators) from
 // title, then collapses runs of whitespace and trims leading/trailing space.
+//
+// Matches that are part of a larger "X.Y.Z" sequence (e.g. "7.1.4" for Dolby
+// Atmos) are left intact: the X.Y portion is not stripped when it is
+// immediately followed by ".<digit>".
 func stripChannelConfigLabel(title string) string {
-	stripped := channelLabelRe.ReplaceAllString(title, " ")
-	// Collapse multiple spaces introduced by stripping, and trim edges.
-	stripped = strings.Join(strings.Fields(stripped), " ")
-	return strings.TrimSpace(stripped)
+	matches := channelLabelRe.FindAllStringIndex(title, -1)
+	if len(matches) == 0 {
+		return title
+	}
+
+	var sb strings.Builder
+	prev := 0
+	for _, m := range matches {
+		start, end := m[0], m[1]
+		// If the matched label is immediately followed by ".<digit>", it is
+		// embedded inside a larger X.Y.Z sequence (e.g. "7.1.4"). Leave it alone.
+		if end < len(title) && title[end] == '.' && end+1 < len(title) && title[end+1] >= '0' && title[end+1] <= '9' {
+			sb.WriteString(title[prev:end])
+			prev = end
+			continue
+		}
+		sb.WriteString(title[prev:start])
+		sb.WriteByte(' ')
+		prev = end
+	}
+	sb.WriteString(title[prev:])
+
+	return strings.TrimSpace(strings.Join(strings.Fields(sb.String()), " "))
 }
 
 // buildAudioStreamTitle returns the audio stream title to write into the output

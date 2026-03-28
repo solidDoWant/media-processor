@@ -129,8 +129,14 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	finalPath := filepath.Join(outputDir, mkvBase)
 
 	// Build per-stream title map for retained audio streams.
+	// Streams with unknown channel layouts (ChannelLayoutKnown=false) have their
+	// ChannelCount coerced to 6 for downmix decisions only; they must not receive
+	// a derived channel config label since the actual layout is not known.
 	audioTitles := make(map[int]string, len(retainedAudio))
 	for _, s := range retainedAudio {
+		if !s.ChannelLayoutKnown {
+			continue
+		}
 		label := channelConfigLabel(s.ChannelCount, s.HasLFE)
 		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, label)
 	}

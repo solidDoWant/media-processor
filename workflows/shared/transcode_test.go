@@ -21,8 +21,13 @@ func mkvOutputName(inputPath string) string {
 }
 
 // audioStreamInfo is a test helper that builds an AudioStreamInfo with the given fields.
+// ChannelLayoutKnown is set to true when channels > 0, matching RunProbe behaviour.
 func audioStreamInfo(index int, lang string, channels int) AudioStreamInfo {
-	return AudioStreamInfo{StreamInfo: StreamInfo{Index: index, Language: lang}, ChannelCount: channels}
+	return AudioStreamInfo{
+		StreamInfo:         StreamInfo{Index: index, Language: lang},
+		ChannelCount:       channels,
+		ChannelLayoutKnown: channels > 0,
+	}
 }
 
 func TestSelectVideoCodec(t *testing.T) {
@@ -425,7 +430,7 @@ func TestRunTranscode(t *testing.T) {
 				VideoCodec:   "h264",
 				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
 				AudioStreams: []AudioStreamInfo{
-					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2, HasLFE: false},
+					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2, HasLFE: false, ChannelLayoutKnown: true},
 				},
 			},
 			errFunc: require.NoError,

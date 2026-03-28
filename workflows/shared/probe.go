@@ -22,6 +22,11 @@ type AudioStreamInfo struct {
 	ChannelCount int    `json:"channel_count"`
 	Title        string `json:"title,omitempty"`
 	HasLFE       bool   `json:"has_lfe,omitempty"`
+	// ChannelLayoutKnown is true when ffprobe reported a non-zero channel count for
+	// this stream. When false, ChannelCount has been coerced to a conservative
+	// fallback value (6) for downmix-synthesis decisions only; title generation
+	// must not use ChannelCount or HasLFE in that case.
+	ChannelLayoutKnown bool `json:"channel_layout_known,omitempty"`
 }
 
 // ProbeOutput is the output of the probe step.
@@ -67,7 +72,8 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case ffprobe.CodecTypeAudio:
-			channelCount := s.AudioChannelCount
+			rawChannelCount := s.AudioChannelCount
+			channelCount := rawChannelCount
 			if channelCount == 0 {
 				// ffprobe reports 0 when the channel layout is unknown. Treat
 				// conservatively as surround (6) so the downmix check does not
@@ -75,10 +81,11 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 				channelCount = 6
 			}
 			audioStreams = append(audioStreams, AudioStreamInfo{
-				StreamInfo:   StreamInfo{Index: s.Index, Language: s.Tags["language"]},
-				ChannelCount: channelCount,
-				Title:        s.Tags["title"],
-				HasLFE:       s.HasLFE,
+				StreamInfo:         StreamInfo{Index: s.Index, Language: s.Tags["language"]},
+				ChannelCount:       channelCount,
+				Title:              s.Tags["title"],
+				HasLFE:             s.HasLFE,
+				ChannelLayoutKnown: rawChannelCount != 0,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{

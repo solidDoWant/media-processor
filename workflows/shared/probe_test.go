@@ -26,7 +26,7 @@ func TestRunProbe(t *testing.T) {
 				VideoCodec:   "h264",
 				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
 				AudioStreams: []AudioStreamInfo{
-					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2},
+					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2, ChannelLayoutKnown: true},
 				},
 			},
 			errFunc:     require.NoError,
