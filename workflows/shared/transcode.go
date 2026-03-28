@@ -50,18 +50,19 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 }
 
 // downmixSourceIndex returns a pointer to the input stream Index of the first
-// AudioStreamInfo element with ChannelCount >= 4, when no retained audio stream
-// has ChannelCount <= 3 (stereo-compatible). Returns nil if any stream is
-// stereo-compatible, if no surround stream exists, or if the slice is empty.
-// A ChannelCount of 0 means unknown and is skipped by both checks so that
-// streams with undetectable layouts do not block or trigger downmix synthesis.
+// AudioStreamInfo element with EffectiveChannelCount >= 4, when no retained audio
+// stream has EffectiveChannelCount <= 3 (stereo-compatible). Returns nil if any
+// stream is stereo-compatible, if no surround stream exists, or if the slice is
+// empty. Streams with unknown layouts have EffectiveChannelCount set to a
+// conservative surround value by RunProbe, so they are treated as surround
+// candidates without blocking or triggering synthesis incorrectly.
 func downmixSourceIndex(streams []AudioStreamInfo) *int {
 	var firstSurround *int
 	for _, s := range streams {
-		if s.ChannelCount > 0 && s.ChannelCount <= 3 {
+		if s.EffectiveChannelCount > 0 && s.EffectiveChannelCount <= 3 {
 			return nil
 		}
-		if s.ChannelCount >= 4 && firstSurround == nil {
+		if s.EffectiveChannelCount >= 4 && firstSurround == nil {
 			idx := s.Index
 			firstSurround = &idx
 		}
@@ -129,15 +130,14 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	finalPath := filepath.Join(outputDir, mkvBase)
 
 	// Build per-stream title map for retained audio streams.
-	// Streams with unknown channel layouts (ChannelLayoutKnown=false) have their
-	// ChannelCount coerced to 6 for downmix decisions only; they must not receive
-	// a derived channel config label since the actual layout is not known.
+	// Streams with unknown channel layouts (ReportedChannelCount=0) must not
+	// receive a derived channel config label since the actual layout is not known.
 	audioTitles := make(map[int]string, len(retainedAudio))
 	for _, s := range retainedAudio {
-		if !s.ChannelLayoutKnown {
+		if s.ReportedChannelCount == 0 {
 			continue
 		}
-		label := channelConfigLabel(s.ChannelCount, s.HasLFE)
+		label := channelConfigLabel(s.ReportedChannelCount, s.HasLFE)
 		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, label)
 	}
 

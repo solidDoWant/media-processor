@@ -21,12 +21,17 @@ func mkvOutputName(inputPath string) string {
 }
 
 // audioStreamInfo is a test helper that builds an AudioStreamInfo with the given fields.
-// ChannelLayoutKnown is set to true when channels > 0, matching RunProbe behaviour.
+// EffectiveChannelCount is coerced to 6 when channels is 0, matching RunProbe behaviour
+// for streams with unknown channel layouts.
 func audioStreamInfo(index int, lang string, channels int) AudioStreamInfo {
+	effective := channels
+	if effective == 0 {
+		effective = 6
+	}
 	return AudioStreamInfo{
-		StreamInfo:         StreamInfo{Index: index, Language: lang},
-		ChannelCount:       channels,
-		ChannelLayoutKnown: channels > 0,
+		StreamInfo:            StreamInfo{Index: index, Language: lang},
+		ReportedChannelCount:  channels,
+		EffectiveChannelCount: effective,
 	}
 }
 
@@ -275,14 +280,14 @@ func TestDownmixSourceIndex(t *testing.T) {
 			want:    intPtr(1),
 		},
 		{
-			name:    "zero channel count (unknown layout) is skipped, not treated as stereo-compatible",
+			name:    "zero channel count (unknown layout) is treated as surround candidate, first index returned",
 			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0), audioStreamInfo(2, "eng", 6)},
-			want:    intPtr(2),
+			want:    intPtr(1),
 		},
 		{
-			name:    "all streams with zero channel count return nil (no known surround)",
+			name:    "stream with zero channel count (unknown layout) is treated as surround candidate",
 			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0)},
-			want:    nil,
+			want:    intPtr(1),
 		},
 	}
 
@@ -430,7 +435,7 @@ func TestRunTranscode(t *testing.T) {
 				VideoCodec:   "h264",
 				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
 				AudioStreams: []AudioStreamInfo{
-					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ChannelCount: 2, HasLFE: false, ChannelLayoutKnown: true},
+					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2, HasLFE: false},
 				},
 			},
 			errFunc: require.NoError,

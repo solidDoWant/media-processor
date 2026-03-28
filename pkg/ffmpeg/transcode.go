@@ -114,6 +114,9 @@ func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder
 // whose index appears in the map have their title metadata set. A nil argument
 // is a no-op. Titles are written as stream metadata via outStream.SetMetadata.
 func (b *TranscodeBuilder) WithAudioStreamTitles(titles map[int]string) *TranscodeBuilder {
+	if titles == nil {
+		return b
+	}
 	b.audioStreamTitles = titles
 	return b
 }

@@ -69,24 +69,24 @@ func stripChannelConfigLabel(title string) string {
 		return title
 	}
 
-	var sb strings.Builder
-	prev := 0
-	for _, m := range matches {
-		start, end := m[0], m[1]
+	var buf strings.Builder
+	prevEnd := 0
+	for _, match := range matches {
+		start, end := match[0], match[1]
 		// If the matched label is immediately followed by ".<digit>", it is
 		// embedded inside a larger X.Y.Z sequence (e.g. "7.1.4"). Leave it alone.
 		if end < len(title) && title[end] == '.' && end+1 < len(title) && title[end+1] >= '0' && title[end+1] <= '9' {
-			sb.WriteString(title[prev:end])
-			prev = end
+			buf.WriteString(title[prevEnd:end])
+			prevEnd = end
 			continue
 		}
-		sb.WriteString(title[prev:start])
-		sb.WriteByte(' ')
-		prev = end
+		buf.WriteString(title[prevEnd:start])
+		buf.WriteByte(' ')
+		prevEnd = end
 	}
-	sb.WriteString(title[prev:])
+	buf.WriteString(title[prevEnd:])
 
-	return strings.TrimSpace(strings.Join(strings.Fields(sb.String()), " "))
+	return strings.TrimSpace(strings.Join(strings.Fields(buf.String()), " "))
 }
 
 // buildAudioStreamTitle returns the audio stream title to write into the output
