@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// stripLanguageName removes every whole-word, case-insensitive occurrence of
+// langName from title, then collapses runs of whitespace and trims surrounding
+// space. If langName is empty the title is returned unchanged.
+func stripLanguageName(title, langName string) string {
+	if langName == "" {
+		return title
+	}
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(langName) + `\b`)
+	stripped := re.ReplaceAllLiteralString(title, "")
+	return strings.TrimSpace(strings.Join(strings.Fields(stripped), " "))
+}
+
 // channelLabelRe matches a channel configuration label in any supported format,
 // along with any associated wrapper characters, ch/CH suffix, and adjacent
 // dash/pipe separators. The label format is X.Y where X is the non-LFE channel
@@ -90,13 +102,40 @@ func stripChannelConfigLabel(title string) string {
 }
 
 // buildAudioStreamTitle returns the audio stream title to write into the output
-// file. Any existing channel configuration label is stripped from sourceTitle,
-// then channelLabel is appended. If sourceTitle is empty (or becomes empty after
-// stripping), channelLabel is returned on its own.
-func buildAudioStreamTitle(sourceTitle, channelLabel string) string {
+// file. Any existing channel configuration label and language indicator are
+// stripped from sourceTitle, then the parts are reassembled as
+// "[content] [langName] [channelLabel]" with empty parts omitted.
+//
+// When langName is empty the function behaves like the previous channel-config-
+// only implementation: strip any existing channel label, append channelLabel.
+func buildAudioStreamTitle(sourceTitle, langName, channelLabel string) string {
 	stripped := stripChannelConfigLabel(sourceTitle)
-	if stripped == "" {
-		return channelLabel
+	stripped = stripLanguageName(stripped, langName)
+
+	var parts []string
+	if stripped != "" {
+		parts = append(parts, stripped)
 	}
-	return stripped + " " + channelLabel
+	if langName != "" {
+		parts = append(parts, langName)
+	}
+	if channelLabel != "" {
+		parts = append(parts, channelLabel)
+	}
+	return strings.Join(parts, " ")
+}
+
+// buildSubtitleStreamTitle returns the subtitle stream title to write into the
+// output file. Any existing language indicator is stripped from sourceTitle,
+// then langName is appended. If langName is empty, sourceTitle is returned
+// unchanged (including when it is empty).
+func buildSubtitleStreamTitle(sourceTitle, langName string) string {
+	if langName == "" {
+		return sourceTitle
+	}
+	stripped := stripLanguageName(sourceTitle, langName)
+	if stripped == "" {
+		return langName
+	}
+	return stripped + " " + langName
 }

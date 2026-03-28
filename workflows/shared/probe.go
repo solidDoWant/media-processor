@@ -10,10 +10,12 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
 
-// StreamInfo holds the input stream index and language tag for one audio or subtitle stream.
+// StreamInfo holds the input stream index, language tag, and source title for
+// one audio or subtitle stream.
 type StreamInfo struct {
 	Index    int    `json:"index"`
 	Language string `json:"language"`
+	Title    string `json:"title,omitempty"`
 }
 
 // AudioStreamInfo holds stream info for an audio stream, including channel count.
@@ -26,9 +28,8 @@ type AudioStreamInfo struct {
 	// such as downmix synthesis. When ReportedChannelCount is 0 (unknown layout),
 	// this is set to a conservative surround value (6) so that unknown streams
 	// are treated as surround rather than inadvertently blocking downmix synthesis.
-	EffectiveChannelCount int    `json:"effective_channel_count"`
-	Title                 string `json:"title,omitempty"`
-	HasLFE                bool   `json:"has_lfe,omitempty"`
+	EffectiveChannelCount int  `json:"effective_channel_count"`
+	HasLFE                bool `json:"has_lfe,omitempty"`
 }
 
 // ProbeOutput is the output of the probe step.
@@ -83,16 +84,16 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 				effective = 6
 			}
 			audioStreams = append(audioStreams, AudioStreamInfo{
-				StreamInfo:            StreamInfo{Index: s.Index, Language: s.Tags["language"]},
+				StreamInfo:            StreamInfo{Index: s.Index, Language: s.Tags["language"], Title: s.Tags["title"]},
 				ReportedChannelCount:  reported,
 				EffectiveChannelCount: effective,
-				Title:                 s.Tags["title"],
 				HasLFE:                s.HasLFE,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{
 				Index:    s.Index,
 				Language: s.Tags["language"],
+				Title:    s.Tags["title"],
 			})
 		}
 	}

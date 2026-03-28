@@ -425,11 +425,12 @@ func TestRunTranscode(t *testing.T) {
 			},
 		},
 		{
-			name: "stereo audio stream title is set to channel config label in output",
+			name: "stereo audio stream title includes language name and channel config label",
 			setup: func(t *testing.T) (string, string) {
 				return copyTestVideo(t), t.TempDir()
 			},
-			// Stereo audio (2 channels, no LFE): expected title "2.0".
+			// Stereo audio (2 channels, no LFE), language "und" → "Undetermined":
+			// expected title "Undetermined 2.0".
 			probe: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
@@ -445,7 +446,8 @@ func TestRunTranscode(t *testing.T) {
 				require.NoError(t, err)
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
-						assert.Equal(t, "2.0", s.Tags["title"], "stereo audio stream should have title '2.0'")
+						assert.Equal(t, "Undetermined 2.0", s.Tags["title"],
+							"stereo audio stream should have title 'Undetermined 2.0'")
 						return
 					}
 				}
@@ -453,11 +455,12 @@ func TestRunTranscode(t *testing.T) {
 			},
 		},
 		{
-			name: "downmix stream title is derived from actual encoder channel layout",
+			name: "downmix stream title includes language name and encoder channel layout",
 			setup: func(t *testing.T) (string, string) {
 				return copyTestVideo(t), t.TempDir()
 			},
-			// Report as surround so a downmix is synthesized.
+			// Report as surround so a downmix is synthesized. Language "und" →
+			// "Undetermined": expected title "Undetermined 2.1" or "Undetermined 2.0".
 			probe: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
@@ -470,8 +473,8 @@ func TestRunTranscode(t *testing.T) {
 				info, err := ffprobe.Probe(t.Context(), out)
 				require.NoError(t, err)
 				// The downmix stream is the last audio stream. Its title must be
-				// "2.1" when the AC-3 encoder supports the 2.1 layout, or "2.0"
-				// when it falls back to stereo.
+				// "Undetermined 2.1" when the AC-3 encoder supports the 2.1
+				// layout, or "Undetermined 2.0" when it falls back to stereo.
 				var lastAudio ffprobe.StreamInfo
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
@@ -479,8 +482,8 @@ func TestRunTranscode(t *testing.T) {
 					}
 				}
 				title := lastAudio.Tags["title"]
-				assert.True(t, title == "2.1" || title == "2.0",
-					"downmix stream title should be '2.1' or '2.0', got %q", title)
+				assert.True(t, title == "Undetermined 2.1" || title == "Undetermined 2.0",
+					"downmix stream title should be 'Undetermined 2.1' or 'Undetermined 2.0', got %q", title)
 			},
 		},
 	}

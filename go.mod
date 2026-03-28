@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/asticode/go-astiav v0.40.0
+	github.com/barbashov/iso639-3 v1.0.0
 	github.com/creasty/defaults v1.8.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/hatchet-dev/hatchet v0.83.1
