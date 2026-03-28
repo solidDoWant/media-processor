@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/asticode/go-astiav"
@@ -51,6 +52,9 @@ type StreamInfo struct {
 	// Audio-only fields (zero for non-audio streams).
 	AudioSampleRateHz int
 	AudioChannelCount int
+	// HasLFE is true when the audio stream's channel layout includes a dedicated
+	// Low Frequency Effects (subwoofer) channel. Always false for non-audio streams.
+	HasLFE bool
 }
 
 // Probe opens the media file at path, reads its container and stream metadata,
@@ -128,12 +132,29 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 			streamInfo.FramesPerSecond = stream.AvgFrameRate().Float64()
 		case astiav.MediaTypeAudio:
 			streamInfo.AudioSampleRateHz = codecParams.SampleRate()
-			streamInfo.AudioChannelCount = codecParams.ChannelLayout().Channels()
+			layout := codecParams.ChannelLayout()
+			streamInfo.AudioChannelCount = layout.Channels()
+			streamInfo.HasLFE = hasLFEChannel(layout)
 		}
 		info.Streams = append(info.Streams, streamInfo)
 	}
 
 	return info, nil
+}
+
+// hasLFEChannel reports whether the channel layout includes a dedicated Low
+// Frequency Effects (subwoofer) channel. FFmpeg describes layouts with an LFE
+// channel using a numeric "X.Y" string where Y > 0 (e.g. "5.1", "2.1").
+// Named layouts (e.g. "stereo", "mono") and zero-LFE numeric layouts (e.g.
+// "5.0") return false.
+func hasLFEChannel(layout astiav.ChannelLayout) bool {
+	desc := layout.String()
+	idx := strings.Index(desc, ".")
+	if idx < 0 || idx+1 >= len(desc) {
+		return false
+	}
+	c := desc[idx+1]
+	return c >= '1' && c <= '9'
 }
 
 // dictionaryToMap converts an astiav Dictionary into a Go map. Returns nil if

@@ -21,8 +21,18 @@ func mkvOutputName(inputPath string) string {
 }
 
 // audioStreamInfo is a test helper that builds an AudioStreamInfo with the given fields.
+// EffectiveChannelCount is coerced to 6 when channels is 0, matching RunProbe behaviour
+// for streams with unknown channel layouts.
 func audioStreamInfo(index int, lang string, channels int) AudioStreamInfo {
-	return AudioStreamInfo{StreamInfo: StreamInfo{Index: index, Language: lang}, ChannelCount: channels}
+	effective := channels
+	if effective == 0 {
+		effective = 6
+	}
+	return AudioStreamInfo{
+		StreamInfo:            StreamInfo{Index: index, Language: lang},
+		ReportedChannelCount:  channels,
+		EffectiveChannelCount: effective,
+	}
 }
 
 func TestSelectVideoCodec(t *testing.T) {
@@ -270,14 +280,14 @@ func TestDownmixSourceIndex(t *testing.T) {
 			want:    intPtr(1),
 		},
 		{
-			name:    "zero channel count (unknown layout) is skipped, not treated as stereo-compatible",
+			name:    "zero channel count (unknown layout) is treated as surround candidate, first index returned",
 			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0), audioStreamInfo(2, "eng", 6)},
-			want:    intPtr(2),
+			want:    intPtr(1),
 		},
 		{
-			name:    "all streams with zero channel count return nil (no known surround)",
+			name:    "stream with zero channel count (unknown layout) is treated as surround candidate",
 			streams: []AudioStreamInfo{audioStreamInfo(1, "eng", 0)},
-			want:    nil,
+			want:    intPtr(1),
 		},
 	}
 
@@ -412,6 +422,65 @@ func TestRunTranscode(t *testing.T) {
 					}
 				}
 				assert.Equal(t, 2, audioCount, "output should contain original audio stream plus one downmixed stream")
+			},
+		},
+		{
+			name: "stereo audio stream title is set to channel config label in output",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
+			},
+			// Stereo audio (2 channels, no LFE): expected title "2.0".
+			probe: ProbeOutput{
+				IsValidMedia: true,
+				VideoCodec:   "h264",
+				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+				AudioStreams: []AudioStreamInfo{
+					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2, HasLFE: false},
+				},
+			},
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := filepath.Join(outputDir, mkvOutputName(inputPath))
+				info, err := ffprobe.Probe(t.Context(), out)
+				require.NoError(t, err)
+				for _, s := range info.Streams {
+					if s.CodecType == ffprobe.CodecTypeAudio {
+						assert.Equal(t, "2.0", s.Tags["title"], "stereo audio stream should have title '2.0'")
+						return
+					}
+				}
+				t.Fatal("no audio stream found in output")
+			},
+		},
+		{
+			name: "downmix stream title is derived from actual encoder channel layout",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
+			},
+			// Report as surround so a downmix is synthesized.
+			probe: ProbeOutput{
+				IsValidMedia: true,
+				VideoCodec:   "h264",
+				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+				AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 6)},
+			},
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := filepath.Join(outputDir, mkvOutputName(inputPath))
+				info, err := ffprobe.Probe(t.Context(), out)
+				require.NoError(t, err)
+				// The downmix stream is the last audio stream. Its title must be
+				// "2.1" when the AC-3 encoder supports the 2.1 layout, or "2.0"
+				// when it falls back to stereo.
+				var lastAudio ffprobe.StreamInfo
+				for _, s := range info.Streams {
+					if s.CodecType == ffprobe.CodecTypeAudio {
+						lastAudio = s
+					}
+				}
+				title := lastAudio.Tags["title"]
+				assert.True(t, title == "2.1" || title == "2.0",
+					"downmix stream title should be '2.1' or '2.0', got %q", title)
 			},
 		},
 	}

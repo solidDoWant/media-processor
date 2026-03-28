@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/asticode/go-astiav"
 )
@@ -18,9 +19,11 @@ type TranscodeBuilder struct {
 	progressCh            chan<- Progress
 	startHook             func()
 	excludeStreams        map[int]bool
-	defaultAudioStream    *int // input stream index to mark as default audio; nil = preserve input dispositions
-	defaultSubtitleStream *int // input stream index to mark as default subtitle; nil = preserve input dispositions
-	downmixSourceIdx      *int // input stream index to synthesize a downmixed audio stream from; nil = no downmix
+	defaultAudioStream    *int           // input stream index to mark as default audio; nil = preserve input dispositions
+	defaultSubtitleStream *int           // input stream index to mark as default subtitle; nil = preserve input dispositions
+	downmixSourceIdx      *int           // input stream index to synthesize a downmixed audio stream from; nil = no downmix
+	audioStreamTitles     map[int]string // per-stream title overrides keyed by input stream index; nil = no overrides
+	autoDownmixTitle      bool           // derive downmix stream title from actual encoder channel layout
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -103,6 +106,28 @@ func (b *TranscodeBuilder) WithDefaultAudioStream(idx *int) *TranscodeBuilder {
 // subtitle stream dispositions are copied from the input unchanged.
 func (b *TranscodeBuilder) WithDefaultSubtitleStream(idx *int) *TranscodeBuilder {
 	b.defaultSubtitleStream = idx
+	return b
+}
+
+// WithAudioStreamTitles sets per-stream title overrides for regular (non-downmix)
+// audio output streams. The map is keyed by input stream index; only streams
+// whose index appears in the map have their title metadata set. A nil argument
+// is a no-op. Titles are written as stream metadata via outStream.SetMetadata.
+func (b *TranscodeBuilder) WithAudioStreamTitles(titles map[int]string) *TranscodeBuilder {
+	if titles == nil {
+		return b
+	}
+	b.audioStreamTitles = titles
+	return b
+}
+
+// WithAutoDownmixTitle enables automatic derivation of the downmix stream title
+// from the actual encoder channel layout resolved after encoder setup. The title
+// is set to "X.Y" where X is the non-LFE channel count and Y is 1 if an LFE
+// channel is present, 0 otherwise (e.g. "2.1" or "2.0"). Has no effect when no
+// downmix stream is configured.
+func (b *TranscodeBuilder) WithAutoDownmixTitle() *TranscodeBuilder {
+	b.autoDownmixTitle = true
 	return b
 }
 
@@ -358,19 +383,31 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 				return nil, noopClose, fmt.Errorf("ffmpeg: updating codec parameters for stream %d: %w", inStream.Index(), err)
 			}
 			outStream.SetTimeBase(encCtx.TimeBase())
-			continue
+		} else {
+			// Copy stream: copy parameters from the input stream.
+			if err := inStream.CodecParameters().Copy(outStream.CodecParameters()); err != nil {
+				outputFmt.Free()
+				return nil, noopClose, fmt.Errorf("ffmpeg: copying codec parameters for stream %d: %w", inStream.Index(), err)
+			}
+
+			// Clear the source-container codec tag (e.g. mp4a) which would be
+			// incompatible with the output container (e.g. matroska).
+			outStream.CodecParameters().SetCodecTag(0)
+			outStream.SetTimeBase(inStream.TimeBase())
 		}
 
-		// Copy stream: copy parameters from the input stream.
-		if err := inStream.CodecParameters().Copy(outStream.CodecParameters()); err != nil {
-			outputFmt.Free()
-			return nil, noopClose, fmt.Errorf("ffmpeg: copying codec parameters for stream %d: %w", inStream.Index(), err)
+		// Apply per-stream title override for audio streams.
+		if inStream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
+			if title, ok := t.audioStreamTitles[inStream.Index()]; ok {
+				titleDict := astiav.NewDictionary()
+				if err := titleDict.Set("title", title, astiav.NewDictionaryFlags()); err != nil {
+					titleDict.Free()
+					outputFmt.Free()
+					return nil, noopClose, fmt.Errorf("ffmpeg: setting title metadata for stream %d: %w", inStream.Index(), err)
+				}
+				outStream.SetMetadata(titleDict)
+			}
 		}
-
-		// Clear the source-container codec tag (e.g. mp4a) which would be
-		// incompatible with the output container (e.g. matroska).
-		outStream.CodecParameters().SetCodecTag(0)
-		outStream.SetTimeBase(inStream.TimeBase())
 	}
 
 	// Add the downmix output stream after all regular streams.
@@ -413,18 +450,27 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 		}
 		downmixOut.SetDispositionFlags(downmixDisp)
 
-		// Inherit language tag from the source stream.
+		// Build metadata dict for the downmix stream: inherit language from the
+		// source stream and optionally derive the title from the encoder layout.
+		downmixMeta := astiav.NewDictionary()
 		if meta := downmix.inStream.Metadata(); meta != nil {
 			if srcLang := meta.Get("language", nil, astiav.NewDictionaryFlags()); srcLang != nil {
-				langDict := astiav.NewDictionary()
-				if err := langDict.Set("language", srcLang.Value(), astiav.NewDictionaryFlags()); err != nil {
-					langDict.Free()
+				if err := downmixMeta.Set("language", srcLang.Value(), astiav.NewDictionaryFlags()); err != nil {
+					downmixMeta.Free()
 					outputFmt.Free()
 					return nil, noopClose, fmt.Errorf("ffmpeg: setting language metadata for downmix stream: %w", err)
 				}
-				downmixOut.SetMetadata(langDict)
 			}
 		}
+		if t.autoDownmixTitle {
+			title := channelLayoutLabel(downmix.encoderContext().ChannelLayout())
+			if err := downmixMeta.Set("title", title, astiav.NewDictionaryFlags()); err != nil {
+				downmixMeta.Free()
+				outputFmt.Free()
+				return nil, noopClose, fmt.Errorf("ffmpeg: setting title metadata for downmix stream: %w", err)
+			}
+		}
+		downmixOut.SetMetadata(downmixMeta)
 	}
 
 	// Open the IO context for file-based output formats.
@@ -530,6 +576,26 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 
 		return err
 	}
+}
+
+// channelLayoutLabel returns the channel configuration label (e.g. "5.1", "2.0")
+// for the given channel layout. FFmpeg describes layouts with LFE channels in
+// "X.Y" numeric form (e.g. "5.1", "2.1") and named layouts (e.g. "stereo") for
+// those without LFE. Named layouts are converted to "N.0"; numeric layouts are
+// used directly (truncated at the first space or parenthesis to strip qualifiers
+// like "(side)").
+func channelLayoutLabel(layout astiav.ChannelLayout) string {
+	desc := layout.String()
+	if len(desc) > 0 && desc[0] >= '0' && desc[0] <= '9' {
+		// Numeric form: extract the "X.Y" prefix, stopping at any qualifier.
+		end := strings.IndexAny(desc, " (")
+		if end < 0 {
+			end = len(desc)
+		}
+		return desc[:end]
+	}
+	// Named layout: no LFE channel.
+	return fmt.Sprintf("%d.0", layout.Channels())
 }
 
 // flushAllEncoders drains buffered frames from every active encoder.

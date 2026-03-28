@@ -19,7 +19,16 @@ type StreamInfo struct {
 // AudioStreamInfo holds stream info for an audio stream, including channel count.
 type AudioStreamInfo struct {
 	StreamInfo
-	ChannelCount int `json:"channel_count"`
+	// ReportedChannelCount is the channel count as reported by ffprobe.
+	// A value of 0 means the channel layout could not be detected.
+	ReportedChannelCount int `json:"reported_channel_count"`
+	// EffectiveChannelCount is the channel count used for processing decisions
+	// such as downmix synthesis. When ReportedChannelCount is 0 (unknown layout),
+	// this is set to a conservative surround value (6) so that unknown streams
+	// are treated as surround rather than inadvertently blocking downmix synthesis.
+	EffectiveChannelCount int    `json:"effective_channel_count"`
+	Title                 string `json:"title,omitempty"`
+	HasLFE                bool   `json:"has_lfe,omitempty"`
 }
 
 // ProbeOutput is the output of the probe step.
@@ -65,16 +74,20 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case ffprobe.CodecTypeAudio:
-			channelCount := s.AudioChannelCount
-			if channelCount == 0 {
-				// ffprobe reports 0 when the channel layout is unknown. Treat
-				// conservatively as surround (6) so the downmix check does not
+			reported := s.AudioChannelCount
+			effective := reported
+			if effective == 0 {
+				// ffprobe reports 0 when the channel layout is unknown. Use a
+				// conservative surround value so the downmix check does not
 				// incorrectly suppress synthesis by matching the stereo threshold.
-				channelCount = 6
+				effective = 6
 			}
 			audioStreams = append(audioStreams, AudioStreamInfo{
-				StreamInfo:   StreamInfo{Index: s.Index, Language: s.Tags["language"]},
-				ChannelCount: channelCount,
+				StreamInfo:            StreamInfo{Index: s.Index, Language: s.Tags["language"]},
+				ReportedChannelCount:  reported,
+				EffectiveChannelCount: effective,
+				Title:                 s.Tags["title"],
+				HasLFE:                s.HasLFE,
 			})
 		case ffprobe.CodecTypeSubtitle:
 			subtitleStreams = append(subtitleStreams, StreamInfo{
