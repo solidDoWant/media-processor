@@ -183,7 +183,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		WithDownmix(downmixSrcIdx).
 		WithAudioStreamTitles(audioTitles).
 		WithSubtitleStreamTitles(subtitleTitles).
-		WithDownmixLangName(downmixLangName).
+		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		Build().
 		Run(ctx); err != nil {

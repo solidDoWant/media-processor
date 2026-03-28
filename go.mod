@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/asticode/go-astiav v0.40.0
+	github.com/barbashov/iso639-3 v1.0.0
 	github.com/creasty/defaults v1.8.0
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/hatchet-dev/hatchet v0.83.1
@@ -21,7 +22,6 @@ require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/asticode/go-astikit v0.59.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
-	github.com/barbashov/iso639-3 v1.0.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

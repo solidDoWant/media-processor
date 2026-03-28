@@ -25,7 +25,7 @@ type TranscodeBuilder struct {
 	audioStreamTitles     map[int]string // per-stream title overrides keyed by input stream index; nil = no overrides
 	subtitleStreamTitles  map[int]string // per-stream title overrides for subtitle streams; nil = no overrides
 	autoDownmixTitle      bool           // derive downmix stream title from actual encoder channel layout
-	downmixLangName       string         // human-readable language name prepended to the downmix title
+	downmixTitle          string         // title prefix prepended to the downmix channel layout label
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -145,12 +145,12 @@ func (b *TranscodeBuilder) WithAutoDownmixTitle() *TranscodeBuilder {
 	return b
 }
 
-// WithDownmixLangName sets the human-readable language name to prepend to the
-// downmix stream title when WithAutoDownmixTitle is also set. An empty string
+// WithDownmixTitle sets a title prefix to prepend to the downmix stream's
+// channel layout label when WithAutoDownmixTitle is also set. An empty string
 // is a no-op. For example, passing "English" produces "English 2.0" instead
 // of "2.0".
-func (b *TranscodeBuilder) WithDownmixLangName(name string) *TranscodeBuilder {
-	b.downmixLangName = name
+func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
+	b.downmixTitle = title
 	return b
 }
 
@@ -501,8 +501,8 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 		if t.autoDownmixTitle {
 			channelLabel := channelLayoutLabel(downmix.encoderContext().ChannelLayout())
 			title := channelLabel
-			if t.downmixLangName != "" {
-				title = t.downmixLangName + " " + channelLabel
+			if t.downmixTitle != "" {
+				title = t.downmixTitle + " " + channelLabel
 			}
 			if err := downmixMeta.Set("title", title, astiav.NewDictionaryFlags()); err != nil {
 				downmixMeta.Free()
