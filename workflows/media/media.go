@@ -61,11 +61,11 @@ func NewMediaWorkflow(
 	sonarrClient medialib.ArrLibrary,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
-	mp := cfg.MeterProvider
-	if mp == nil {
-		mp = noop.NewMeterProvider()
+	meterProvider := cfg.MeterProvider
+	if meterProvider == nil {
+		meterProvider = noop.NewMeterProvider()
 	}
-	recorder, err := NewRecorder(mp, cfg.HighCardinalityLabels)
+	recorder, err := NewRecorder(meterProvider, cfg.HighCardinalityLabels)
 	if err != nil {
 		// Instrument registration errors are non-fatal: fall back to a noop recorder
 		// so the workflow can still run without metrics.
@@ -153,6 +153,9 @@ func NewMediaWorkflow(
 			if libErr == nil {
 				info, infoErr := library.GetInfo(ctx, input.FilePath)
 				if infoErr != nil {
+					// GetInfo failure is best-effort: log it and count it, but do not
+					// return an error. The step continues and records metrics without
+					// high-cardinality labels rather than failing the workflow run.
 					recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
 				} else {
 					mediaInfo = info
