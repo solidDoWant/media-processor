@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,15 +36,17 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 
 	// The server is already listening on l; no poll needed.
 	url := "http://" + l.Addr().String() + "/metrics"
-	resp, err := http.Get(url) //nolint:noctx
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url) //nolint:noctx
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
+	// Verify the response Content-Type is Prometheus text exposition format.
+	contentType := resp.Header.Get("Content-Type")
+	assert.True(t, len(contentType) > 0 && contentType[:10] == "text/plain", "metrics endpoint should return Prometheus text exposition format, got: %s", contentType)
+	_, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	// Prometheus text format always contains comment lines starting with '#'.
-	assert.True(t, strings.Contains(string(body), "#"), "response body should contain Prometheus-format metrics")
 }
 
 func TestPrometheusEndpoint_Disabled(t *testing.T) {
@@ -110,7 +111,8 @@ func TestBothExporters_Active(t *testing.T) {
 	defer p.Shutdown(context.Background()) //nolint:errcheck
 
 	// Prometheus endpoint should respond immediately (server already bound).
-	resp, err := http.Get("http://" + promListener.Addr().String() + "/metrics") //nolint:noctx
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://" + promListener.Addr().String() + "/metrics") //nolint:noctx
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

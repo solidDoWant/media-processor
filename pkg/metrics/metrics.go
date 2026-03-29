@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -81,9 +82,12 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	if otlpEndpoint != "" {
 		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(otlpEndpoint))
 		if err != nil {
-			// Shut down any already-started servers before returning.
+			// Shut down any already-started servers before returning. Use a fresh context
+			// because ctx may already be cancelled (a common reason for init failure).
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
 			for _, fn := range shutdownFuncs {
-				_ = fn(ctx)
+				_ = fn(cleanupCtx)
 			}
 			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 		}
@@ -108,8 +112,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		meterProvider: mp,
 		shutdown: func(ctx context.Context) error {
 			var errs []error
-			for _, fn := range shutdownFuncs {
-				errs = append(errs, fn(ctx))
+			// Shut down in reverse (LIFO) order so the OTel MeterProvider is flushed
+			// before the Prometheus HTTP server is stopped, giving the full context
+			// deadline to the OTLP flush rather than splitting it with HTTP shutdown.
+			for i := len(shutdownFuncs) - 1; i >= 0; i-- {
+				errs = append(errs, shutdownFuncs[i](ctx))
 			}
 			return errors.Join(errs...)
 		},
