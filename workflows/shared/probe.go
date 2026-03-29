@@ -43,6 +43,9 @@ type ProbeOutput struct {
 	// Format is the container format name as reported by ffprobe (e.g. "matroska,webm").
 	// Only meaningful when IsValidMedia is true.
 	Format string `json:"format"`
+	// DurationSeconds is the total duration of the media file in seconds.
+	// Only meaningful when IsValidMedia is true; zero otherwise.
+	DurationSeconds float64 `json:"duration_seconds"`
 	// AudioStreams lists every audio stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
 	AudioStreams []AudioStreamInfo `json:"audio_streams,omitempty"`
@@ -104,6 +107,7 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 				IsValidMedia:    true,
 				VideoCodec:      s.CodecName,
 				Format:          info.Format,
+				DurationSeconds: info.Duration.Seconds(),
 				AudioStreams:    audioStreams,
 				SubtitleStreams: subtitleStreams,
 			}, nil

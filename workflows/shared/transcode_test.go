@@ -310,12 +310,21 @@ func TestRunTranscode(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
+	// mkvH264Probe simulates an H.264 file already in MKV — SelectVideoCodec returns CodecCopy.
+	mkvH264Probe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "matroska,webm",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
 	tests := []struct {
-		name    string
-		setup   func(t *testing.T) (inputPath, outputDir string)
-		probe   ProbeOutput
-		errFunc require.ErrorAssertionFunc
-		check   func(t *testing.T, outputDir, inputPath string)
+		name        string
+		setup       func(t *testing.T) (inputPath, outputDir string)
+		probe       ProbeOutput
+		errFunc     require.ErrorAssertionFunc
+		checkOutput func(t *testing.T, out TranscodeOutput, inputPath string)
+		check       func(t *testing.T, outputDir, inputPath string)
 	}{
 		{
 			name: "valid H.264 MP4 transcodes to output dir",
@@ -324,6 +333,13 @@ func TestRunTranscode(t *testing.T) {
 			},
 			probe:   h264Probe,
 			errFunc: require.NoError,
+			checkOutput: func(t *testing.T, out TranscodeOutput, inputPath string) {
+				assert.Equal(t, "hevc", out.DestCodec, "H.264 MP4 should be transcoded to hevc")
+				assert.Equal(t, "mkv", out.DestContainer)
+				assert.NotEmpty(t, out.DestFilePath)
+				assert.Greater(t, out.SourceFileSizeBytes, int64(0), "source file size should be positive")
+				assert.Greater(t, out.DestFileSizeBytes, int64(0), "dest file size should be positive")
+			},
 			check: func(t *testing.T, outputDir, inputPath string) {
 				out := mkvOutputName(inputPath)
 				_, err := os.Stat(filepath.Join(outputDir, out))
@@ -331,6 +347,21 @@ func TestRunTranscode(t *testing.T) {
 
 				_, statErr := os.Stat(filepath.Join(outputDir, "._"+out+".tmp"))
 				assert.True(t, os.IsNotExist(statErr), "temp file should be removed after successful transcode")
+			},
+		},
+		{
+			name: "H.264 in MKV container is stream-copied and TranscodeOutput reflects copy codec",
+			setup: func(t *testing.T) (string, string) {
+				return copyTestVideo(t), t.TempDir()
+			},
+			probe:   mkvH264Probe,
+			errFunc: require.NoError,
+			checkOutput: func(t *testing.T, out TranscodeOutput, inputPath string) {
+				assert.Equal(t, "copy", out.DestCodec, "H.264 in MKV should use copy codec")
+				assert.Equal(t, "mkv", out.DestContainer)
+				assert.NotEmpty(t, out.DestFilePath)
+				assert.Greater(t, out.SourceFileSizeBytes, int64(0))
+				assert.Greater(t, out.DestFileSizeBytes, int64(0))
 			},
 		},
 		{
@@ -492,9 +523,12 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "")
+			out, err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "")
 
 			tt.errFunc(t, err)
+			if tt.checkOutput != nil {
+				tt.checkOutput(t, out, inputPath)
+			}
 			if tt.check != nil {
 				tt.check(t, outputDir, inputPath)
 			}

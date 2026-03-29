@@ -94,6 +94,33 @@ func firstEnglishIndex(streams []StreamInfo) *int {
 	return nil
 }
 
+// TranscodeOutput is the output of a successful RunTranscode call.
+type TranscodeOutput struct {
+	// DestCodec is the video codec written to the output file (e.g. "hevc", "copy").
+	DestCodec string `json:"dest_codec"`
+	// DestContainer is the container format of the output file (always "mkv").
+	DestContainer string `json:"dest_container"`
+	// DestFilePath is the absolute path of the output file.
+	DestFilePath string `json:"dest_file_path"`
+	// SourceFileSizeBytes is the size of the input file in bytes, measured before transcoding.
+	SourceFileSizeBytes int64 `json:"source_file_size_bytes"`
+	// DestFileSizeBytes is the size of the output file in bytes, measured after transcoding.
+	DestFileSizeBytes int64 `json:"dest_file_size_bytes"`
+}
+
+// codecName returns a human-readable name for a codec, matching the names used
+// by ffprobe (e.g. "hevc", "copy").
+func codecName(c ffmpeg.Codec) string {
+	switch c {
+	case ffmpeg.CodecCopy:
+		return "copy"
+	case ffmpeg.CodecH265:
+		return "hevc"
+	default:
+		return c.String()
+	}
+}
+
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
@@ -102,7 +129,13 @@ func firstEnglishIndex(streams []StreamInfo) *int {
 // probe is the output of RunProbe for filePath.
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string) error {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string) (TranscodeOutput, error) {
+	srcInfo, err := os.Stat(filePath)
+	if err != nil {
+		return TranscodeOutput{}, fmt.Errorf("stat source file: %w", err)
+	}
+	srcSize := srcInfo.Size()
+
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
 
 	audioExclude := nonEnglishAudioIndices(probe.AudioStreams)
@@ -192,25 +225,36 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return errors.Join(
+			return TranscodeOutput{}, errors.Join(
 				fmt.Errorf("transcode: %w", err),
 				fmt.Errorf("cleanup temp file: %w", removeErr),
 			)
 		}
 
-		return fmt.Errorf("transcode: %w", err)
+		return TranscodeOutput{}, fmt.Errorf("transcode: %w", err)
 	}
 
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return errors.Join(
+			return TranscodeOutput{}, errors.Join(
 				fmt.Errorf("move output file: %w", err),
 				fmt.Errorf("cleanup temp file: %w", removeErr),
 			)
 		}
 
-		return fmt.Errorf("move output file: %w", err)
+		return TranscodeOutput{}, fmt.Errorf("move output file: %w", err)
 	}
 
-	return nil
+	dstInfo, err := os.Stat(finalPath)
+	if err != nil {
+		return TranscodeOutput{}, fmt.Errorf("stat output file: %w", err)
+	}
+
+	return TranscodeOutput{
+		DestCodec:           codecName(videoCodec),
+		DestContainer:       "mkv",
+		DestFilePath:        finalPath,
+		SourceFileSizeBytes: srcSize,
+		DestFileSizeBytes:   dstInfo.Size(),
+	}, nil
 }
