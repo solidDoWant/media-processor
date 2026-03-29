@@ -18,45 +18,53 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
+// Config holds the configuration for the metrics Provider.
+type Config struct {
+	// MetricsAddr is the TCP address for the Prometheus /metrics HTTP server (e.g. ":9090").
+	// When empty, no HTTP server is started.
+	MetricsAddr string
+
+	// OTLPEndpoint is the OTLP gRPC endpoint URL (e.g. "http://otel-collector:4317").
+	// When empty, no OTLP exporter is created.
+	OTLPEndpoint string
+}
+
 // Provider manages metrics exporters: a Prometheus pull endpoint and/or an OTLP push exporter.
-// Both are optional and independently controlled by environment variables:
-//   - METRICS_ADDR: if set, starts a Prometheus /metrics HTTP server at that address.
-//   - OTEL_EXPORTER_OTLP_ENDPOINT: if set, initialises an OTLP metric exporter.
+// Both are optional and independently controlled by the Config fields passed to New.
 type Provider struct {
 	meterProvider otelmetric.MeterProvider
 	shutdown      func(context.Context) error
 }
 
-type config struct {
+type internalConfig struct {
 	prometheusListener net.Listener
 }
 
 // Option configures Provider construction.
-type Option func(*config)
+type Option func(*internalConfig)
 
 // WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
-// METRICS_ADDR must still be set to enable the server; the provided listener is used
-// instead of binding a new one. The caller is responsible for ensuring the listener
-// address matches METRICS_ADDR. Primarily useful in tests to eliminate TOCTOU races.
+// Config.MetricsAddr must be non-empty to enable the server; the provided listener is
+// used instead of binding a new one. The caller is responsible for ensuring the listener
+// address matches Config.MetricsAddr. Primarily useful in tests to eliminate TOCTOU races.
 func WithPrometheusListener(l net.Listener) Option {
-	return func(c *config) {
+	return func(c *internalConfig) {
 		c.prometheusListener = l
 	}
 }
 
-// New creates a Provider based on environment variables. If neither METRICS_ADDR nor
-// OTEL_EXPORTER_OTLP_ENDPOINT is set, a no-op MeterProvider is returned.
-func New(ctx context.Context, opts ...Option) (*Provider, error) {
-	cfg := &config{}
+// New creates a Provider from cfg. If neither MetricsAddr nor OTLPEndpoint is set,
+// a no-op MeterProvider is returned.
+func New(ctx context.Context, cfg Config, opts ...Option) (*Provider, error) {
+	icfg := &internalConfig{}
 	for _, o := range opts {
-		o(cfg)
+		o(icfg)
 	}
 
 	var readers []sdkmetric.Reader
 	var shutdownFuncs []func(context.Context) error
 
-	metricsAddr := os.Getenv("METRICS_ADDR")
-	if metricsAddr != "" {
+	if cfg.MetricsAddr != "" {
 		reg := prometheus.NewRegistry()
 		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(reg))
 		if err != nil {
@@ -64,11 +72,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		}
 		readers = append(readers, promReader)
 
-		l := cfg.prometheusListener
+		l := icfg.prometheusListener
 		if l == nil {
-			l, err = net.Listen("tcp", metricsAddr)
+			l, err = net.Listen("tcp", cfg.MetricsAddr)
 			if err != nil {
-				return nil, fmt.Errorf("listen on metrics addr %s: %w", metricsAddr, err)
+				return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.MetricsAddr, err)
 			}
 		}
 
@@ -83,9 +91,8 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 
-	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	if otlpEndpoint != "" {
-		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(otlpEndpoint))
+	if cfg.OTLPEndpoint != "" {
+		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(cfg.OTLPEndpoint))
 		if err != nil {
 			// Shut down any already-started servers before returning. Use a fresh context
 			// because ctx may already be cancelled (a common reason for init failure).
@@ -106,11 +113,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		}, nil
 	}
 
-	opts2 := make([]sdkmetric.Option, 0, len(readers))
+	sdkOpts := make([]sdkmetric.Option, 0, len(readers))
 	for _, r := range readers {
-		opts2 = append(opts2, sdkmetric.WithReader(r))
+		sdkOpts = append(sdkOpts, sdkmetric.WithReader(r))
 	}
-	mp := sdkmetric.NewMeterProvider(opts2...)
+	mp := sdkmetric.NewMeterProvider(sdkOpts...)
 	shutdownFuncs = append(shutdownFuncs, mp.Shutdown)
 
 	return &Provider{

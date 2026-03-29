@@ -30,7 +30,10 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	metricsProvider, err := metrics.New(ctx)
+	metricsProvider, err := metrics.New(ctx, metrics.Config{
+		MetricsAddr:  os.Getenv("METRICS_ADDR"),
+		OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	})
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
