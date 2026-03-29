@@ -160,9 +160,15 @@ func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
 
-	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	// Use p.Shutdown with a short deadline rather than the fixed-10s shutdown func
+	// so the test does not block for the full flush timeout against a dummy listener.
+	p, _, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
-	t.Cleanup(shutdown)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+	})
 	require.NotNil(t, p.MeterProvider())
 }
 

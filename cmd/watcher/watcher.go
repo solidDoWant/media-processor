@@ -47,6 +47,12 @@ type scanInstruments struct {
 // meterName is the OTel instrumentation scope name for this package.
 const meterName = "github.com/solidDoWant/media-processor/cmd/watcher"
 
+// scan status label values used with watcher_scans_total.
+const (
+	scanStatusSuccess = "success"
+	scanStatusError   = "error"
+)
+
 // newScanInstruments registers all watcher scan instruments with the given MeterProvider.
 func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
 	meter := mp.Meter(meterName)
@@ -177,9 +183,12 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			return err
 		}
 
-		mappingAttr := otelmetric.WithAttributes(
-			mappingNameAttr(w.Name),
-		)
+		// Precompute attribute option sets once per watch entry to avoid repeated
+		// allocation inside the WalkDir callback (one set per file found).
+		mappingOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name))
+		fileOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), mediaTypeAttr(w.MediaType))
+		successOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusSuccess))
+		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
 
 		var mappingErrs []error
 		start := time.Now()
@@ -204,16 +213,13 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
-			instruments.filesDiscoveredTotal.Add(ctx, 1,
-				otelmetric.WithAttributes(mappingNameAttr(w.Name), mediaTypeAttr(w.MediaType)))
+			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
 			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
-				instruments.dispatchErrorsTotal.Add(ctx, 1,
-					otelmetric.WithAttributes(mappingNameAttr(w.Name), mediaTypeAttr(w.MediaType)))
+				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			} else {
-				instruments.dispatchesTotal.Add(ctx, 1,
-					otelmetric.WithAttributes(mappingNameAttr(w.Name), mediaTypeAttr(w.MediaType)))
+				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
 			}
 
 			return nil
@@ -226,15 +232,13 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		}
 
 		duration := time.Since(start).Seconds()
-		instruments.scanDuration.Record(ctx, duration, mappingAttr)
+		instruments.scanDuration.Record(ctx, duration, mappingOpt)
 
 		if len(mappingErrs) == 0 {
-			instruments.scansTotal.Add(ctx, 1,
-				otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr("success")))
-			instruments.lastSuccessfulScan.Record(ctx, float64(time.Now().Unix()), mappingAttr)
+			instruments.scansTotal.Add(ctx, 1, successOpt)
+			instruments.lastSuccessfulScan.Record(ctx, float64(time.Now().Unix()), mappingOpt)
 		} else {
-			instruments.scansTotal.Add(ctx, 1,
-				otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr("error")))
+			instruments.scansTotal.Add(ctx, 1, errorOpt)
 			errs = append(errs, mappingErrs...)
 		}
 	}
