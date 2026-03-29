@@ -26,9 +26,8 @@ type Provider struct {
 }
 
 type config struct {
-	metricsAddr        string
-	otlpEndpoint       string
-	prometheusListener net.Listener
+	metricsAddr  string
+	otlpEndpoint string
 }
 
 // Option configures Provider construction.
@@ -46,21 +45,12 @@ func WithOTLPEndpoint(endpoint string) Option {
 	return func(c *config) { c.otlpEndpoint = endpoint }
 }
 
-// WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
-// WithMetricsAddr must also be supplied to enable the server; the provided listener is
-// used instead of binding a new one. The caller is responsible for ensuring the listener
-// address matches the addr passed to WithMetricsAddr. Primarily useful in tests to
-// eliminate TOCTOU races.
-func WithPrometheusListener(l net.Listener) Option {
-	return func(c *config) { c.prometheusListener = l }
-}
-
 // New creates a Provider. If neither WithMetricsAddr nor WithOTLPEndpoint is supplied,
 // a no-op MeterProvider is returned.
 func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	cfg := &config{}
-	for _, o := range opts {
-		o(cfg)
+	for _, opt := range opts {
+		opt(cfg)
 	}
 
 	var readers []sdkmetric.Reader
@@ -74,12 +64,9 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		}
 		readers = append(readers, promReader)
 
-		listener := cfg.prometheusListener
-		if listener == nil {
-			listener, err = net.Listen("tcp", cfg.metricsAddr)
-			if err != nil {
-				return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.metricsAddr, err)
-			}
+		listener, err := net.Listen("tcp", cfg.metricsAddr)
+		if err != nil {
+			return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.metricsAddr, err)
 		}
 
 		mux := http.NewServeMux()

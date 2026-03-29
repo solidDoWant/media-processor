@@ -15,6 +15,16 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 )
 
+// freeAddr returns a local TCP address with an available port.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return addr
+}
+
 // bindListener opens a TCP listener on a random port and registers cleanup.
 // The cleanup silently ignores close errors because the listener may already be
 // closed by the HTTP server's Shutdown when a Provider is active.
@@ -27,9 +37,9 @@ func bindListener(t *testing.T) net.Listener {
 }
 
 func TestPrometheusEndpoint_Enabled(t *testing.T) {
-	l := bindListener(t)
+	addr := freeAddr(t)
 
-	p, err := metrics.New(t.Context(), metrics.WithMetricsAddr(l.Addr().String()), metrics.WithPrometheusListener(l))
+	p, err := metrics.New(t.Context(), metrics.WithMetricsAddr(addr))
 	require.NoError(t, err)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -37,8 +47,7 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 		_ = p.Shutdown(ctx) //nolint:errcheck
 	}()
 
-	// The server is already listening on l; no poll needed.
-	url := "http://" + l.Addr().String() + "/metrics"
+	url := "http://" + addr + "/metrics"
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url) //nolint:noctx
 	require.NoError(t, err)
@@ -94,13 +103,12 @@ func TestOTLPExporter_Disabled(t *testing.T) {
 }
 
 func TestBothExporters_Active(t *testing.T) {
-	promListener := bindListener(t)
+	promAddr := freeAddr(t)
 	otlpListener := bindListener(t)
 
 	p, err := metrics.New(t.Context(),
-		metrics.WithMetricsAddr(promListener.Addr().String()),
+		metrics.WithMetricsAddr(promAddr),
 		metrics.WithOTLPEndpoint("http://"+otlpListener.Addr().String()),
-		metrics.WithPrometheusListener(promListener),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -109,9 +117,9 @@ func TestBothExporters_Active(t *testing.T) {
 		_ = p.Shutdown(ctx) //nolint:errcheck
 	})
 
-	// Prometheus endpoint should respond immediately (server already bound).
+	// Prometheus endpoint should respond.
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://" + promListener.Addr().String() + "/metrics") //nolint:noctx
+	resp, err := client.Get("http://" + promAddr + "/metrics") //nolint:noctx
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
