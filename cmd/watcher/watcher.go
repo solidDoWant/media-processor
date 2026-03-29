@@ -44,9 +44,12 @@ type scanInstruments struct {
 	dispatchErrorsTotal  otelmetric.Int64Counter
 }
 
+// meterName is the OTel instrumentation scope name for this package.
+const meterName = "github.com/solidDoWant/media-processor/cmd/watcher"
+
 // newScanInstruments registers all watcher scan instruments with the given MeterProvider.
 func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
-	meter := mp.Meter("github.com/solidDoWant/media-processor/cmd/watcher")
+	meter := mp.Meter(meterName)
 
 	scansTotal, err := meter.Int64Counter("watcher_scans_total",
 		otelmetric.WithDescription("Total number of per-mapping directory scans completed."))
