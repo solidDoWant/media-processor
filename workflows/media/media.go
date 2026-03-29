@@ -4,9 +4,12 @@ package media
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
@@ -28,6 +31,12 @@ type MediaWorkflowConfig struct {
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
 	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
 	HardwareDevicePath string
+	// MeterProvider is the OTel MeterProvider used for per-run metrics. When nil,
+	// a no-op provider is used and no metrics are emitted.
+	MeterProvider otelmetric.MeterProvider
+	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
+	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
+	HighCardinalityLabels bool
 }
 
 // MediaInput is the workflow's trigger payload.
@@ -41,7 +50,8 @@ type MediaInput struct {
 // episode) to the standard format, moves it to the output directory, and notifies the
 // appropriate library service (Radarr for movies, Sonarr for TV episodes).
 //
-// Steps (in order): probe → transcode → notify → cleanup.
+// Steps (in order): probe → transcode → notify → cleanup → record_metrics.
+// A parallel record_invalid step fires only when the file is not valid media.
 // If the source file is not a valid media file with a video stream the file is
 // deleted and all other steps are skipped without triggering the failure webhook.
 func NewMediaWorkflow(
@@ -51,6 +61,18 @@ func NewMediaWorkflow(
 	sonarrClient medialib.ArrLibrary,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
+	mp := cfg.MeterProvider
+	if mp == nil {
+		mp = noop.NewMeterProvider()
+	}
+	recorder, err := NewRecorder(mp, cfg.HighCardinalityLabels)
+	if err != nil {
+		// Instrument registration errors are non-fatal: fall back to a noop recorder
+		// so the workflow can still run without metrics.
+		noopRec, _ := NewRecorder(noop.NewMeterProvider(), false)
+		recorder = noopRec
+	}
+
 	maxRuns := int32(1)
 	cancelNewest := types.CancelNewest
 
@@ -65,8 +87,15 @@ func NewMediaWorkflow(
 	// probe: read codec/container info. Deletes the file and returns IsValidMedia=false
 	// (without error) when the file is not a recognisable media file or has no video stream,
 	// which causes all downstream steps to be skipped via WithSkipIf.
+	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (shared.ProbeOutput, error) {
-		return shared.RunProbe(ctx, input.FilePath)
+		start := time.Now()
+		out, err := shared.RunProbe(ctx, input.FilePath)
+		if err != nil {
+			return out, err
+		}
+		out.StartedAt = start
+		return out, nil
 	})
 
 	// skipIfInvalid must list probeTask as a direct WithParents entry on every step that
@@ -102,9 +131,48 @@ func NewMediaWorkflow(
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// cleanup: delete the original source file after successful processing.
-	_ = wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+	cleanupTask := wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		return struct{}{}, shared.RunCleanup(input.FilePath)
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
+
+	// record_metrics: record per-run OTel observations for valid-media completions.
+	// Runs after cleanup so total_duration_seconds covers the full probe→cleanup span.
+	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		var probe shared.ProbeOutput
+		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
+			return struct{}{}, fmt.Errorf("get probe output for metrics: %w", err)
+		}
+		var transcode shared.TranscodeOutput
+		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
+			return struct{}{}, fmt.Errorf("get transcode output for metrics: %w", err)
+		}
+
+		var mediaInfo medialib.MediaInfo
+		if cfg.HighCardinalityLabels {
+			library, libErr := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
+			if libErr == nil {
+				info, infoErr := library.GetInfo(ctx, input.FilePath)
+				if infoErr != nil {
+					recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
+				} else {
+					mediaInfo = info
+				}
+			}
+		}
+
+		hardwareAccelerated := cfg.HardwareDevicePath != ""
+		totalElapsed := time.Since(probe.StartedAt)
+		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
+		return struct{}{}, nil
+	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, cleanupTask), skipIfInvalid)
+
+	// record_invalid: increment the invalid-files counter when probe determines the file
+	// is not valid media. Skipped when the file is valid (i.e. the inverse of skipIfInvalid).
+	_ = wf.NewTask("record_invalid", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
+		return struct{}{}, nil
+	}, hatchet.WithParents(probeTask),
+		hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == true")))
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MediaInput) (struct{}, error) {

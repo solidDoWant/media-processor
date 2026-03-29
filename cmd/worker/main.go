@@ -102,9 +102,11 @@ func run(ctx context.Context) error {
 	}
 
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
-		OutputDir:          mediaOutputDir,
-		WebhookURL:         webhookClient.URL,
-		HardwareDevicePath: os.Getenv("HARDWARE_DEVICE_PATH"),
+		OutputDir:             mediaOutputDir,
+		WebhookURL:            webhookClient.URL,
+		HardwareDevicePath:    os.Getenv("HARDWARE_DEVICE_PATH"),
+		MeterProvider:         metricsProvider.MeterProvider(),
+		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 	}, radarrClient, sonarrClient, webhookClient)
 
 	worker, err := client.NewWorker(
