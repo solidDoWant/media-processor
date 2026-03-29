@@ -12,6 +12,7 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
+	"github.com/solidDoWant/media-processor/pkg/metrics"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows"
 	"github.com/solidDoWant/media-processor/workflows/media"
@@ -28,6 +29,16 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	metricsProvider, err := metrics.New(ctx)
+	if err != nil {
+		return fmt.Errorf("init metrics: %w", err)
+	}
+	defer func() {
+		if err := metricsProvider.Shutdown(context.Background()); err != nil {
+			log.Printf("metrics shutdown error: %v", err)
+		}
+	}()
+
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
