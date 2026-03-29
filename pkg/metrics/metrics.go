@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 
@@ -25,9 +26,30 @@ type Provider struct {
 	shutdown      func(context.Context) error
 }
 
+type config struct {
+	prometheusListener net.Listener
+}
+
+// Option configures Provider construction.
+type Option func(*config)
+
+// WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
+// When set, METRICS_ADDR is still required to enable the server, but the given listener
+// is used instead of binding a new one. Primarily useful in tests to eliminate TOCTOU races.
+func WithPrometheusListener(l net.Listener) Option {
+	return func(c *config) {
+		c.prometheusListener = l
+	}
+}
+
 // New creates a Provider based on environment variables. If neither METRICS_ADDR nor
 // OTEL_EXPORTER_OTLP_ENDPOINT is set, a no-op MeterProvider is returned.
-func New(ctx context.Context) (*Provider, error) {
+func New(ctx context.Context, opts ...Option) (*Provider, error) {
+	cfg := &config{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
 	var readers []sdkmetric.Reader
 	var shutdownFuncs []func(context.Context) error
 
@@ -40,20 +62,29 @@ func New(ctx context.Context) (*Provider, error) {
 		}
 		readers = append(readers, promReader)
 
+		l := cfg.prometheusListener
+		if l == nil {
+			l, err = net.Listen("tcp", metricsAddr)
+			if err != nil {
+				return nil, fmt.Errorf("listen on metrics addr %s: %w", metricsAddr, err)
+			}
+		}
+
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		srv := &http.Server{
-			Addr:    metricsAddr,
-			Handler: mux,
-		}
-		go func() { _ = srv.ListenAndServe() }()
+		srv := &http.Server{Handler: mux}
+		go func() { _ = srv.Serve(l) }()
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 
 	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if otlpEndpoint != "" {
-		otlpExporter, err := otlpmetricgrpc.New(ctx)
+		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(otlpEndpoint))
 		if err != nil {
+			// Shut down any already-started servers before returning.
+			for _, fn := range shutdownFuncs {
+				_ = fn(ctx)
+			}
 			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 		}
 		readers = append(readers, sdkmetric.NewPeriodicReader(otlpExporter))
@@ -66,11 +97,11 @@ func New(ctx context.Context) (*Provider, error) {
 		}, nil
 	}
 
-	opts := make([]sdkmetric.Option, 0, len(readers))
+	opts2 := make([]sdkmetric.Option, 0, len(readers))
 	for _, r := range readers {
-		opts = append(opts, sdkmetric.WithReader(r))
+		opts2 = append(opts2, sdkmetric.WithReader(r))
 	}
-	mp := sdkmetric.NewMeterProvider(opts...)
+	mp := sdkmetric.NewMeterProvider(opts2...)
 	shutdownFuncs = append(shutdownFuncs, mp.Shutdown)
 
 	return &Provider{

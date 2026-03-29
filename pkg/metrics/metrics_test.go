@@ -15,34 +15,31 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 )
 
-// freeAddr returns a random free TCP address on localhost.
-func freeAddr(t *testing.T) string {
+// bindListener opens a TCP listener on a random port and registers cleanup.
+// The cleanup silently ignores close errors because the listener may already be
+// closed by the HTTP server's Shutdown when a Provider is active.
+func bindListener(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return addr
+	t.Cleanup(func() { _ = l.Close() })
+	return l
 }
 
 func TestPrometheusEndpoint_Enabled(t *testing.T) {
-	addr := freeAddr(t)
-	t.Setenv("METRICS_ADDR", addr)
+	l := bindListener(t)
+	t.Setenv("METRICS_ADDR", l.Addr().String())
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-	p, err := metrics.New(t.Context())
+	p, err := metrics.New(t.Context(), metrics.WithPrometheusListener(l))
 	require.NoError(t, err)
 	defer p.Shutdown(context.Background()) //nolint:errcheck
 
-	// Poll until the server is ready.
-	url := "http://" + addr + "/metrics"
-	var resp *http.Response
-	require.Eventually(t, func() bool {
-		var reqErr error
-		resp, reqErr = http.Get(url) //nolint:noctx
-		return reqErr == nil
-	}, 2*time.Second, 50*time.Millisecond, "metrics endpoint did not become available")
-	t.Cleanup(func() { resp.Body.Close() }) //nolint:errcheck
+	// The server is already listening on l; no poll needed.
+	url := "http://" + l.Addr().String() + "/metrics"
+	resp, err := http.Get(url) //nolint:noctx
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
@@ -57,24 +54,19 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 
 	p, err := metrics.New(t.Context())
 	require.NoError(t, err)
-	defer p.Shutdown(context.Background()) //nolint:errcheck
 
 	// MeterProvider must still be usable (noop).
 	mp := p.MeterProvider()
 	require.NotNil(t, mp)
 
-	// Confirm no server is listening on any metrics-related port by checking that
-	// the provider is non-nil but no TCP connection is accepted on a random port.
-	// We simply verify that calling Shutdown does not error.
+	// Shutdown must succeed without error.
 	require.NoError(t, p.Shutdown(context.Background()))
 }
 
 func TestOTLPExporter_Enabled(t *testing.T) {
 	// Start a dummy TCP listener to accept the gRPC connection so the exporter
 	// initialises successfully (it dials lazily, so we just need it not to error on init).
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, l.Close()) })
+	l := bindListener(t)
 
 	t.Setenv("METRICS_ADDR", "")
 	// The OTel SDK requires a URL-format endpoint (scheme://host:port).
@@ -99,7 +91,6 @@ func TestOTLPExporter_Disabled(t *testing.T) {
 
 	p, err := metrics.New(t.Context())
 	require.NoError(t, err)
-	defer p.Shutdown(context.Background()) //nolint:errcheck
 
 	// Shutdown must succeed without attempting any OTLP export.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -108,29 +99,21 @@ func TestOTLPExporter_Disabled(t *testing.T) {
 }
 
 func TestBothExporters_Active(t *testing.T) {
-	addr := freeAddr(t)
+	promListener := bindListener(t)
+	otlpListener := bindListener(t)
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, l.Close()) })
+	t.Setenv("METRICS_ADDR", promListener.Addr().String())
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+otlpListener.Addr().String())
 
-	t.Setenv("METRICS_ADDR", addr)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
-
-	p, err := metrics.New(t.Context())
+	p, err := metrics.New(t.Context(), metrics.WithPrometheusListener(promListener))
 	require.NoError(t, err)
 	defer p.Shutdown(context.Background()) //nolint:errcheck
 
-	// Prometheus endpoint should be up.
-	metricsURL := "http://" + addr + "/metrics"
-	require.Eventually(t, func() bool {
-		resp, reqErr := http.Get(metricsURL) //nolint:noctx
-		if reqErr != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 2*time.Second, 50*time.Millisecond, "metrics endpoint did not become available")
+	// Prometheus endpoint should respond immediately (server already bound).
+	resp, err := http.Get("http://" + promListener.Addr().String() + "/metrics") //nolint:noctx
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// MeterProvider should be non-nil since OTLP is also set.
 	mp := p.MeterProvider()
@@ -138,9 +121,7 @@ func TestBothExporters_Active(t *testing.T) {
 }
 
 func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, l.Close()) })
+	l := bindListener(t)
 
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
