@@ -100,7 +100,7 @@ type TranscodeOutput struct {
 	DestCodec string `json:"dest_codec"`
 	// DestContainer is the container format of the output file (always "mkv").
 	DestContainer string `json:"dest_container"`
-	// DestFilePath is the absolute path of the output file.
+	// DestFilePath is the path of the output file.
 	DestFilePath string `json:"dest_file_path"`
 	// SourceFileSizeBytes is the size of the input file in bytes, measured before transcoding.
 	SourceFileSizeBytes int64 `json:"source_file_size_bytes"`
