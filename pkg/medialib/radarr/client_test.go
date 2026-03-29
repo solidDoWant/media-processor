@@ -164,6 +164,58 @@ func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetInfo(t *testing.T) {
+	tests := []struct {
+		name      string
+		parseResp *parseResponse
+		errFunc   require.ErrorAssertionFunc
+		wantID    int64
+		wantTitle string
+		wantYear  int
+	}{
+		{
+			name:      "known path returns MediaInfo with correct fields",
+			parseResp: &parseResponse{Movie: &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}},
+			wantID:    42,
+			wantTitle: "The Matrix",
+			wantYear:  1999,
+		},
+		{
+			name:      "unknown path returns ErrNotFound",
+			parseResp: &parseResponse{Movie: nil},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(t, tc.parseResp)
+			t.Cleanup(srv.Close)
+
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+			info, err := client.GetInfo(t.Context(), "/movies/some.file.mkv")
+
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+			errFunc(t, err)
+
+			if err == nil {
+				assert.Equal(t, tc.wantID, info.GetID())
+				assert.Equal(t, tc.wantTitle, info.GetTitle())
+				assert.Equal(t, tc.wantYear, info.GetYear())
+				assert.Equal(t, "", info.GetSeriesTitle())
+				assert.Equal(t, 0, info.GetSeasonNumber())
+				assert.Equal(t, 0, info.GetEpisodeNumber())
+			}
+		})
+	}
+}
+
 func TestGetMovieByFilePath_ErrNotFoundSentinel(t *testing.T) {
 	srv := newTestServer(t, &parseResponse{Movie: nil})
 	t.Cleanup(srv.Close)

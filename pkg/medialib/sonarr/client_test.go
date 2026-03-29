@@ -181,6 +181,79 @@ func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetInfo(t *testing.T) {
+	knownParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+			SeriesTitleInfo: &sonarrlib.SeriesTitleInfo{
+				Year: 2008,
+			},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1, Title: "Pilot"},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		parseResp  *sonarrlib.ParseOutput
+		errFunc    require.ErrorAssertionFunc
+		wantID     int64
+		wantTitle  string
+		wantYear   int
+		wantSeries string
+		wantSeason int
+		wantEp     int
+	}{
+		{
+			name:       "known path returns MediaInfo with correct fields",
+			parseResp:  knownParseOutput,
+			wantID:     200,
+			wantTitle:  "Pilot",
+			wantYear:   2008,
+			wantSeries: "Breaking Bad",
+			wantSeason: 1,
+			wantEp:     1,
+		},
+		{
+			name:      "unknown path returns ErrNotFound",
+			parseResp: &sonarrlib.ParseOutput{},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newSonarrTestServer(t, tc.parseResp)
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+			info, err := client.GetInfo(t.Context(), "/tv/some.file.mkv")
+
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+			errFunc(t, err)
+
+			if err == nil {
+				assert.Equal(t, tc.wantID, info.GetID())
+				assert.Equal(t, tc.wantTitle, info.GetTitle())
+				assert.Equal(t, tc.wantYear, info.GetYear())
+				assert.Equal(t, tc.wantSeries, info.GetSeriesTitle())
+				assert.Equal(t, tc.wantSeason, info.GetSeasonNumber())
+				assert.Equal(t, tc.wantEp, info.GetEpisodeNumber())
+			}
+		})
+	}
+}
+
 func TestGetEpisodeByFilePath_ErrNotFoundSentinel(t *testing.T) {
 	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
 	t.Cleanup(srv.Close)
