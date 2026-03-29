@@ -18,90 +18,93 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-// Config holds the configuration for the metrics Provider.
-type Config struct {
-	// MetricsAddr is the TCP address for the Prometheus /metrics HTTP server (e.g. ":9090").
-	// When empty, no HTTP server is started.
-	MetricsAddr string
-
-	// OTLPEndpoint is the OTLP gRPC endpoint URL (e.g. "http://otel-collector:4317").
-	// When empty, no OTLP exporter is created.
-	OTLPEndpoint string
-}
-
 // Provider manages metrics exporters: a Prometheus pull endpoint and/or an OTLP push exporter.
-// Both are optional and independently controlled by the Config fields passed to New.
+// Both are optional and independently controlled by the options passed to New.
 type Provider struct {
 	meterProvider otelmetric.MeterProvider
 	shutdown      func(context.Context) error
 }
 
-type internalConfig struct {
+type config struct {
+	metricsAddr        string
+	otlpEndpoint       string
 	prometheusListener net.Listener
 }
 
 // Option configures Provider construction.
-type Option func(*internalConfig)
+type Option func(*config)
 
-// WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
-// Config.MetricsAddr must be non-empty to enable the server; the provided listener is
-// used instead of binding a new one. The caller is responsible for ensuring the listener
-// address matches Config.MetricsAddr. Primarily useful in tests to eliminate TOCTOU races.
-func WithPrometheusListener(l net.Listener) Option {
-	return func(c *internalConfig) {
-		c.prometheusListener = l
-	}
+// WithMetricsAddr sets the TCP address for the Prometheus /metrics HTTP server (e.g. ":9090").
+// When not supplied, no HTTP server is started.
+func WithMetricsAddr(addr string) Option {
+	return func(c *config) { c.metricsAddr = addr }
 }
 
-// New creates a Provider from cfg. If neither MetricsAddr nor OTLPEndpoint is set,
+// WithOTLPEndpoint sets the OTLP gRPC endpoint URL (e.g. "http://otel-collector:4317").
+// When not supplied, no OTLP exporter is created.
+func WithOTLPEndpoint(endpoint string) Option {
+	return func(c *config) { c.otlpEndpoint = endpoint }
+}
+
+// WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
+// WithMetricsAddr must also be supplied to enable the server; the provided listener is
+// used instead of binding a new one. The caller is responsible for ensuring the listener
+// address matches the addr passed to WithMetricsAddr. Primarily useful in tests to
+// eliminate TOCTOU races.
+func WithPrometheusListener(l net.Listener) Option {
+	return func(c *config) { c.prometheusListener = l }
+}
+
+// New creates a Provider. If neither WithMetricsAddr nor WithOTLPEndpoint is supplied,
 // a no-op MeterProvider is returned.
-func New(ctx context.Context, cfg Config, opts ...Option) (*Provider, error) {
-	icfg := &internalConfig{}
+func New(ctx context.Context, opts ...Option) (*Provider, error) {
+	cfg := &config{}
 	for _, o := range opts {
-		o(icfg)
+		o(cfg)
 	}
 
 	var readers []sdkmetric.Reader
 	var shutdownFuncs []func(context.Context) error
 
-	if cfg.MetricsAddr != "" {
-		reg := prometheus.NewRegistry()
-		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(reg))
+	if cfg.metricsAddr != "" {
+		promRegistry := prometheus.NewRegistry()
+		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
 		if err != nil {
 			return nil, fmt.Errorf("create prometheus exporter: %w", err)
 		}
 		readers = append(readers, promReader)
 
-		l := icfg.prometheusListener
-		if l == nil {
-			l, err = net.Listen("tcp", cfg.MetricsAddr)
+		listener := cfg.prometheusListener
+		if listener == nil {
+			listener, err = net.Listen("tcp", cfg.metricsAddr)
 			if err != nil {
-				return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.MetricsAddr, err)
+				return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.metricsAddr, err)
 			}
 		}
 
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		mux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
 		srv := &http.Server{Handler: mux}
 		go func() {
-			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				fmt.Fprintf(os.Stderr, "metrics HTTP server error: %v\n", err)
 			}
 		}()
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 
-	if cfg.OTLPEndpoint != "" {
-		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(cfg.OTLPEndpoint))
+	if cfg.otlpEndpoint != "" {
+		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(cfg.otlpEndpoint))
 		if err != nil {
 			// Shut down any already-started servers before returning. Use a fresh context
 			// because ctx may already be cancelled (a common reason for init failure).
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cleanupCancel()
-			for _, fn := range shutdownFuncs {
-				_ = fn(cleanupCtx)
+			var cleanupErrs []error
+			for _, shutdownFunc := range shutdownFuncs {
+				cleanupErrs = append(cleanupErrs, shutdownFunc(cleanupCtx))
 			}
-			return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
+			return nil, errors.Join(append(cleanupErrs, fmt.Errorf("create OTLP metric exporter: %w", err))...)
 		}
 		readers = append(readers, sdkmetric.NewPeriodicReader(otlpExporter))
 	}
@@ -114,14 +117,14 @@ func New(ctx context.Context, cfg Config, opts ...Option) (*Provider, error) {
 	}
 
 	sdkOpts := make([]sdkmetric.Option, 0, len(readers))
-	for _, r := range readers {
-		sdkOpts = append(sdkOpts, sdkmetric.WithReader(r))
+	for _, reader := range readers {
+		sdkOpts = append(sdkOpts, sdkmetric.WithReader(reader))
 	}
-	mp := sdkmetric.NewMeterProvider(sdkOpts...)
-	shutdownFuncs = append(shutdownFuncs, mp.Shutdown)
+	sdkProvider := sdkmetric.NewMeterProvider(sdkOpts...)
+	shutdownFuncs = append(shutdownFuncs, sdkProvider.Shutdown)
 
 	return &Provider{
-		meterProvider: mp,
+		meterProvider: sdkProvider,
 		shutdown: func(ctx context.Context) error {
 			var errs []error
 			// Shut down in reverse (LIFO) order so the OTel MeterProvider is flushed

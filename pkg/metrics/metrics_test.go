@@ -28,9 +28,8 @@ func bindListener(t *testing.T) net.Listener {
 
 func TestPrometheusEndpoint_Enabled(t *testing.T) {
 	l := bindListener(t)
-	cfg := metrics.Config{MetricsAddr: l.Addr().String()}
 
-	p, err := metrics.New(t.Context(), cfg, metrics.WithPrometheusListener(l))
+	p, err := metrics.New(t.Context(), metrics.WithMetricsAddr(l.Addr().String()), metrics.WithPrometheusListener(l))
 	require.NoError(t, err)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -55,7 +54,7 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 }
 
 func TestPrometheusEndpoint_Disabled(t *testing.T) {
-	p, err := metrics.New(t.Context(), metrics.Config{})
+	p, err := metrics.New(t.Context())
 	require.NoError(t, err)
 
 	// MeterProvider must still be usable (noop).
@@ -71,9 +70,7 @@ func TestOTLPExporter_Enabled(t *testing.T) {
 	// initialises successfully (it dials lazily, so we just need it not to error on init).
 	l := bindListener(t)
 	// The OTel SDK requires a URL-format endpoint (scheme://host:port).
-	cfg := metrics.Config{OTLPEndpoint: "http://" + l.Addr().String()}
-
-	p, err := metrics.New(t.Context(), cfg)
+	p, err := metrics.New(t.Context(), metrics.WithOTLPEndpoint("http://"+l.Addr().String()))
 	require.NoError(t, err)
 
 	mp := p.MeterProvider()
@@ -87,7 +84,7 @@ func TestOTLPExporter_Enabled(t *testing.T) {
 }
 
 func TestOTLPExporter_Disabled(t *testing.T) {
-	p, err := metrics.New(t.Context(), metrics.Config{})
+	p, err := metrics.New(t.Context())
 	require.NoError(t, err)
 
 	// Shutdown must succeed without attempting any OTLP export.
@@ -99,12 +96,12 @@ func TestOTLPExporter_Disabled(t *testing.T) {
 func TestBothExporters_Active(t *testing.T) {
 	promListener := bindListener(t)
 	otlpListener := bindListener(t)
-	cfg := metrics.Config{
-		MetricsAddr:  promListener.Addr().String(),
-		OTLPEndpoint: "http://" + otlpListener.Addr().String(),
-	}
 
-	p, err := metrics.New(t.Context(), cfg, metrics.WithPrometheusListener(promListener))
+	p, err := metrics.New(t.Context(),
+		metrics.WithMetricsAddr(promListener.Addr().String()),
+		metrics.WithOTLPEndpoint("http://"+otlpListener.Addr().String()),
+		metrics.WithPrometheusListener(promListener),
+	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -126,9 +123,8 @@ func TestBothExporters_Active(t *testing.T) {
 
 func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
 	l := bindListener(t)
-	cfg := metrics.Config{OTLPEndpoint: "http://" + l.Addr().String()}
 
-	p, err := metrics.New(t.Context(), cfg)
+	p, err := metrics.New(t.Context(), metrics.WithOTLPEndpoint("http://"+l.Addr().String()))
 	require.NoError(t, err)
 
 	// Shutdown must complete (the MeterProvider.Shutdown must be called, attempting to
