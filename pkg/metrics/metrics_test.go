@@ -33,14 +33,19 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 
 	p, err := metrics.New(t.Context(), metrics.WithPrometheusListener(l))
 	require.NoError(t, err)
-	defer p.Shutdown(context.Background()) //nolint:errcheck
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	}()
 
 	// The server is already listening on l; no poll needed.
 	url := "http://" + l.Addr().String() + "/metrics"
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url) //nolint:noctx
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	// defer (not t.Cleanup) so resp.Body closes before the Shutdown defer above (LIFO).
+	defer func() { require.NoError(t, resp.Body.Close()) }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	// Verify the response Content-Type is Prometheus text exposition format.
