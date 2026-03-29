@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+
+	"github.com/solidDoWant/media-processor/pkg/metrics"
 )
 
 func main() {
@@ -41,6 +43,12 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
 
+	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
+	if err != nil {
+		return fmt.Errorf("init metrics: %w", err)
+	}
+	defer shutdown()
+
 	client, err := hatchet.NewClient()
 	if err != nil {
 		return fmt.Errorf("connect to Hatchet: %w", err)
@@ -48,7 +56,10 @@ func run(ctx context.Context, configPath string) error {
 
 	log.Println("connected to Hatchet")
 
-	scanWorkflow := NewScanWorkflow(client, cfg)
+	scanWorkflow, err := NewScanWorkflow(client, cfg, metricsProvider.MeterProvider())
+	if err != nil {
+		return fmt.Errorf("create scan workflow: %w", err)
+	}
 
 	worker, err := client.NewWorker("mediaprocessor-watcher",
 		hatchet.WithWorkflows(scanWorkflow),

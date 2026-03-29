@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
@@ -30,24 +29,11 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	var metricsOpts []metrics.Option
-	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
-		metricsOpts = append(metricsOpts, metrics.WithMetricsAddr(addr))
-	}
-	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
-		metricsOpts = append(metricsOpts, metrics.WithOTLPEndpoint(endpoint))
-	}
-	metricsProvider, err := metrics.New(ctx, metricsOpts...)
+	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := metricsProvider.Shutdown(ctx); err != nil {
-			log.Printf("metrics shutdown error: %v", err)
-		}
-	}()
+	defer shutdown()
 
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")

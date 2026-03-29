@@ -129,6 +129,49 @@ func TestBothExporters_Active(t *testing.T) {
 	require.NotNil(t, mp)
 }
 
+func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
+	t.Setenv("METRICS_ADDR", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+	require.NotNil(t, p.MeterProvider())
+}
+
+func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
+	addr := freeAddr(t)
+	t.Setenv("METRICS_ADDR", addr)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+	require.NotNil(t, p)
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
+	l := bindListener(t)
+	t.Setenv("METRICS_ADDR", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
+
+	// Use p.Shutdown with a short deadline rather than the fixed-10s shutdown func
+	// so the test does not block for the full flush timeout against a dummy listener.
+	p, _, err := metrics.NewFromEnv(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+	})
+	require.NotNil(t, p.MeterProvider())
+}
+
 func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
 	l := bindListener(t)
 
