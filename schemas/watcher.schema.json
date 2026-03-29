@@ -31,6 +31,10 @@
     },
     "WatchEntry": {
       "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
         "path": {
           "type": "string",
           "minLength": 1
@@ -42,6 +46,7 @@
       "additionalProperties": false,
       "type": "object",
       "required": [
+        "name",
         "path",
         "media_type"
       ]

@@ -32,8 +32,9 @@ type MediaWorkflowConfig struct {
 
 // MediaInput is the workflow's trigger payload.
 type MediaInput struct {
-	FilePath  string             `json:"file_path"`
-	MediaType medialib.MediaType `json:"media_type"`
+	FilePath    string             `json:"file_path"`
+	MediaType   medialib.MediaType `json:"media_type"`
+	MappingName string             `json:"mapping_name"`
 }
 
 // NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV

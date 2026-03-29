@@ -27,7 +27,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "existing directory passes",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: t.TempDir(), MediaType: medialib.MovieType},
+					{Name: "movies", Path: t.TempDir(), MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.NoError,
@@ -36,7 +36,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "missing directory returns error",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
+					{Name: "movies", Path: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.Error,
@@ -45,8 +45,8 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "all errors reported when multiple dirs are missing",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Path: "/nonexistent/alpha", MediaType: medialib.MovieType},
-					{Path: "/nonexistent/beta", MediaType: medialib.MovieType},
+					{Name: "alpha", Path: "/nonexistent/alpha", MediaType: medialib.MovieType},
+					{Name: "beta", Path: "/nonexistent/beta", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -66,7 +66,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				f, err := os.CreateTemp(t.TempDir(), "notadir")
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
-				return &Config{Watches: []WatchEntry{{Path: f.Name(), MediaType: medialib.MovieType}}}
+				return &Config{Watches: []WatchEntry{{Name: "movies", Path: f.Name(), MediaType: medialib.MovieType}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.Error(t, err, msgAndArgs...)
@@ -94,17 +94,18 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	type call struct {
-		filePath  string
-		mediaType medialib.MediaType
+		filePath    string
+		mediaType   medialib.MediaType
+		mappingName string
 	}
 	var calls []call
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
-		calls = append(calls, call{fp, mt})
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string) error {
+		calls = append(calls, call{fp, mt, mn})
 		return nil
 	}
 
@@ -112,6 +113,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, filePath, calls[0].filePath)
 	assert.Equal(t, medialib.MovieType, calls[0].mediaType)
+	assert.Equal(t, "movies", calls[0].mappingName)
 }
 
 // TestScan_SubdirectoryFilesUseParentMapping verifies that files within subdirectories
@@ -127,12 +129,12 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: medialib.ShowType},
+			{Name: "shows", Path: dir, MediaType: medialib.ShowType},
 		},
 	}
 
 	var dispatched []string
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -153,12 +155,12 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	var count int
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -178,14 +180,14 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
 		},
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, func(_ context.Context, _ string, _ medialib.MediaType) error { return nil })
+	err := scan(ctx, cfg, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil })
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -201,13 +203,13 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Path: movieDir, MediaType: medialib.MovieType},
-			{Path: showDir, MediaType: medialib.ShowType},
+			{Name: "movies", Path: movieDir, MediaType: medialib.MovieType},
+			{Name: "shows", Path: showDir, MediaType: medialib.ShowType},
 		},
 	}
 
 	dispatched := make(map[string]medialib.MediaType) // path → media type
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string) error {
 		dispatched[fp] = mt
 		return nil
 	}

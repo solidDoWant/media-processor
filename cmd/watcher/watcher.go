@@ -15,8 +15,8 @@ import (
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
-// dispatchFunc submits a workflow run for the given absolute file path and media type.
-type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType) error
+// dispatchFunc submits a workflow run for the given absolute file path, media type, and mapping name.
+type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string) error
 
 // NewScanWorkflow returns a Hatchet standalone task that scans all configured watch
 // directories on the configured cron schedule and spawns a child workflow run for
@@ -31,13 +31,14 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config) *hatchet.StandaloneTas
 	return client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
 					media.MediaWorkflowName,
 					map[string]string{
-						"file_path":  filePath,
-						"media_type": string(mediaType),
+						"file_path":    filePath,
+						"media_type":   string(mediaType),
+						"mapping_name": mappingName,
 					},
 					hatchet.WithRunKey(filePath),
 				)
@@ -109,7 +110,7 @@ func scan(ctx context.Context, cfg *Config, dispatch dispatchFunc) error {
 				return nil
 			}
 
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
 				errs = append(errs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
 			}
 
