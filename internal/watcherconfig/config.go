@@ -23,8 +23,10 @@ func (CronExpression) JSONSchema() *jsonschema.Schema {
 // It drives runtime validation; JSON Schema enum generation is handled by medialib.MediaType.JSONSchema.
 var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType}
 
-// WatchEntry maps a filesystem path to a media type for dispatch.
+// WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch
+// and carrying a human-readable name for identification.
 type WatchEntry struct {
+	Name string `yaml:"name" jsonschema:"minLength=1" validate:"min=1"`
 	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
 	// MediaType must be one of the values in validMediaTypes; validated by the mediatype tag.
 	// The validate tag is required for runtime enforcement; medialib.MediaType.JSONSchema handles schema generation.

@@ -28,16 +28,18 @@ func TestLoadConfig(t *testing.T) {
 			name: "valid config with two entries",
 			content: `
 watches:
-  - path: /watch/movies
+  - name: movies
+    path: /watch/movies
     media_type: movie
-  - path: /watch/shows
+  - name: shows
+    path: /watch/shows
     media_type: show
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Path: "/watch/movies", MediaType: medialib.MovieType},
-					{Path: "/watch/shows", MediaType: medialib.ShowType},
+					{Name: "movies", Path: "/watch/movies", MediaType: medialib.MovieType},
+					{Name: "shows", Path: "/watch/shows", MediaType: medialib.ShowType},
 				},
 			},
 		},
@@ -66,10 +68,30 @@ watches: []
 			errFunc: require.Error,
 		},
 		{
+			name: "omitted name in watch entry returns error",
+			content: `
+watches:
+  - path: /watch/movies
+    media_type: movie
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "empty string name in watch entry returns error",
+			content: `
+watches:
+  - name: ""
+    path: /watch/movies
+    media_type: movie
+`,
+			errFunc: require.Error,
+		},
+		{
 			name: "empty path in watch entry returns error",
 			content: `
 watches:
-  - path: ""
+  - name: movies
+    path: ""
     media_type: movie
 `,
 			errFunc: require.Error,
@@ -78,7 +100,8 @@ watches:
 			name: "empty media_type in watch entry returns error",
 			content: `
 watches:
-  - path: /watch/movies
+  - name: movies
+    path: /watch/movies
     media_type: ""
 `,
 			errFunc: require.Error,
@@ -87,7 +110,8 @@ watches:
 			name: "unrecognized media_type returns error",
 			content: `
 watches:
-  - path: /watch/movies
+  - name: movies
+    path: /watch/movies
     media_type: UnknownType
 `,
 			errFunc: require.Error,
