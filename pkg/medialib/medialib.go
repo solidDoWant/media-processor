@@ -75,8 +75,9 @@ type Episode struct {
 	ID int64
 	// SeriesID is the internal database ID of the series this episode belongs to.
 	// Used internally by the Sonarr client for series-level refresh.
-	SeriesID      int64
-	Title         string
+	SeriesID int64
+	Title    string
+	// Year is the series premiere year, sourced from the library service's series metadata.
 	Year          int
 	SeriesTitle   string
 	SeasonNumber  int
@@ -89,7 +90,7 @@ func (e *Episode) GetID() int64 { return e.ID }
 // GetTitle returns the episode's title.
 func (e *Episode) GetTitle() string { return e.Title }
 
-// GetYear returns the episode's year.
+// GetYear returns the series premiere year.
 func (e *Episode) GetYear() int { return e.Year }
 
 // GetSeriesTitle returns the episode's series title.
