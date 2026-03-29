@@ -135,3 +135,18 @@ func (p *Provider) MeterProvider() otelmetric.MeterProvider {
 func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.shutdown(ctx)
 }
+
+// NewFromEnv creates a Provider using standard environment variables.
+// METRICS_ADDR enables the Prometheus /metrics pull endpoint.
+// OTEL_EXPORTER_OTLP_ENDPOINT enables OTLP gRPC push export.
+// If neither variable is set, a no-op Provider is returned.
+func NewFromEnv(ctx context.Context) (*Provider, error) {
+	var opts []Option
+	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
+		opts = append(opts, WithMetricsAddr(addr))
+	}
+	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
+		opts = append(opts, WithOTLPEndpoint(endpoint))
+	}
+	return New(ctx, opts...)
+}
