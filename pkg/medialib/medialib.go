@@ -29,6 +29,20 @@ func (MediaType) JSONSchema() *jsonschema.Schema {
 	}
 }
 
+// MediaInfo exposes typed getters for per-media metadata.
+type MediaInfo interface {
+	GetID() int64
+	GetTitle() string
+	GetYear() int
+	GetSeriesTitle() string // movies return ""
+	GetSeasonNumber() int   // movies return 0
+	GetEpisodeNumber() int  // movies return 0
+}
+
+// Compile-time assertions that *Movie and *Episode implement MediaInfo.
+var _ MediaInfo = (*Movie)(nil)
+var _ MediaInfo = (*Episode)(nil)
+
 // Movie represents a movie entry in a movie library service.
 type Movie struct {
 	// ID is the internal database ID assigned by the backing movie library service.
@@ -37,17 +51,56 @@ type Movie struct {
 	Year  int
 }
 
+// GetID returns the movie's ID.
+func (m *Movie) GetID() int64 { return m.ID }
+
+// GetTitle returns the movie's title.
+func (m *Movie) GetTitle() string { return m.Title }
+
+// GetYear returns the movie's release year.
+func (m *Movie) GetYear() int { return m.Year }
+
+// GetSeriesTitle returns "" for movies.
+func (m *Movie) GetSeriesTitle() string { return "" }
+
+// GetSeasonNumber returns 0 for movies.
+func (m *Movie) GetSeasonNumber() int { return 0 }
+
+// GetEpisodeNumber returns 0 for movies.
+func (m *Movie) GetEpisodeNumber() int { return 0 }
+
 // Episode represents an episode entry in a TV library service.
 type Episode struct {
 	// ID is the internal database ID assigned by the backing TV library service.
 	ID int64
 	// SeriesID is the internal database ID of the series this episode belongs to.
 	// Used internally by the Sonarr client for series-level refresh.
-	SeriesID      int64
+	SeriesID int64
+	Title    string
+	// Year is the series premiere year, sourced from the library service's series metadata.
+	Year          int
 	SeriesTitle   string
 	SeasonNumber  int
 	EpisodeNumber int
 }
+
+// GetID returns the episode's ID.
+func (e *Episode) GetID() int64 { return e.ID }
+
+// GetTitle returns the episode's title.
+func (e *Episode) GetTitle() string { return e.Title }
+
+// GetYear returns the series premiere year.
+func (e *Episode) GetYear() int { return e.Year }
+
+// GetSeriesTitle returns the episode's series title.
+func (e *Episode) GetSeriesTitle() string { return e.SeriesTitle }
+
+// GetSeasonNumber returns the episode's season number.
+func (e *Episode) GetSeasonNumber() int { return e.SeasonNumber }
+
+// GetEpisodeNumber returns the episode's episode number.
+func (e *Episode) GetEpisodeNumber() int { return e.EpisodeNumber }
 
 // MovieLibrary provides operations for movie media items.
 type MovieLibrary interface {
@@ -67,4 +120,7 @@ type ArrLibrary interface {
 	// service and triggers a rescan. For Sonarr, the rescan is at series level
 	// (Sonarr does not support episode-level refresh).
 	RefreshByFilePath(ctx context.Context, path string) error
+	// GetInfo returns structured media metadata for the item at path.
+	// Returns ErrNotFound if no item is identified.
+	GetInfo(ctx context.Context, path string) (MediaInfo, error)
 }

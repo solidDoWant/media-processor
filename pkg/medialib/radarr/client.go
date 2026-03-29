@@ -97,6 +97,16 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 	return output.Movie, nil
 }
 
+// GetInfo implements medialib.ArrLibrary. It returns structured metadata for
+// the movie at path.
+func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
+	movie, err := c.GetMovieByFilePath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return &movie, nil
+}
+
 // RefreshByFilePath implements medialib.ArrLibrary. It looks up the movie by
 // file path and triggers a Radarr library rescan for that movie.
 func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {

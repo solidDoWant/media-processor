@@ -72,13 +72,31 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	}
 
 	ep := parsed.Episodes[0]
+
+	var year int
+	if parsed.ParsedEpisodeInfo.SeriesTitleInfo != nil {
+		year = parsed.ParsedEpisodeInfo.SeriesTitleInfo.Year
+	}
+
 	return medialib.Episode{
 		ID:            ep.ID,
 		SeriesID:      ep.SeriesID,
+		Title:         ep.Title,
+		Year:          year,
 		SeriesTitle:   parsed.Title,
 		SeasonNumber:  ep.SeasonNumber,
 		EpisodeNumber: ep.EpisodeNumber,
 	}, nil
+}
+
+// GetInfo implements medialib.ArrLibrary. It returns structured metadata for
+// the episode at path.
+func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
+	episode, err := c.GetEpisodeByFilePath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return &episode, nil
 }
 
 // RefreshByFilePath implements medialib.ArrLibrary. It looks up the episode by
