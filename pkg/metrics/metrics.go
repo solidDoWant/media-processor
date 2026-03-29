@@ -35,8 +35,9 @@ type config struct {
 type Option func(*config)
 
 // WithPrometheusListener supplies a pre-bound listener for the Prometheus HTTP server.
-// When set, METRICS_ADDR is still required to enable the server, but the given listener
-// is used instead of binding a new one. Primarily useful in tests to eliminate TOCTOU races.
+// METRICS_ADDR must still be set to enable the server; the provided listener is used
+// instead of binding a new one. The caller is responsible for ensuring the listener
+// address matches METRICS_ADDR. Primarily useful in tests to eliminate TOCTOU races.
 func WithPrometheusListener(l net.Listener) Option {
 	return func(c *config) {
 		c.prometheusListener = l
@@ -74,7 +75,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		srv := &http.Server{Handler: mux}
-		go func() { _ = srv.Serve(l) }()
+		go func() {
+			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(os.Stderr, "metrics HTTP server error: %v\n", err)
+			}
+		}()
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	// Verify the response Content-Type is Prometheus text exposition format.
 	contentType := resp.Header.Get("Content-Type")
-	assert.True(t, len(contentType) > 0 && contentType[:10] == "text/plain", "metrics endpoint should return Prometheus text exposition format, got: %s", contentType)
+	assert.True(t, strings.HasPrefix(contentType, "text/plain"), "metrics endpoint should return Prometheus text exposition format, got: %s", contentType)
 	_, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
 }
@@ -108,7 +109,11 @@ func TestBothExporters_Active(t *testing.T) {
 
 	p, err := metrics.New(t.Context(), metrics.WithPrometheusListener(promListener))
 	require.NoError(t, err)
-	defer p.Shutdown(context.Background()) //nolint:errcheck
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	})
 
 	// Prometheus endpoint should respond immediately (server already bound).
 	client := &http.Client{Timeout: 5 * time.Second}
