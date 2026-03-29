@@ -29,28 +29,6 @@ func (MediaType) JSONSchema() *jsonschema.Schema {
 	}
 }
 
-// Movie represents a movie entry in a movie library service.
-type Movie struct {
-	// ID is the internal database ID assigned by the backing movie library service.
-	ID    int64
-	Title string
-	Year  int
-}
-
-// Episode represents an episode entry in a TV library service.
-type Episode struct {
-	// ID is the internal database ID assigned by the backing TV library service.
-	ID int64
-	// SeriesID is the internal database ID of the series this episode belongs to.
-	// Used internally by the Sonarr client for series-level refresh.
-	SeriesID      int64
-	Title         string
-	Year          int
-	SeriesTitle   string
-	SeasonNumber  int
-	EpisodeNumber int
-}
-
 // MediaInfo exposes typed getters for per-media metadata.
 type MediaInfo interface {
 	GetID() int64
@@ -59,6 +37,18 @@ type MediaInfo interface {
 	GetSeriesTitle() string // movies return ""
 	GetSeasonNumber() int   // movies return 0
 	GetEpisodeNumber() int  // movies return 0
+}
+
+// Compile-time assertions that *Movie and *Episode implement MediaInfo.
+var _ MediaInfo = (*Movie)(nil)
+var _ MediaInfo = (*Episode)(nil)
+
+// Movie represents a movie entry in a movie library service.
+type Movie struct {
+	// ID is the internal database ID assigned by the backing movie library service.
+	ID    int64
+	Title string
+	Year  int
 }
 
 // GetID returns the movie's ID.
@@ -78,6 +68,20 @@ func (m *Movie) GetSeasonNumber() int { return 0 }
 
 // GetEpisodeNumber returns 0 for movies.
 func (m *Movie) GetEpisodeNumber() int { return 0 }
+
+// Episode represents an episode entry in a TV library service.
+type Episode struct {
+	// ID is the internal database ID assigned by the backing TV library service.
+	ID int64
+	// SeriesID is the internal database ID of the series this episode belongs to.
+	// Used internally by the Sonarr client for series-level refresh.
+	SeriesID      int64
+	Title         string
+	Year          int
+	SeriesTitle   string
+	SeasonNumber  int
+	EpisodeNumber int
+}
 
 // GetID returns the episode's ID.
 func (e *Episode) GetID() int64 { return e.ID }
