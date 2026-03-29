@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
@@ -34,7 +35,9 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer func() {
-		if err := metricsProvider.Shutdown(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := metricsProvider.Shutdown(ctx); err != nil {
 			log.Printf("metrics shutdown error: %v", err)
 		}
 	}()
