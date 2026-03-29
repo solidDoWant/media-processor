@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
@@ -106,6 +107,9 @@ type TranscodeOutput struct {
 	SourceFileSizeBytes int64 `json:"source_file_size_bytes"`
 	// DestFileSizeBytes is the size of the output file in bytes, measured after transcoding.
 	DestFileSizeBytes int64 `json:"dest_file_size_bytes"`
+	// TranscodeDurationSeconds is the wall-clock time spent in RunTranscode (the ffmpeg call
+	// plus surrounding stat/rename operations), in seconds.
+	TranscodeDurationSeconds float64 `json:"transcode_duration_seconds"`
 }
 
 // codecName returns a human-readable name for a codec, matching the names used
@@ -130,6 +134,8 @@ func codecName(c ffmpeg.Codec) string {
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
 func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string) (TranscodeOutput, error) {
+	transcodeStart := time.Now()
+
 	srcInfo, err := os.Stat(filePath)
 	if err != nil {
 		return TranscodeOutput{}, fmt.Errorf("stat source file: %w", err)
@@ -251,10 +257,11 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	}
 
 	return TranscodeOutput{
-		DestCodec:           codecName(videoCodec),
-		DestContainer:       "mkv",
-		DestFilePath:        finalPath,
-		SourceFileSizeBytes: srcSize,
-		DestFileSizeBytes:   dstInfo.Size(),
+		DestCodec:                codecName(videoCodec),
+		DestContainer:            "mkv",
+		DestFilePath:             finalPath,
+		SourceFileSizeBytes:      srcSize,
+		DestFileSizeBytes:        dstInfo.Size(),
+		TranscodeDurationSeconds: time.Since(transcodeStart).Seconds(),
 	}, nil
 }

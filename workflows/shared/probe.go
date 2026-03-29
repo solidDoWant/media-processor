@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
@@ -52,6 +53,10 @@ type ProbeOutput struct {
 	// SubtitleStreams lists every subtitle stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
 	SubtitleStreams []StreamInfo `json:"subtitle_streams,omitempty"`
+	// StartedAt is the wall-clock time at which the probe step began. It is NOT set
+	// by RunProbe; the workflow step closure sets it before calling RunProbe so that
+	// downstream steps can compute elapsed durations.
+	StartedAt time.Time `json:"started_at,omitempty"`
 }
 
 // RunProbe reads codec and container info for filePath. If the file is not a
