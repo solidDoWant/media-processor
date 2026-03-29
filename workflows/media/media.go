@@ -4,6 +4,7 @@ package media
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -67,10 +68,17 @@ func NewMediaWorkflow(
 	}
 	recorder, err := NewRecorder(meterProvider, cfg.HighCardinalityLabels)
 	if err != nil {
-		// Instrument registration errors are non-fatal: fall back to a noop recorder
-		// so the workflow can still run without metrics.
-		noopRec, _ := NewRecorder(noop.NewMeterProvider(), false)
-		recorder = noopRec
+		// Instrument registration errors are non-fatal: log for observability and fall
+		// back to a noop recorder so the workflow can still run without metrics.
+		log.Printf("media: failed to create metrics recorder: %v; falling back to noop", err)
+		var noopErr error
+		recorder, noopErr = NewRecorder(noop.NewMeterProvider(), false)
+		if noopErr != nil {
+			// noop.NewMeterProvider() instrument registration never returns errors in
+			// practice. If it somehow does, there is no safe fallback — panic to surface
+			// the bug immediately rather than silently proceeding with a nil recorder.
+			panic(fmt.Sprintf("media: failed to create noop metrics recorder: %v", noopErr))
+		}
 	}
 
 	maxRuns := int32(1)
