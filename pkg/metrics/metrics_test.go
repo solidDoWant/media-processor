@@ -133,11 +133,10 @@ func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-	p, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
+	t.Cleanup(shutdown)
 	require.NotNil(t, p.MeterProvider())
-
-	require.NoError(t, p.Shutdown(t.Context()))
 }
 
 func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
@@ -145,13 +144,10 @@ func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
 	t.Setenv("METRICS_ADDR", addr)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-	p, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = p.Shutdown(ctx) //nolint:errcheck
-	})
+	t.Cleanup(shutdown)
+	require.NotNil(t, p)
 
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
 	require.NoError(t, err)
@@ -164,13 +160,10 @@ func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
 
-	p, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
+	t.Cleanup(shutdown)
 	require.NotNil(t, p.MeterProvider())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = p.Shutdown(ctx)
 }
 
 func TestGracefulShutdown_FlushesOTLP(t *testing.T) {

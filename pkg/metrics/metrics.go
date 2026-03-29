@@ -140,7 +140,10 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 // METRICS_ADDR enables the Prometheus /metrics pull endpoint.
 // OTEL_EXPORTER_OTLP_ENDPOINT enables OTLP gRPC push export.
 // If neither variable is set, a no-op Provider is returned.
-func NewFromEnv(ctx context.Context) (*Provider, error) {
+//
+// The returned shutdown func must be deferred by the caller. It shuts down all
+// exporters with a 10-second deadline and writes any error to stderr.
+func NewFromEnv(ctx context.Context) (*Provider, func(), error) {
 	var opts []Option
 	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
 		opts = append(opts, WithMetricsAddr(addr))
@@ -148,5 +151,16 @@ func NewFromEnv(ctx context.Context) (*Provider, error) {
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
 		opts = append(opts, WithOTLPEndpoint(endpoint))
 	}
-	return New(ctx, opts...)
+	p, err := New(ctx, opts...)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	shutdown := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := p.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "metrics shutdown error: %v\n", err)
+		}
+	}
+	return p, shutdown, nil
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
@@ -44,17 +43,11 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
 	}
 
-	metricsProvider, err := metrics.NewFromEnv(ctx)
+	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := metricsProvider.Shutdown(shutdownCtx); err != nil {
-			log.Printf("metrics shutdown error: %v", err)
-		}
-	}()
+	defer shutdown()
 
 	client, err := hatchet.NewClient()
 	if err != nil {
