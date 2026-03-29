@@ -3,6 +3,7 @@
 - If you're unsure about a decision, or need more information, stop and ask.
 - **When skipping a verification step** (e.g. tests that can't run in this environment): always post a specific, actionable explanation — name the exact constraint (e.g. "Docker daemon can't start: iptables unavailable in nested container") and what the human needs to do to unblock it. Never silently skip without explaining why.
 - Don't use `<` or `>` symbols for placeholders in markdown documents, as these render as tags. If you need a literal `<` or `>` symbol otherwise, use `&gt;` or `&lt;` instead, or wrap them in backticks.
+- Don't put line breaks within individual paragraph in markdown documents. These don't render well in some markdown renderes, such as GitHub issues.
 
 ## Tech Stack
 - Go 1.26, PostgreSQL, Hatchet (workflow orchestration)
