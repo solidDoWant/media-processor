@@ -79,13 +79,13 @@ func NewMediaWorkflow(
 	// temp name, then atomically rename it to the final path. Writing to the output
 	// directory (rather than the system temp dir) means the rename is always within the
 	// same filesystem, so it is guaranteed to be atomic on Linux.
-	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (shared.TranscodeOutput, error) {
 		var probe shared.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return struct{}{}, fmt.Errorf("get probe output: %w", err)
+			return shared.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return struct{}{}, shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath)
+		return shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath)
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
 	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library

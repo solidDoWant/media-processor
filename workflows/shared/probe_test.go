@@ -19,20 +19,6 @@ func TestRunProbe(t *testing.T) {
 		fileDeleted bool
 	}{
 		{
-			name:      "valid H.264 MP4 returns codec, format, and audio streams",
-			setupPath: copyTestVideo,
-			expected: ProbeOutput{
-				IsValidMedia: true,
-				VideoCodec:   "h264",
-				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
-				AudioStreams: []AudioStreamInfo{
-					{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2},
-				},
-			},
-			errFunc:     require.NoError,
-			fileDeleted: false,
-		},
-		{
 			name: "non-media text file returns invalid and deletes file",
 			setupPath: func(t *testing.T) string {
 				p := filepath.Join(t.TempDir(), "notavideo.txt")
@@ -69,6 +55,28 @@ func TestRunProbe(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunProbe_ValidMediaFile(t *testing.T) {
+	path := copyTestVideo(t)
+
+	got, err := RunProbe(t.Context(), path)
+
+	require.NoError(t, err)
+	// Check all non-float fields via struct equality (DurationSeconds zeroed out).
+	gotWithoutDuration := got
+	gotWithoutDuration.DurationSeconds = 0
+	assert.Equal(t, ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{
+			{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2},
+		},
+	}, gotWithoutDuration)
+	// DurationSeconds is a float64 derived from ffprobe; use InDelta to tolerate minor rounding.
+	assert.InDelta(t, 5.013333, got.DurationSeconds, 0.001, "DurationSeconds should match actual file duration")
+	assert.Greater(t, got.DurationSeconds, float64(0), "DurationSeconds should be positive for valid media")
 }
 
 func TestRunProbe_CancelledContextPropagatesError(t *testing.T) {
