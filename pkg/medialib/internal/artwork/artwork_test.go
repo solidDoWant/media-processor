@@ -144,6 +144,41 @@ func TestFetchPosterImage(t *testing.T) {
 	}
 }
 
+// TestFetchPosterImage_RemoteURLExternalHost verifies that the API key is NOT
+// forwarded when the image URL is a RemoteURL pointing to an external host.
+// The external server is configured to reject requests that carry the key,
+// so the test fails if the key is incorrectly forwarded.
+func TestFetchPosterImage_RemoteURLExternalHost(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+
+	// External CDN: rejects any request that carries an API key.
+	externalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(jpegBytes)
+	}))
+	t.Cleanup(externalSrv.Close)
+
+	imgs := []*starr.Image{{
+		CoverType: "poster",
+		Extension: ".jpg",
+		URL:       "",
+		RemoteURL: externalSrv.URL + "/poster.jpg",
+	}}
+
+	// baseURL is different from the external server — so the key must not be sent.
+	gotBytes, gotMime, err := artwork.FetchPosterImage(t.Context(), imgs, "http://radarr.local:7878", "secret-key")
+
+	require.NoError(t, err)
+	assert.Equal(t, jpegBytes, gotBytes)
+	assert.Equal(t, "image/jpeg", gotMime)
+}
+
 func TestFetchPosterImage_Unreachable(t *testing.T) {
 	imgs := []*starr.Image{{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"}}
 

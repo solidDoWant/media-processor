@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"golift.io/starr"
 )
@@ -17,13 +19,21 @@ const (
 	MimeJPEG = "image/jpeg"
 	// MimePNG is the MIME type for PNG images.
 	MimePNG = "image/png"
+
+	// fetchTimeout is the per-request deadline for poster image downloads.
+	fetchTimeout = 10 * time.Second
 )
 
 // FetchPosterImage finds the poster image in images, fetches it from baseURL
 // using the provided API key, and returns the bytes and MIME type.
 // Returns nil bytes (no error) when no JPEG or PNG poster is available or
 // the image type cannot be validated.
+//
+// The API key is only sent when the resolved image URL starts with baseURL.
+// RemoteURL values (absolute external URLs) are fetched without the API key.
 func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKey string) ([]byte, string, error) {
+	normalizedBase := strings.TrimRight(baseURL, "/")
+
 	for _, img := range images {
 		if img.CoverType != "poster" {
 			continue
@@ -46,15 +56,22 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 
 		// Relative paths are served by the arr instance; prepend the base URL.
 		if strings.HasPrefix(imageURL, "/") {
-			imageURL = strings.TrimRight(baseURL, "/") + imageURL
+			imageURL = normalizedBase + imageURL
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+		fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, imageURL, nil)
 		if err != nil {
 			return nil, "", fmt.Errorf("build image request: %w", err)
 		}
 
-		req.Header.Set("X-Api-Key", apiKey)
+		// Only send the API key when fetching from the configured arr instance.
+		// RemoteURL values may point to external CDNs and must not receive it.
+		if strings.HasPrefix(imageURL, normalizedBase) {
+			req.Header.Set("X-Api-Key", apiKey)
+		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -63,14 +80,9 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 
 		defer func() { _ = resp.Body.Close() }()
 
-		// Post-fetch Content-Type validation.
-		ct := resp.Header.Get("Content-Type")
-		// Strip parameters like "; charset=utf-8".
-		if i := strings.Index(ct, ";"); i >= 0 {
-			ct = strings.TrimSpace(ct[:i])
-		}
-
-		if ct != MimeJPEG && ct != MimePNG {
+		// Post-fetch Content-Type validation using the standard MIME parser.
+		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		if err != nil || (ct != MimeJPEG && ct != MimePNG) {
 			return nil, "", nil
 		}
 
