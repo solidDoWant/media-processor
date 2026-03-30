@@ -5,6 +5,8 @@ package media
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -147,7 +149,10 @@ func NewMediaWorkflow(
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
 	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
-	// for the transcoded output file, triggering import into the library.
+	// for the processed output file, triggering import into the library. The import path is
+	// derived from input.FilePath (the original download path) with the extension replaced
+	// by .mkv, so that the path points to the actual transcoded file as seen by the arr
+	// service (via the LocalPathPrefix/RemotePathPrefix translation in ImportByFilePath).
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		var transcode shared.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
@@ -159,7 +164,14 @@ func NewMediaWorkflow(
 			return struct{}{}, err
 		}
 
-		if err := library.ImportByFilePath(ctx, input.FilePath); err != nil {
+		// Derive the import path from the original input path, replacing the extension
+		// with .mkv to match the transcoded output. This ensures the arr service can
+		// locate the processed file and that the path maps to the queue entry's directory.
+		inputBase := filepath.Base(input.FilePath)
+		mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+		importPath := filepath.Join(filepath.Dir(input.FilePath), mkvBase)
+
+		if err := library.ImportByFilePath(ctx, importPath); err != nil {
 			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
 

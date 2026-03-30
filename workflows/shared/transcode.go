@@ -199,12 +199,45 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	effectiveOutputDir := outputDir
 
 	if watcherRoot != "" {
-		relDir, relErr := filepath.Rel(watcherRoot, filepath.Dir(filePath))
+		absWatcherRoot, absErr := filepath.Abs(watcherRoot)
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute watcher root: %w", absErr)
+		}
+
+		absFileDir, absErr := filepath.Abs(filepath.Dir(filePath))
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute file directory: %w", absErr)
+		}
+
+		relDir, relErr := filepath.Rel(absWatcherRoot, absFileDir)
 		if relErr != nil {
 			return TranscodeOutput{}, fmt.Errorf("compute relative output subdir: %w", relErr)
 		}
 
-		effectiveOutputDir = filepath.Join(outputDir, relDir)
+		// Prevent directory traversal: reject any relDir that is absolute or escapes
+		// watcherRoot via ".." components (e.g. filePath outside watcherRoot).
+		if filepath.IsAbs(relDir) || relDir == ".." || strings.HasPrefix(relDir, ".."+string(os.PathSeparator)) {
+			return TranscodeOutput{}, fmt.Errorf("refusing to derive output subdir outside watcher root: %q", relDir)
+		}
+
+		absOutputDir, absErr := filepath.Abs(outputDir)
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute outputDir: %w", absErr)
+		}
+
+		candidateDir := filepath.Clean(filepath.Join(absOutputDir, relDir))
+
+		// Double-check: ensure the resulting directory is still within outputDir.
+		relToRoot, relErr := filepath.Rel(absOutputDir, candidateDir)
+		if relErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("verify effective output subdir: %w", relErr)
+		}
+
+		if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(os.PathSeparator)) || filepath.IsAbs(relToRoot) {
+			return TranscodeOutput{}, fmt.Errorf("refusing to write outside outputDir: %q", candidateDir)
+		}
+
+		effectiveOutputDir = candidateDir
 		if mkErr := os.MkdirAll(effectiveOutputDir, 0o755); mkErr != nil {
 			return TranscodeOutput{}, fmt.Errorf("create output subdir: %w", mkErr)
 		}
