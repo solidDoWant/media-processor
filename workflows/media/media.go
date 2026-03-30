@@ -141,15 +141,20 @@ func NewMediaWorkflow(
 		return out, err
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
-	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library
-	// rescan. Fails with ErrNotFound if the file is not recognised by the library service.
+	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
+	// for the transcoded output file, triggering import into the library.
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		var transcode shared.TranscodeOutput
+		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
+			return struct{}{}, fmt.Errorf("get transcode output: %w", err)
+		}
+
 		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return struct{}{}, err
 		}
 
-		if err := library.RefreshByFilePath(ctx, input.FilePath); err != nil {
+		if err := library.ImportByFilePath(ctx, transcode.DestFilePath); err != nil {
 			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
 

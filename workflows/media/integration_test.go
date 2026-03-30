@@ -72,7 +72,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by cleanup step")
 }
 
-func TestMediaWorkflow_Movie_RefreshByFilePathIsCalledAfterTranscode(t *testing.T) {
+func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
@@ -90,7 +90,8 @@ func TestMediaWorkflow_Movie_RefreshByFilePathIsCalledAfterTranscode(t *testing.
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
-	assert.Len(t, radarrStub.refreshCalls, 1, "RefreshByFilePath should be called exactly once")
+	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
+	assert.True(t, strings.HasPrefix(radarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", radarrStub.importCalls[0])
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -119,7 +120,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by cleanup step")
 }
 
-func TestMediaWorkflow_Show_RefreshByFilePathIsCalledAfterTranscode(t *testing.T) {
+func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
 	}
@@ -137,7 +138,8 @@ func TestMediaWorkflow_Show_RefreshByFilePathIsCalledAfterTranscode(t *testing.T
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
 	require.NoError(t, err)
 
-	assert.Len(t, sonarrStub.refreshCalls, 1, "RefreshByFilePath should be called exactly once")
+	require.Len(t, sonarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
+	assert.True(t, strings.HasPrefix(sonarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", sonarrStub.importCalls[0])
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {

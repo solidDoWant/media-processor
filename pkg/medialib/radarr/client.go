@@ -2,7 +2,9 @@
 package radarr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -44,10 +46,10 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, radarr: radarrlib.New(s)}
 }
 
-// GetMovieByFilePath returns the movie identified by parsing the file path.
-// Uses Radarr's parse endpoint, so it works for pre-import files.
-// Returns medialib.ErrNotFound if no movie is identified.
-func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.Movie, error) {
+// translatePath applies LocalPathPrefix/RemotePathPrefix translation to path and
+// validates the result is within the configured remote prefix. Returns the
+// translated path, or an error if the path escapes the prefix.
+func (c *Client) translatePath(path string) (string, error) {
 	if c.cfg.LocalPathPrefix != "" {
 		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
 			path = c.cfg.RemotePathPrefix + after
@@ -61,8 +63,22 @@ func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.
 	if c.cfg.RemotePathPrefix != "" {
 		cleanPrefix := filepath.Clean(c.cfg.RemotePathPrefix)
 		if !strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)) {
-			return medialib.Movie{}, fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
+			return "", fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
 		}
+	}
+
+	return path, nil
+}
+
+// GetMovieByFilePath returns the movie identified by parsing the file path.
+// Uses Radarr's parse endpoint, so it works for pre-import files.
+// Returns medialib.ErrNotFound if no movie is identified.
+func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.Movie, error) {
+	var err error
+
+	path, err = c.translatePath(path)
+	if err != nil {
+		return medialib.Movie{}, err
 	}
 
 	movie, err := c.parseFilePath(ctx, path)
@@ -129,20 +145,31 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	return &movie, nil
 }
 
-// RefreshByFilePath implements medialib.ArrLibrary. It looks up the movie by
-// file path and triggers a Radarr library rescan for that movie.
-func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
-	movie, err := c.GetMovieByFilePath(ctx, path)
+// ImportByFilePath implements medialib.ArrLibrary. It translates path to
+// Radarr's view and sends a DownloadedMoviesScan command for that path,
+// causing Radarr to import the file at path into the library.
+func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
+	translated, err := c.translatePath(path)
 	if err != nil {
 		return err
 	}
 
-	_, err = c.radarr.SendCommandContext(ctx, &radarrlib.CommandRequest{
-		Name:     "RefreshMovie",
-		MovieIDs: []int64{movie.ID},
-	})
-	if err != nil {
-		return fmt.Errorf("refresh movie %d: %w", movie.ID, err)
+	requestPayload := struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}{
+		Name: "DownloadedMoviesScan",
+		Path: translated,
+	}
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(requestPayload); err != nil {
+		return fmt.Errorf("encode command: %w", err)
+	}
+
+	var resp radarrlib.CommandResponse
+	if err := c.radarr.PostInto(ctx, starr.Request{URI: radarrlib.APIver + "/command", Body: &body}, &resp); err != nil {
+		return fmt.Errorf("scan downloaded movies at %q: %w", translated, err)
 	}
 
 	return nil

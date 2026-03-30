@@ -87,7 +87,7 @@ Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This
 3. **File lands in `/downloads`.** The download client saves the completed file to the real `/downloads` directory and reports the file path back to Sonarr/Radarr.
 4. **Watcher detects the file.** The `cmd/watcher` process, which watches `/downloads` via `fsnotify`, detects the new file and submits a media-processor workflow job to Hatchet.
 5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `/processed-output`.
-6. **Library refresh triggered.** The workflow's `notify` step calls `ArrLibrary.RefreshByFilePath` with the output file path. This sends a `RefreshMovie` (Radarr) or `RefreshSeries` (Sonarr) command to the appropriate service, scoped to the specific item.
+6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.RefreshByFilePath` with the transcoded output file path (e.g., `/processed-output/foo.mkv`). The path is translated if necessary via `LocalPathPrefix`/`RemotePathPrefix` to produce the path as Sonarr/Radarr sees it (e.g., `/downloads/foo.mkv`), then a `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path, triggering the arr service's normal download-completion import pipeline.
 7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans its `/downloads` path (which resolves to `/processed-output` on the host) and finds the processed file, then imports it into the library.
 
 ### Why the bind-mount is necessary

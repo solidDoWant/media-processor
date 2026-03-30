@@ -2,7 +2,9 @@
 package sonarr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -43,10 +45,10 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, sonarr: sonarrlib.New(s)}
 }
 
-// GetEpisodeByFilePath returns the episode identified by parsing the file path.
-// Uses Sonarr's parse endpoint, so it works for pre-import files.
-// Returns medialib.ErrNotFound if no episode is identified.
-func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
+// translatePath applies LocalPathPrefix/RemotePathPrefix translation to path and
+// validates the result is within the configured remote prefix. Returns the
+// translated path, or an error if the path escapes the prefix.
+func (c *Client) translatePath(path string) (string, error) {
 	if c.cfg.LocalPathPrefix != "" {
 		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
 			path = c.cfg.RemotePathPrefix + after
@@ -60,8 +62,22 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 	if c.cfg.RemotePathPrefix != "" {
 		cleanPrefix := filepath.Clean(c.cfg.RemotePathPrefix)
 		if !strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)) {
-			return medialib.Episode{}, fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
+			return "", fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
 		}
+	}
+
+	return path, nil
+}
+
+// GetEpisodeByFilePath returns the episode identified by parsing the file path.
+// Uses Sonarr's parse endpoint, so it works for pre-import files.
+// Returns medialib.ErrNotFound if no episode is identified.
+func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
+	var err error
+
+	path, err = c.translatePath(path)
+	if err != nil {
+		return medialib.Episode{}, err
 	}
 
 	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Path: path})
@@ -121,21 +137,32 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	return &episode, nil
 }
 
-// RefreshByFilePath implements medialib.ArrLibrary. It looks up the episode by
-// file path and triggers a Sonarr series rescan. Sonarr only supports
-// series-level refresh, so the series ID (not the episode ID) is used.
-func (c *Client) RefreshByFilePath(ctx context.Context, path string) error {
-	episode, err := c.GetEpisodeByFilePath(ctx, path)
+// ImportByFilePath implements medialib.ArrLibrary. It translates path to
+// Sonarr's view and sends a DownloadedEpisodesScan command for that path,
+// causing Sonarr to import the file at path into the library.
+func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
+	translated, err := c.translatePath(path)
 	if err != nil {
 		return err
 	}
 
-	_, err = c.sonarr.SendCommandContext(ctx, &sonarrlib.CommandRequest{
-		Name:      "RefreshSeries",
-		SeriesIDs: []int64{episode.SeriesID},
-	})
-	if err != nil {
-		return fmt.Errorf("refresh series %d: %w", episode.SeriesID, err)
+	requestPayload := struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}{
+		Name: "DownloadedEpisodesScan",
+		Path: translated,
+	}
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(requestPayload); err != nil {
+		return fmt.Errorf("encode command: %w", err)
+	}
+
+	var resp sonarrlib.CommandResponse
+
+	if err := c.sonarr.PostInto(ctx, starr.Request{URI: sonarrlib.APIver + "/command", Body: &body}, &resp); err != nil {
+		return fmt.Errorf("scan downloaded episodes at %q: %w", translated, err)
 	}
 
 	return nil

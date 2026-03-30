@@ -26,6 +26,8 @@ type sonarrTestServerConfig struct {
 	seriesByID *sonarrlib.Series // response for /api/v3/series/{id}
 	imageBody  []byte
 	imageType  string
+	// onCommand is called with the raw command request when /api/v3/command is hit.
+	onCommand func(t *testing.T, r *http.Request)
 }
 
 func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
@@ -44,6 +46,10 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.onCommand != nil {
+			cfg.onCommand(t, r)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&sonarrlib.CommandResponse{ID: 1, Status: "queued"}))
 	})
@@ -165,36 +171,77 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 	}
 }
 
-func TestRefreshByFilePath(t *testing.T) {
-	knownParseOutput := &sonarrlib.ParseOutput{
-		Title: "Breaking Bad",
-		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
-			SeriesTitle:    "Breaking Bad",
-			SeasonNumber:   1,
-			EpisodeNumbers: []int{1},
+func TestImportByFilePath(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		cfg         sonarr.Config
+		wantCmdName string
+		wantCmdPath string
+		errFunc     require.ErrorAssertionFunc
+	}{
+		{
+			name:        "sends DownloadedEpisodesScan with the given path",
+			path:        "/tv/Breaking.Bad.S01E01.mkv",
+			wantCmdName: "DownloadedEpisodesScan",
+			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
 		},
-		Episodes: []*sonarrlib.Episode{
-			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		{
+			name: "path translation maps local prefix to remote prefix in command",
+			path: "/mnt/tv/Breaking.Bad.S01E01.mkv",
+			cfg: sonarr.Config{
+				LocalPathPrefix:  "/mnt/tv",
+				RemotePathPrefix: "/tv",
+			},
+			wantCmdName: "DownloadedEpisodesScan",
+			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
+		},
+		{
+			name: "path traversal outside remote prefix returns error without sending command",
+			path: "/mnt/tv/../../etc/passwd",
+			cfg: sonarr.Config{
+				LocalPathPrefix:  "/mnt/tv",
+				RemotePathPrefix: "/tv",
+			},
+			errFunc: require.Error,
 		},
 	}
 
-	srv := newSonarrTestServer(t, knownParseOutput)
-	t.Cleanup(srv.Close)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCmd struct {
+				Name string `json:"name"`
+				Path string `json:"path"`
+			}
 
-	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				onCommand: func(t *testing.T, r *http.Request) {
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
+				},
+			})
+			t.Cleanup(srv.Close)
 
-	err := client.RefreshByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
-	require.NoError(t, err)
-}
+			cfg := tc.cfg
+			cfg.URL = srv.URL
+			cfg.APIKey = "test-key"
 
-func TestRefreshByFilePath_ErrNotFound(t *testing.T) {
-	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
-	t.Cleanup(srv.Close)
+			client := sonarr.New(cfg)
 
-	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+			err := client.ImportByFilePath(t.Context(), tc.path)
 
-	err := client.RefreshByFilePath(t.Context(), "/tv/Unknown.S01E01.mkv")
-	require.ErrorIs(t, err, medialib.ErrNotFound)
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
+
+			if err == nil {
+				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
+				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
+			}
+		})
+	}
 }
 
 func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
@@ -204,10 +251,10 @@ func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
+func TestImportByFilePath_UnreachableURL(t *testing.T) {
 	client := sonarr.New(sonarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.RefreshByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+	err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
 	require.Error(t, err)
 }
 

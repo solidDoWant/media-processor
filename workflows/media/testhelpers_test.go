@@ -30,17 +30,17 @@ func copyTestVideo(t *testing.T) string {
 
 // stubLibraryClient implements medialib.ArrLibrary for testing.
 type stubLibraryClient struct {
-	err          error
-	refreshCalls []string
-	infoResult   medialib.MediaInfo
-	infoErr      error
-	posterBytes  []byte
-	posterMime   string
-	posterErr    error
+	err         error
+	importCalls []string
+	infoResult  medialib.MediaInfo
+	infoErr     error
+	posterBytes []byte
+	posterMime  string
+	posterErr   error
 }
 
-func (s *stubLibraryClient) RefreshByFilePath(_ context.Context, path string) error {
-	s.refreshCalls = append(s.refreshCalls, path)
+func (s *stubLibraryClient) ImportByFilePath(_ context.Context, path string) error {
+	s.importCalls = append(s.importCalls, path)
 	return s.err
 }
 

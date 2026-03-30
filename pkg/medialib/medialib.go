@@ -116,10 +116,10 @@ type EpisodeLibrary interface {
 // library service (Radarr for movies, Sonarr for shows). It abstracts the
 // type-specific lookup-and-refresh calls so workflow steps need no media-type switch.
 type ArrLibrary interface {
-	// RefreshByFilePath looks up the media item at path in the backing library
-	// service and triggers a rescan. For Sonarr, the rescan is at series level
-	// (Sonarr does not support episode-level refresh).
-	RefreshByFilePath(ctx context.Context, path string) error
+	// ImportByFilePath translates path to the arr service's view and sends a
+	// DownloadedMoviesScan (Radarr) or DownloadedEpisodesScan (Sonarr) command,
+	// triggering the arr service's normal download-completion import pipeline.
+	ImportByFilePath(ctx context.Context, path string) error
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.
 	GetInfo(ctx context.Context, path string) (MediaInfo, error)

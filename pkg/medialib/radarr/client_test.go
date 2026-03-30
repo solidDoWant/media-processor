@@ -32,6 +32,8 @@ type testServerConfig struct {
 	movieByID *radarrlib.Movie // response for /api/v3/movie/{id}
 	imageBody []byte           // raw bytes served at image paths
 	imageType string           // Content-Type for image responses
+	// onCommand is called with the raw command request when /api/v3/command is hit.
+	onCommand func(t *testing.T, r *http.Request)
 }
 
 func newTestServer(t *testing.T, parseResp *parseResponse) *httptest.Server {
@@ -50,6 +52,10 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.onCommand != nil {
+			cfg.onCommand(t, r)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.CommandResponse{ID: 1, Status: "queued"}))
 	})
@@ -161,24 +167,77 @@ func TestGetMovieByFilePath(t *testing.T) {
 	}
 }
 
-func TestRefreshByFilePath(t *testing.T) {
-	srv := newTestServer(t, &parseResponse{Movie: &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}})
-	t.Cleanup(srv.Close)
+func TestImportByFilePath(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		cfg          radarr.Config
+		wantCmdName  string
+		wantCmdPath  string
+		errFunc      require.ErrorAssertionFunc
+	}{
+		{
+			name:        "sends DownloadedMoviesScan with the given path",
+			path:        "/movies/The.Matrix.1999.mkv",
+			wantCmdName: "DownloadedMoviesScan",
+			wantCmdPath: "/movies/The.Matrix.1999.mkv",
+		},
+		{
+			name: "path translation maps local prefix to remote prefix in command",
+			path: "/mnt/movies/The.Matrix.1999.mkv",
+			cfg: radarr.Config{
+				LocalPathPrefix:  "/mnt/movies",
+				RemotePathPrefix: "/movies",
+			},
+			wantCmdName: "DownloadedMoviesScan",
+			wantCmdPath: "/movies/The.Matrix.1999.mkv",
+		},
+		{
+			name: "path traversal outside remote prefix returns error without sending command",
+			path: "/mnt/movies/../../etc/passwd",
+			cfg: radarr.Config{
+				LocalPathPrefix:  "/mnt/movies",
+				RemotePathPrefix: "/movies",
+			},
+			errFunc: require.Error,
+		},
+	}
 
-	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotCmd struct {
+				Name string `json:"name"`
+				Path string `json:"path"`
+			}
 
-	err := client.RefreshByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
-	require.NoError(t, err)
-}
+			srv := newTestServerWithConfig(t, testServerConfig{
+				onCommand: func(t *testing.T, r *http.Request) {
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
+				},
+			})
+			t.Cleanup(srv.Close)
 
-func TestRefreshByFilePath_ErrNotFound(t *testing.T) {
-	srv := newTestServer(t, &parseResponse{Movie: nil})
-	t.Cleanup(srv.Close)
+			cfg := tc.cfg
+			cfg.URL = srv.URL
+			cfg.APIKey = "test-key"
 
-	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+			client := radarr.New(cfg)
 
-	err := client.RefreshByFilePath(t.Context(), "/movies/Unknown.mkv")
-	require.ErrorIs(t, err, medialib.ErrNotFound)
+			err := client.ImportByFilePath(t.Context(), tc.path)
+
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
+
+			if err == nil {
+				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
+				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
+			}
+		})
+	}
 }
 
 func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
@@ -188,10 +247,10 @@ func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRefreshByFilePath_UnreachableURL(t *testing.T) {
+func TestImportByFilePath_UnreachableURL(t *testing.T) {
 	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.RefreshByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
+	err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
 	require.Error(t, err)
 }
 
