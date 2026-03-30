@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golift.io/starr"
 	sonarrlib "golift.io/starr/sonarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -19,19 +20,47 @@ import (
 // privileged port with no listener in any normal environment).
 const unreachableURL = "http://127.0.0.1:1"
 
+// sonarrTestServerConfig holds configuration for test HTTP servers.
+type sonarrTestServerConfig struct {
+	parseResp  *sonarrlib.ParseOutput
+	seriesByID *sonarrlib.Series // response for /api/v3/series/{id}
+	imageBody  []byte
+	imageType  string
+}
+
 func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
+	t.Helper()
+	return newSonarrTestServerWithConfig(t, sonarrTestServerConfig{parseResp: parseResp})
+}
+
+func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(parseResp))
+		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&sonarrlib.CommandResponse{ID: 1, Status: "queued"}))
+	})
+
+	mux.HandleFunc("/api/v3/series/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(cfg.seriesByID))
+	})
+
+	mux.HandleFunc("/MediaCover/", func(w http.ResponseWriter, r *http.Request) {
+		ct := cfg.imageType
+		if ct == "" {
+			ct = "image/jpeg"
+		}
+
+		w.Header().Set("Content-Type", ct)
+		_, _ = w.Write(cfg.imageBody)
 	})
 
 	return httptest.NewServer(mux)
@@ -254,6 +283,128 @@ func TestGetInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetPosterImage(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	pngBytes := []byte{0x89, 0x50, 0x4E, 0x47}
+
+	knownParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		seriesByID *sonarrlib.Series
+		imageBody  []byte
+		imageType  string
+		wantBytes  []byte
+		wantMime   string
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{
+			name: "JPEG series poster returned",
+			seriesByID: &sonarrlib.Series{
+				ID: 10,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/10/poster.jpg"},
+				},
+			},
+			imageBody: jpegBytes,
+			imageType: "image/jpeg",
+			wantBytes: jpegBytes,
+			wantMime:  "image/jpeg",
+		},
+		{
+			name: "PNG series poster returned",
+			seriesByID: &sonarrlib.Series{
+				ID: 10,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".png", URL: "/MediaCover/10/poster.png"},
+				},
+			},
+			imageBody: pngBytes,
+			imageType: "image/png",
+			wantBytes: pngBytes,
+			wantMime:  "image/png",
+		},
+		{
+			name: "no poster image returns nil bytes",
+			seriesByID: &sonarrlib.Series{
+				ID: 10,
+				Images: []*starr.Image{
+					{CoverType: "fanart", Extension: ".jpg", URL: "/MediaCover/10/fanart.jpg"},
+				},
+			},
+			imageBody: jpegBytes,
+			imageType: "image/jpeg",
+			wantBytes: nil,
+			wantMime:  "",
+		},
+		{
+			name: "unsupported image extension returns nil bytes",
+			seriesByID: &sonarrlib.Series{
+				ID: 10,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".webp", URL: "/MediaCover/10/poster.webp"},
+				},
+			},
+			imageBody: []byte("webp"),
+			imageType: "image/webp",
+			wantBytes: nil,
+			wantMime:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseResp:  knownParseOutput,
+				seriesByID: tc.seriesByID,
+				imageBody:  tc.imageBody,
+				imageType:  tc.imageType,
+			})
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+			gotBytes, gotMime, err := client.GetPosterImage(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
+			assert.Equal(t, tc.wantBytes, gotBytes)
+			assert.Equal(t, tc.wantMime, gotMime)
+		})
+	}
+}
+
+func TestGetPosterImage_EpisodeNotFound(t *testing.T) {
+	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	_, _, err := client.GetPosterImage(t.Context(), "/tv/Unknown.S01E01.mkv")
+	require.ErrorIs(t, err, medialib.ErrNotFound)
+}
+
+func TestGetPosterImage_UnreachableURL(t *testing.T) {
+	client := sonarr.New(sonarr.Config{URL: unreachableURL, APIKey: "test-key"})
+
+	_, _, err := client.GetPosterImage(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+	require.Error(t, err)
 }
 
 func TestGetEpisodeByFilePath_ErrNotFoundSentinel(t *testing.T) {

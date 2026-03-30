@@ -3,12 +3,14 @@ package radarr_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golift.io/starr"
 	radarrlib "golift.io/starr/radarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -24,19 +26,47 @@ type parseResponse struct {
 	Movie *radarrlib.Movie `json:"movie"`
 }
 
+// testServerConfig holds configuration for test HTTP servers.
+type testServerConfig struct {
+	parseResp *parseResponse
+	movieByID *radarrlib.Movie // response for /api/v3/movie/{id}
+	imageBody []byte           // raw bytes served at image paths
+	imageType string           // Content-Type for image responses
+}
+
 func newTestServer(t *testing.T, parseResp *parseResponse) *httptest.Server {
+	t.Helper()
+	return newTestServerWithConfig(t, testServerConfig{parseResp: parseResp})
+}
+
+func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(parseResp))
+		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.CommandResponse{ID: 1, Status: "queued"}))
+	})
+
+	mux.HandleFunc("/api/v3/movie/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(cfg.movieByID))
+	})
+
+	mux.HandleFunc("/MediaCover/", func(w http.ResponseWriter, r *http.Request) {
+		ct := cfg.imageType
+		if ct == "" {
+			ct = "image/jpeg"
+		}
+
+		w.Header().Set("Content-Type", ct)
+		_, _ = w.Write(cfg.imageBody)
 	})
 
 	return httptest.NewServer(mux)
@@ -216,6 +246,118 @@ func TestGetInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetPosterImage(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	pngBytes := []byte{0x89, 0x50, 0x4E, 0x47}
+
+	knownMovie := &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}
+
+	tests := []struct {
+		name      string
+		movieByID *radarrlib.Movie
+		imageBody []byte
+		imageType string
+		wantBytes []byte
+		wantMime  string
+		errFunc   require.ErrorAssertionFunc
+	}{
+		{
+			name: "JPEG poster image returned",
+			movieByID: &radarrlib.Movie{
+				ID: 42,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/42/poster.jpg"},
+				},
+			},
+			imageBody: jpegBytes,
+			imageType: "image/jpeg",
+			wantBytes: jpegBytes,
+			wantMime:  "image/jpeg",
+		},
+		{
+			name: "PNG poster image returned",
+			movieByID: &radarrlib.Movie{
+				ID: 42,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".png", URL: "/MediaCover/42/poster.png"},
+				},
+			},
+			imageBody: pngBytes,
+			imageType: "image/png",
+			wantBytes: pngBytes,
+			wantMime:  "image/png",
+		},
+		{
+			name: "no poster image returns nil bytes",
+			movieByID: &radarrlib.Movie{
+				ID: 42,
+				Images: []*starr.Image{
+					{CoverType: "fanart", Extension: ".jpg", URL: "/MediaCover/42/fanart.jpg"},
+				},
+			},
+			imageBody: jpegBytes,
+			imageType: "image/jpeg",
+			wantBytes: nil,
+			wantMime:  "",
+		},
+		{
+			name: "unsupported image extension returns nil bytes",
+			movieByID: &radarrlib.Movie{
+				ID: 42,
+				Images: []*starr.Image{
+					{CoverType: "poster", Extension: ".webp", URL: "/MediaCover/42/poster.webp"},
+				},
+			},
+			imageBody: []byte("webp"),
+			imageType: "image/webp",
+			wantBytes: nil,
+			wantMime:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServerWithConfig(t, testServerConfig{
+				parseResp: &parseResponse{Movie: knownMovie},
+				movieByID: tc.movieByID,
+				imageBody: tc.imageBody,
+				imageType: tc.imageType,
+			})
+			t.Cleanup(srv.Close)
+
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+			gotBytes, gotMime, err := client.GetPosterImage(t.Context(), "/movies/The.Matrix.1999.mkv")
+
+			errFunc := tc.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
+			assert.Equal(t, tc.wantBytes, gotBytes)
+			assert.Equal(t, tc.wantMime, gotMime)
+		})
+	}
+}
+
+func TestGetPosterImage_MovieNotFound(t *testing.T) {
+	srv := newTestServer(t, &parseResponse{Movie: nil})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	_, _, err := client.GetPosterImage(t.Context(), "/movies/Unknown.mkv")
+	require.ErrorIs(t, err, medialib.ErrNotFound)
+}
+
+func TestGetPosterImage_UnreachableURL(t *testing.T) {
+	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
+
+	_, _, err := client.GetPosterImage(t.Context(), fmt.Sprintf("%s/movies/file.mkv", unreachableURL))
+	require.Error(t, err)
 }
 
 func TestGetMovieByFilePath_ErrNotFoundSentinel(t *testing.T) {

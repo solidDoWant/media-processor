@@ -12,6 +12,7 @@ import (
 	radarrlib "golift.io/starr/radarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
 // Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.ArrLibrary.
@@ -96,6 +97,25 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 	}
 
 	return output.Movie, nil
+}
+
+// GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
+// image bytes and MIME type for the movie at path. Returns nil bytes (no error)
+// when no JPEG or PNG poster is available. Returns medialib.ErrNotFound if the
+// path cannot be matched to a movie. Returns other errors if the library is
+// unreachable or a Radarr API call fails.
+func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
+	movie, err := c.GetMovieByFilePath(ctx, path)
+	if err != nil {
+		return nil, "", fmt.Errorf("get movie for poster: %w", err)
+	}
+
+	full, err := c.radarr.GetMovieByIDContext(ctx, movie.ID)
+	if err != nil {
+		return nil, "", fmt.Errorf("get movie details for poster: %w", err)
+	}
+
+	return artwork.FetchPosterImage(ctx, full.Images, c.cfg.URL, c.cfg.APIKey)
 }
 
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for

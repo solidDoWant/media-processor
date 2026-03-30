@@ -27,6 +27,8 @@ type TranscodeBuilder struct {
 	subtitleStreamTitles  map[int]string // per-stream title overrides for subtitle streams; nil = no overrides
 	autoDownmixTitle      bool           // derive downmix stream title from actual encoder channel layout
 	downmixTitle          string         // title prefix prepended to the downmix channel layout label
+	coverArtBytes         []byte         // raw image bytes to embed as MKV attachment; nil = no cover art
+	coverArtMimeType      string         // MIME type of coverArtBytes ("image/jpeg" or "image/png")
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -175,6 +177,30 @@ func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
 	return b
 }
 
+// WithCoverArt embeds imageBytes as a cover art attachment stream in the MKV
+// output. This method is a no-op when the output container is not
+// ContainerMKV. mimeType must be "image/jpeg" or "image/png"; any other value
+// is treated as a no-op. When called with a valid MIME type, any existing
+// attachment streams present in the source file are excluded from the output
+// so that only the supplied artwork is embedded. A nil or empty imageBytes
+// slice is a no-op.
+func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *TranscodeBuilder {
+	if len(imageBytes) == 0 {
+		return b
+	}
+
+	switch mimeType {
+	case "image/jpeg", "image/png":
+	default:
+		return b
+	}
+
+	b.coverArtBytes = imageBytes
+	b.coverArtMimeType = mimeType
+
+	return b
+}
+
 // WithDownmix synthesizes an additional downmixed audio stream from the input
 // stream at the given index. The downmix targets a 2.1 channel layout with
 // AC-3 encoding; if the encoder does not support 2.1, stereo is used instead.
@@ -183,6 +209,15 @@ func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
 func (b *TranscodeBuilder) WithDownmix(idx *int) *TranscodeBuilder {
 	b.downmixSourceIdx = idx
 	return b
+}
+
+// effectiveContainerIsMKV reports whether the output container is Matroska,
+// either because it was explicitly set via ToContainer or because the output
+// filename has a .mkv extension (the case where the container is inferred by
+// astiav.AllocOutputFormatContext from the filename).
+func (b *TranscodeBuilder) effectiveContainerIsMKV() bool {
+	return b.container == ContainerMKV ||
+		(b.container == "" && strings.HasSuffix(strings.ToLower(b.outputPath), ".mkv"))
 }
 
 // Build returns a runnable Transcoder.
@@ -366,6 +401,23 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		}
 
 		mediaType := inStream.CodecParameters().MediaType()
+
+		// When cover art is being embedded into a Matroska output, drop all
+		// existing attachment streams so the output contains only the freshly
+		// fetched poster. MKV attachments are written as MediaTypeAttachment but
+		// read back by the matroska demuxer as video streams with
+		// DispositionFlagAttachedPic, so we must check both.
+		if len(t.coverArtBytes) > 0 && t.effectiveContainerIsMKV() {
+			if mediaType == astiav.MediaTypeAttachment {
+				continue
+			}
+
+			if mediaType == astiav.MediaTypeVideo &&
+				inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
+				continue
+			}
+		}
+
 		base := copyStreamState{inStream: inStream}
 
 		var s stream
@@ -569,6 +621,14 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 		downmixOut.SetMetadata(downmixMeta)
 	}
 
+	// Add cover art attachment stream after all regular streams (MKV only).
+	if len(t.coverArtBytes) > 0 && t.effectiveContainerIsMKV() {
+		if err := t.addCoverArtStream(outputFmt); err != nil {
+			outputFmt.Free()
+			return nil, noopClose, err
+		}
+	}
+
 	// Open the IO context for file-based output formats.
 	closeIO := noopClose
 
@@ -611,6 +671,57 @@ func (t *Transcoder) outputDisposition(inStream *astiav.Stream) astiav.Dispositi
 	}
 
 	return disp.Del(astiav.DispositionFlagDefault)
+}
+
+// addCoverArtStream appends a cover art attachment stream to outputFmt using
+// t.coverArtBytes and t.coverArtMimeType. The image bytes are stored in the
+// stream's codec parameters extradata; no packets are written for this stream.
+func (t *Transcoder) addCoverArtStream(outputFmt *astiav.FormatContext) error {
+	artStream := outputFmt.NewStream(nil)
+	if artStream == nil {
+		return errors.New("ffmpeg: failed to create cover art attachment stream")
+	}
+
+	cp := artStream.CodecParameters()
+	cp.SetMediaType(astiav.MediaTypeAttachment)
+
+	var (
+		codecID  astiav.CodecID
+		filename string
+	)
+
+	switch t.coverArtMimeType {
+	case "image/jpeg":
+		codecID = astiav.CodecIDMjpeg
+		filename = "cover.jpg"
+	case "image/png":
+		codecID = astiav.CodecIDPng
+		filename = "cover.png"
+	default:
+		return fmt.Errorf("ffmpeg: unsupported cover art MIME type %q", t.coverArtMimeType)
+	}
+
+	cp.SetCodecID(codecID)
+
+	if err := cp.SetExtraData(t.coverArtBytes); err != nil {
+		return fmt.Errorf("ffmpeg: setting cover art extradata: %w", err)
+	}
+
+	meta := astiav.NewDictionary()
+
+	if err := meta.Set("mimetype", t.coverArtMimeType, astiav.NewDictionaryFlags()); err != nil {
+		meta.Free()
+		return fmt.Errorf("ffmpeg: setting cover art mimetype metadata: %w", err)
+	}
+
+	if err := meta.Set("filename", filename, astiav.NewDictionaryFlags()); err != nil {
+		meta.Free()
+		return fmt.Errorf("ffmpeg: setting cover art filename metadata: %w", err)
+	}
+
+	artStream.SetMetadata(meta)
+
+	return nil
 }
 
 // readAllPackets is the main decode/encode loop.

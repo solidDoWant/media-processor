@@ -16,15 +16,16 @@ import (
 type Recorder struct {
 	highCardinality bool
 
-	audioTrackCount    otelmetric.Float64Histogram
-	subtitleTrackCount otelmetric.Float64Histogram
-	sourceDuration     otelmetric.Float64Histogram
-	sourceFileSize     otelmetric.Float64Histogram
-	destFileSize       otelmetric.Float64Histogram
-	transcodeDuration  otelmetric.Float64Histogram
-	totalDuration      otelmetric.Float64Histogram
-	invalidFilesTotal  otelmetric.Int64Counter
-	metricsErrorsTotal otelmetric.Int64Counter
+	audioTrackCount          otelmetric.Float64Histogram
+	subtitleTrackCount       otelmetric.Float64Histogram
+	sourceDuration           otelmetric.Float64Histogram
+	sourceFileSize           otelmetric.Float64Histogram
+	destFileSize             otelmetric.Float64Histogram
+	transcodeDuration        otelmetric.Float64Histogram
+	totalDuration            otelmetric.Float64Histogram
+	invalidFilesTotal        otelmetric.Int64Counter
+	metricsErrorsTotal       otelmetric.Int64Counter
+	artworkFetchSkippedTotal otelmetric.Int64Counter
 }
 
 // NewRecorder creates a Recorder that registers all media workflow instruments against mp.
@@ -94,17 +95,24 @@ func NewRecorder(mp otelmetric.MeterProvider, highCardinality bool) (*Recorder, 
 		return nil, fmt.Errorf("create metrics_errors_total counter: %w", err)
 	}
 
+	artworkFetchSkippedTotal, err := meter.Int64Counter("media_workflow_artwork_fetch_skipped_total",
+		otelmetric.WithDescription("Number of transcode runs where artwork fetch was attempted but yielded no embeddable image"))
+	if err != nil {
+		return nil, fmt.Errorf("create artwork_fetch_skipped_total counter: %w", err)
+	}
+
 	return &Recorder{
-		highCardinality:    highCardinality,
-		audioTrackCount:    audioTrackCount,
-		subtitleTrackCount: subtitleTrackCount,
-		sourceDuration:     sourceDuration,
-		sourceFileSize:     sourceFileSize,
-		destFileSize:       destFileSize,
-		transcodeDuration:  transcodeDuration,
-		totalDuration:      totalDuration,
-		invalidFilesTotal:  invalidFilesTotal,
-		metricsErrorsTotal: metricsErrorsTotal,
+		highCardinality:          highCardinality,
+		audioTrackCount:          audioTrackCount,
+		subtitleTrackCount:       subtitleTrackCount,
+		sourceDuration:           sourceDuration,
+		sourceFileSize:           sourceFileSize,
+		destFileSize:             destFileSize,
+		transcodeDuration:        transcodeDuration,
+		totalDuration:            totalDuration,
+		invalidFilesTotal:        invalidFilesTotal,
+		metricsErrorsTotal:       metricsErrorsTotal,
+		artworkFetchSkippedTotal: artworkFetchSkippedTotal,
 	}, nil
 }
 
@@ -146,6 +154,11 @@ func (r *Recorder) RecordInvalidFile(ctx context.Context, mediaType medialib.Med
 			mappingNameAttr(mappingName),
 		),
 	)
+}
+
+// RecordArtworkFetchSkipped increments the artwork_fetch_skipped_total counter.
+func (r *Recorder) RecordArtworkFetchSkipped(ctx context.Context) {
+	r.artworkFetchSkippedTotal.Add(ctx, 1)
 }
 
 // RecordMetricsError increments the metrics_errors_total counter and logs the error.

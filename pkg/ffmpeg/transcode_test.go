@@ -440,6 +440,178 @@ func TestTranscode_WithDownmix(t *testing.T) {
 		"downmix default disposition must be set iff no other audio stream is already default")
 }
 
+// attachmentInfo describes an attachment stream found in a media file.
+type attachmentInfo struct {
+	data     []byte
+	mimeType string
+	filename string
+}
+
+// probeAttachments opens path and returns attachment stream info.
+// The matroska demuxer reads MKV attachment elements as video streams with
+// AV_DISPOSITION_ATTACHED_PIC; they are identified by a "mimetype" metadata
+// key. Image data is returned from the first packet on each such stream.
+func probeAttachments(t *testing.T, path string) []attachmentInfo {
+	t.Helper()
+
+	fmtCtx := astiav.AllocFormatContext()
+
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
+
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	// Build a map of stream index → attachmentInfo for streams that carry a
+	// "mimetype" metadata tag (the signature of an MKV attachment stream).
+	attachStreams := make(map[int]*attachmentInfo)
+
+	for _, s := range fmtCtx.Streams() {
+		meta := s.Metadata()
+		if meta == nil {
+			continue
+		}
+
+		mt := meta.Get("mimetype", nil, astiav.NewDictionaryFlags())
+		if mt == nil {
+			continue
+		}
+
+		info := &attachmentInfo{mimeType: mt.Value()}
+
+		if fn := meta.Get("filename", nil, astiav.NewDictionaryFlags()); fn != nil {
+			info.filename = fn.Value()
+		}
+
+		attachStreams[s.Index()] = info
+	}
+
+	// Read packets to collect image bytes for each attachment stream.
+	pkt := astiav.AllocPacket()
+
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	for {
+		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			break
+		}
+
+		if info, ok := attachStreams[pkt.StreamIndex()]; ok && info.data == nil {
+			d := pkt.Data()
+			copied := make([]byte, len(d))
+			copy(copied, d)
+			info.data = copied
+		}
+
+		pkt.Unref()
+	}
+
+	result := make([]attachmentInfo, 0, len(attachStreams))
+	for _, info := range attachStreams {
+		result = append(result, *info)
+	}
+
+	return result
+}
+
+// TestTranscode_WithCoverArt_JPEG verifies that a JPEG cover art attachment is
+// embedded in the output MKV with the correct bytes and metadata.
+func TestTranscode_WithCoverArt_JPEG(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01}
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(jpegBytes, "image/jpeg").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	attachments := probeAttachments(t, output)
+	require.Len(t, attachments, 1, "output must contain exactly one attachment stream")
+	assert.Equal(t, jpegBytes, attachments[0].data)
+	assert.Equal(t, "image/jpeg", attachments[0].mimeType)
+	assert.Equal(t, "cover.jpg", attachments[0].filename)
+}
+
+// TestTranscode_WithCoverArt_PNG verifies that a PNG cover art attachment is
+// embedded in the output MKV with the correct bytes and metadata.
+func TestTranscode_WithCoverArt_PNG(t *testing.T) {
+	pngBytes := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(pngBytes, "image/png").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	attachments := probeAttachments(t, output)
+	require.Len(t, attachments, 1, "output must contain exactly one attachment stream")
+	assert.Equal(t, pngBytes, attachments[0].data)
+	assert.Equal(t, "image/png", attachments[0].mimeType)
+	assert.Equal(t, "cover.png", attachments[0].filename)
+}
+
+// TestTranscode_WithCoverArt_ExistingAttachmentsStripped verifies that when
+// cover art is provided, any existing attachment streams in the source file are
+// excluded from the output — only the new poster is embedded.
+func TestTranscode_WithCoverArt_ExistingAttachmentsStripped(t *testing.T) {
+	oldArt := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01}
+	newArt := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+
+	dir := t.TempDir()
+
+	// Step 1: create an MKV with an existing JPEG attachment.
+	withOld := filepath.Join(dir, "with_old.mkv")
+	err := ffmpeg.NewTranscode(testVideoPath, withOld).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(oldArt, "image/jpeg").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	// Sanity check: the intermediate file has exactly one attachment.
+	require.Len(t, probeAttachments(t, withOld), 1, "intermediate file must have one attachment")
+
+	// Step 2: transcode the MKV again with new PNG artwork. The old attachment
+	// must be stripped and only the new one embedded.
+	withNew := filepath.Join(dir, "with_new.mkv")
+	err = ffmpeg.NewTranscode(withOld, withNew).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(newArt, "image/png").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	attachments := probeAttachments(t, withNew)
+	require.Len(t, attachments, 1, "output must contain exactly one attachment (old one stripped)")
+	assert.Equal(t, newArt, attachments[0].data)
+	assert.Equal(t, "image/png", attachments[0].mimeType)
+}
+
+// TestTranscode_WithCoverArt_NilBytesIsNoop verifies that calling WithCoverArt
+// with nil bytes is a no-op: the output contains no attachment streams.
+func TestTranscode_WithCoverArt_NilBytesIsNoop(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(nil, "image/jpeg").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.Empty(t, probeAttachments(t, output), "no attachment expected when cover art bytes are nil")
+}
+
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
 // returns only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present.
