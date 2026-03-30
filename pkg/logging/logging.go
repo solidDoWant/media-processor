@@ -12,6 +12,7 @@ import (
 // as "info". An unrecognised value logs a warning and falls back to INFO.
 func Setup(level string) {
 	var l slog.Level
+
 	switch strings.ToLower(level) {
 	case "debug":
 		l = slog.LevelDebug
@@ -25,6 +26,7 @@ func Setup(level string) {
 		// Warn using the current default before reconfiguring.
 		slog.Warn("unrecognised LOG_LEVEL value, falling back to INFO", "value", level)
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 		return
 	}
 

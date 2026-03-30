@@ -28,6 +28,7 @@ func audioStreamInfo(index int, lang string, channels int) AudioStreamInfo {
 	if effective == 0 {
 		effective = 6
 	}
+
 	return AudioStreamInfo{
 		StreamInfo:            StreamInfo{Index: index, Language: lang},
 		ReportedChannelCount:  channels,
@@ -371,6 +372,7 @@ func TestRunTranscode(t *testing.T) {
 				outputDir := t.TempDir()
 				stale := filepath.Join(outputDir, "._"+mkvOutputName(inputPath)+".tmp")
 				require.NoError(t, os.WriteFile(stale, []byte("stale partial data"), 0o600))
+
 				return inputPath, outputDir
 			},
 			probe:   h264Probe,
@@ -391,6 +393,7 @@ func TestRunTranscode(t *testing.T) {
 				outputDir := t.TempDir()
 				oldContent := []byte("old output")
 				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), oldContent, 0o600))
+
 				return inputPath, outputDir
 			},
 			probe:   h264Probe,
@@ -406,6 +409,7 @@ func TestRunTranscode(t *testing.T) {
 			setup: func(t *testing.T) (string, string) {
 				p := filepath.Join(t.TempDir(), "not-a-video.txt")
 				require.NoError(t, os.WriteFile(p, []byte("not a video"), 0o600))
+
 				return p, t.TempDir()
 			},
 			probe:   ProbeOutput{IsValidMedia: false},
@@ -421,9 +425,11 @@ func TestRunTranscode(t *testing.T) {
 				if os.Getuid() == 0 {
 					t.Skip("skipping permission test: chmod has no effect when running as root")
 				}
+
 				outputDir := t.TempDir()
 				require.NoError(t, os.Chmod(outputDir, 0o555))
 				t.Cleanup(func() { _ = os.Chmod(outputDir, 0o755) })
+
 				return copyTestVideo(t), outputDir
 			},
 			probe:   h264Probe,
@@ -446,12 +452,15 @@ func TestRunTranscode(t *testing.T) {
 				out := filepath.Join(outputDir, mkvOutputName(inputPath))
 				info, err := ffprobe.Probe(t.Context(), out)
 				require.NoError(t, err)
+
 				var audioCount int
+
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
 						audioCount++
 					}
 				}
+
 				assert.Equal(t, 2, audioCount, "output should contain original audio stream plus one downmixed stream")
 			},
 		},
@@ -475,13 +484,16 @@ func TestRunTranscode(t *testing.T) {
 				out := filepath.Join(outputDir, mkvOutputName(inputPath))
 				info, err := ffprobe.Probe(t.Context(), out)
 				require.NoError(t, err)
+
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
 						assert.Equal(t, "Undetermined 2.0", s.Tags["title"],
 							"stereo audio stream should have title 'Undetermined 2.0'")
+
 						return
 					}
 				}
+
 				t.Fatal("no audio stream found in output")
 			},
 		},
@@ -507,11 +519,13 @@ func TestRunTranscode(t *testing.T) {
 				// "Undetermined 2.1" when the AC-3 encoder supports the 2.1
 				// layout, or "Undetermined 2.0" when it falls back to stereo.
 				var lastAudio ffprobe.StreamInfo
+
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
 						lastAudio = s
 					}
 				}
+
 				title := lastAudio.Tags["title"]
 				assert.True(t, title == "Undetermined 2.1" || title == "Undetermined 2.0",
 					"downmix stream title should be 'Undetermined 2.1' or 'Undetermined 2.0', got %q", title)
@@ -526,9 +540,11 @@ func TestRunTranscode(t *testing.T) {
 			out, err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "")
 
 			tt.errFunc(t, err)
+
 			if tt.checkOutput != nil {
 				tt.checkOutput(t, out, inputPath)
 			}
+
 			if tt.check != nil {
 				tt.check(t, outputDir, inputPath)
 			}

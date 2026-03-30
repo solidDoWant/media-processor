@@ -13,8 +13,10 @@ func stripLanguageName(title, langName string) string {
 	if langName == "" {
 		return title
 	}
+
 	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(langName) + `\b`)
 	stripped := re.ReplaceAllLiteralString(title, "")
+
 	return strings.TrimSpace(strings.Join(strings.Fields(stripped), " "))
 }
 
@@ -61,10 +63,12 @@ func channelConfigLabel(channelCount int, hasLFE bool) string {
 	if hasLFE {
 		lfe = 1
 	}
+
 	nonLFE := channelCount - lfe
 	if nonLFE < 0 {
 		nonLFE = 0
 	}
+
 	return fmt.Sprintf("%d.%d", nonLFE, lfe)
 }
 
@@ -82,7 +86,9 @@ func stripChannelConfigLabel(title string) string {
 	}
 
 	var buf strings.Builder
+
 	prevEnd := 0
+
 	for _, match := range matches {
 		start, end := match[0], match[1]
 		// If the matched label is immediately followed by ".<digit>", it is
@@ -90,12 +96,16 @@ func stripChannelConfigLabel(title string) string {
 		if end < len(title) && title[end] == '.' && end+1 < len(title) && title[end+1] >= '0' && title[end+1] <= '9' {
 			buf.WriteString(title[prevEnd:end])
 			prevEnd = end
+
 			continue
 		}
+
 		buf.WriteString(title[prevEnd:start])
 		buf.WriteByte(' ')
+
 		prevEnd = end
 	}
+
 	buf.WriteString(title[prevEnd:])
 
 	return strings.TrimSpace(strings.Join(strings.Fields(buf.String()), " "))
@@ -116,12 +126,15 @@ func buildAudioStreamTitle(sourceTitle, langName, channelLabel string) string {
 	if stripped != "" {
 		parts = append(parts, stripped)
 	}
+
 	if langName != "" {
 		parts = append(parts, langName)
 	}
+
 	if channelLabel != "" {
 		parts = append(parts, channelLabel)
 	}
+
 	return strings.Join(parts, " ")
 }
 
@@ -133,9 +146,11 @@ func buildSubtitleStreamTitle(sourceTitle, langName string) string {
 	if langName == "" {
 		return sourceTitle
 	}
+
 	stripped := stripLanguageName(sourceTitle, langName)
 	if stripped == "" {
 		return langName
 	}
+
 	return stripped + " " + langName
 }

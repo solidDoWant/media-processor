@@ -20,20 +20,25 @@ func attributeKey(name string) attribute.Key { return attribute.Key(name) }
 // newTestRecorder creates a Recorder backed by a ManualReader and returns both.
 func newTestRecorder(t *testing.T, highCardinality bool) (*Recorder, *sdkmetric.ManualReader) {
 	t.Helper()
+
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
 
 	rec, err := NewRecorder(provider, highCardinality)
 	require.NoError(t, err)
+
 	return rec, reader
 }
 
 // collectMetrics gathers all current metric data from the reader.
 func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
 	t.Helper()
+
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(t.Context(), &rm))
+
 	return rm
 }
 
@@ -46,6 +51,7 @@ func findMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metrics 
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -55,6 +61,7 @@ func histogramDataPoints(t *testing.T, m *metricdata.Metrics) []metricdata.Histo
 	require.NotNil(t, m, "expected metric to be present")
 	h, ok := m.Data.(metricdata.Histogram[float64])
 	require.True(t, ok, "expected metric %q to be a float64 histogram", m.Name)
+
 	return h.DataPoints
 }
 

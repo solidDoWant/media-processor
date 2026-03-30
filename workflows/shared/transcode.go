@@ -32,21 +32,26 @@ func SelectVideoCodec(videoCodecName, format string) ffmpeg.Codec {
 // language tag), nil is returned so all streams are preserved as a safe fallback.
 func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 	hasEnglish := false
+
 	for _, s := range streams {
 		if s.Language == "eng" {
 			hasEnglish = true
 			break
 		}
 	}
+
 	if !hasEnglish {
 		return nil
 	}
+
 	var exclude []int
+
 	for _, s := range streams {
 		if s.Language != "eng" {
 			exclude = append(exclude, s.Index)
 		}
 	}
+
 	return exclude
 }
 
@@ -59,15 +64,18 @@ func nonEnglishAudioIndices(streams []AudioStreamInfo) []int {
 // candidates without blocking or triggering synthesis incorrectly.
 func downmixSourceIndex(streams []AudioStreamInfo) *int {
 	var firstSurround *int
+
 	for _, s := range streams {
 		if s.EffectiveChannelCount > 0 && s.EffectiveChannelCount <= 3 {
 			return nil
 		}
+
 		if s.EffectiveChannelCount >= 4 && firstSurround == nil {
 			idx := s.Index
 			firstSurround = &idx
 		}
 	}
+
 	return firstSurround
 }
 
@@ -76,11 +84,13 @@ func downmixSourceIndex(streams []AudioStreamInfo) *int {
 // no safe-fallback: subtitles are always excluded unless explicitly tagged "eng".
 func nonEnglishSubtitleIndices(streams []StreamInfo) []int {
 	var exclude []int
+
 	for _, s := range streams {
 		if s.Language != "eng" {
 			exclude = append(exclude, s.Index)
 		}
 	}
+
 	return exclude
 }
 
@@ -92,6 +102,7 @@ func firstEnglishIndex(streams []StreamInfo) *int {
 			return &stream.Index
 		}
 	}
+
 	return nil
 }
 
@@ -140,6 +151,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	if err != nil {
 		return TranscodeOutput{}, fmt.Errorf("stat source file: %w", err)
 	}
+
 	srcSize := srcInfo.Size()
 
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
@@ -152,6 +164,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	for _, idx := range audioExclude {
 		excludeSet[idx] = true
 	}
+
 	retainedAudio := make([]AudioStreamInfo, 0, len(probe.AudioStreams))
 	for _, s := range probe.AudioStreams {
 		if !excludeSet[s.Index] {
@@ -180,8 +193,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 			if langName != "" {
 				audioTitles[s.Index] = langName
 			}
+
 			continue
 		}
+
 		label := channelConfigLabel(s.ReportedChannelCount, s.HasLFE)
 		audioTitles[s.Index] = buildAudioStreamTitle(s.Title, langName, label)
 	}
@@ -189,14 +204,17 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	// Build per-stream title map for retained subtitle streams.
 	subtitleExclude := nonEnglishSubtitleIndices(probe.SubtitleStreams)
 	subtitleExcludeSet := make(map[int]bool, len(subtitleExclude))
+
 	for _, idx := range subtitleExclude {
 		subtitleExcludeSet[idx] = true
 	}
+
 	subtitleTitles := make(map[int]string, len(probe.SubtitleStreams))
 	for _, s := range probe.SubtitleStreams {
 		if subtitleExcludeSet[s.Index] {
 			continue
 		}
+
 		title := buildSubtitleStreamTitle(s.Title, iso639Name(s.Language))
 		if title != "" {
 			subtitleTitles[s.Index] = title
@@ -206,7 +224,9 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	// Resolve the language name for the downmix source stream so the downmix
 	// title can be prefixed with the human-readable language name.
 	downmixSrcIdx := downmixSourceIndex(retainedAudio)
+
 	var downmixLangName string
+
 	if downmixSrcIdx != nil {
 		for _, s := range retainedAudio {
 			if s.Index == *downmixSrcIdx {

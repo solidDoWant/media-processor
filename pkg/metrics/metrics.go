@@ -53,15 +53,19 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		opt(cfg)
 	}
 
-	var readers []sdkmetric.Reader
-	var shutdownFuncs []func(context.Context) error
+	var (
+		readers       []sdkmetric.Reader
+		shutdownFuncs []func(context.Context) error
+	)
 
 	if cfg.metricsAddr != "" {
 		promRegistry := prometheus.NewRegistry()
+
 		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
 		if err != nil {
 			return nil, fmt.Errorf("create prometheus exporter: %w", err)
 		}
+
 		readers = append(readers, promReader)
 
 		listener, err := net.Listen("tcp", cfg.metricsAddr)
@@ -72,11 +76,13 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
 		srv := &http.Server{Handler: mux}
+
 		go func() {
 			if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				fmt.Fprintf(os.Stderr, "metrics HTTP server error: %v\n", err)
 			}
 		}()
+
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 
@@ -87,12 +93,15 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 			// because ctx may already be cancelled (a common reason for init failure).
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cleanupCancel()
+
 			var cleanupErrs []error
 			for _, shutdownFunc := range shutdownFuncs {
 				cleanupErrs = append(cleanupErrs, shutdownFunc(cleanupCtx))
 			}
+
 			return nil, errors.Join(append(cleanupErrs, fmt.Errorf("create OTLP metric exporter: %w", err))...)
 		}
+
 		readers = append(readers, sdkmetric.NewPeriodicReader(otlpExporter))
 	}
 
@@ -107,6 +116,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	for _, reader := range readers {
 		sdkOpts = append(sdkOpts, sdkmetric.WithReader(reader))
 	}
+
 	sdkProvider := sdkmetric.NewMeterProvider(sdkOpts...)
 	shutdownFuncs = append(shutdownFuncs, sdkProvider.Shutdown)
 
@@ -120,6 +130,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 			for i := len(shutdownFuncs) - 1; i >= 0; i-- {
 				errs = append(errs, shutdownFuncs[i](ctx))
 			}
+
 			return errors.Join(errs...)
 		},
 	}, nil
@@ -148,19 +159,24 @@ func NewFromEnv(ctx context.Context) (*Provider, func(), error) {
 	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
 		opts = append(opts, WithMetricsAddr(addr))
 	}
+
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
 		opts = append(opts, WithOTLPEndpoint(endpoint))
 	}
+
 	p, err := New(ctx, opts...)
 	if err != nil {
 		return nil, func() {}, err
 	}
+
 	shutdown := func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
 		if err := p.Shutdown(shutdownCtx); err != nil {
 			fmt.Fprintf(os.Stderr, "metrics shutdown error: %v\n", err)
 		}
 	}
+
 	return p, shutdown, nil
 }

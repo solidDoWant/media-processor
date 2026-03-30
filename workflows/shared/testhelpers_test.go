@@ -15,10 +15,12 @@ const testVideoPath = "../../pkg/ffprobe/testdata/video.mp4"
 // The file is NOT registered for cleanup so tests can verify deletion behaviour.
 func copyTestVideo(t *testing.T) string {
 	t.Helper()
+
 	src, err := os.ReadFile(testVideoPath)
 	require.NoError(t, err)
 
 	dst := filepath.Join(t.TempDir(), "video.mp4")
 	require.NoError(t, os.WriteFile(dst, src, 0o600))
+
 	return dst
 }

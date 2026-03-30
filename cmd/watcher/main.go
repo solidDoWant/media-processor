@@ -17,6 +17,7 @@ import (
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to watcher config file")
+
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

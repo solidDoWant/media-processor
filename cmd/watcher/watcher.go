@@ -134,8 +134,10 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 					},
 					hatchet.WithRunKey(filePath),
 				)
+
 				return err
 			}
+
 			return struct{}{}, scan(ctx, cfg, instruments, dispatch)
 		},
 		hatchet.WithWorkflowCron(string(cfg.CronSchedule)),
@@ -146,6 +148,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 			LimitStrategy: &strategy,
 		}),
 	)
+
 	return task, nil
 }
 
@@ -191,6 +194,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
 
 		var mappingErrs []error
+
 		start := time.Now()
 
 		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
@@ -217,6 +221,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
+
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			} else {
 				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
@@ -239,6 +244,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			instruments.lastSuccessfulScan.Record(ctx, float64(time.Now().Unix()), mappingOpt)
 		} else {
 			instruments.scansTotal.Add(ctx, 1, errorOpt)
+
 			errs = append(errs, mappingErrs...)
 		}
 	}
