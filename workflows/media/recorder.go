@@ -3,7 +3,7 @@ package media
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -149,6 +149,6 @@ func (r *Recorder) RecordInvalidFile(ctx context.Context, mediaType medialib.Med
 
 // RecordMetricsError increments the metrics_errors_total counter and logs the error.
 func (r *Recorder) RecordMetricsError(ctx context.Context, err error) {
-	log.Printf("media workflow metrics error: %v", err)
+	slog.Warn("media workflow metrics error", "error", err)
 	r.metricsErrorsTotal.Add(ctx, 1)
 }
