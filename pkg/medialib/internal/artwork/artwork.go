@@ -29,10 +29,23 @@ const (
 // Returns nil bytes (no error) when no JPEG or PNG poster is available or
 // the image type cannot be validated.
 //
-// The API key is only sent when the resolved image URL starts with baseURL.
-// RemoteURL values (absolute external URLs) are fetched without the API key.
+// The API key is only sent for requests whose URL starts with baseURL.
+// Redirects that leave the baseURL origin are not followed, ensuring the
+// API key is never forwarded to an external host.
 func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKey string) ([]byte, string, error) {
 	normalizedBase := strings.TrimRight(baseURL, "/")
+
+	// Use a client that refuses to follow redirects outside the configured
+	// arr instance, preventing API key leakage to external hosts.
+	httpClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !strings.HasPrefix(req.URL.String(), normalizedBase) {
+				return http.ErrUseLastResponse
+			}
+
+			return nil
+		},
+	}
 
 	for _, img := range images {
 		if img.CoverType != "poster" {
@@ -73,7 +86,7 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 			req.Header.Set("X-Api-Key", apiKey)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, "", fmt.Errorf("fetch poster image: %w", err)
 		}

@@ -179,6 +179,38 @@ func TestFetchPosterImage_RemoteURLExternalHost(t *testing.T) {
 	assert.Equal(t, "image/jpeg", gotMime)
 }
 
+// TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey verifies that the API
+// key is not forwarded when the arr server issues a redirect to an external host.
+// The external server records whether it received the key; the test asserts it did not.
+func TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+
+	var keyReceived bool
+
+	// External server: records whether it received the API key.
+	externalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "" {
+			keyReceived = true
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(jpegBytes)
+	}))
+	t.Cleanup(externalSrv.Close)
+
+	// Arr server: responds to poster requests with a redirect to the external server.
+	arrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, externalSrv.URL+"/poster.jpg", http.StatusFound)
+	}))
+	t.Cleanup(arrSrv.Close)
+
+	imgs := []*starr.Image{{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"}}
+
+	_, _, _ = artwork.FetchPosterImage(t.Context(), imgs, arrSrv.URL, "secret-key")
+
+	assert.False(t, keyReceived, "API key must not be forwarded to external redirect target")
+}
+
 func TestFetchPosterImage_Unreachable(t *testing.T) {
 	imgs := []*starr.Image{{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"}}
 
