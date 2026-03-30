@@ -44,6 +44,15 @@ const (
 	HWAccelAuto
 )
 
+// CropParams describes the non-black region detected by the cropdetect filter.
+// The coordinate origin (0, 0) is the top-left corner of the video frame.
+type CropParams struct {
+	// W and H are the width and height of the detected crop region in pixels.
+	W, H int
+	// X and Y are the top-left offset of the crop region from the frame origin.
+	X, Y int
+}
+
 // Progress is a periodic update emitted during transcoding.
 type Progress struct {
 	// FramesProcessed is the number of encoded frames written so far.
