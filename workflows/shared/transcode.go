@@ -142,7 +142,7 @@ func codecName(c ffmpeg.Codec) string {
 }
 
 // RunTranscode transcodes filePath into outputDir, writing to a temp file named
-// "._&lt;stem&gt;.mkv.tmp" and atomically renaming it to "&lt;stem&gt;.mkv" on success.
+// "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
