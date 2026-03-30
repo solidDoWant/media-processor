@@ -217,7 +217,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		// Prevent directory traversal: reject any relDir that is absolute or escapes
 		// watcherRoot via ".." components (e.g. filePath outside watcherRoot).
 		if filepath.IsAbs(relDir) || relDir == ".." || strings.HasPrefix(relDir, ".."+string(os.PathSeparator)) {
-			return TranscodeOutput{}, fmt.Errorf("refusing to derive output subdir outside watcher root: %q", relDir)
+			return TranscodeOutput{}, fmt.Errorf(
+				"refusing to derive output subdir outside watcher root (filePath=%q, watcherRoot=%q, outputDir=%q, relDir=%q)",
+				filePath, watcherRoot, outputDir, relDir,
+			)
 		}
 
 		absOutputDir, absErr := filepath.Abs(outputDir)
@@ -238,9 +241,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		}
 
 		effectiveOutputDir = candidateDir
-		if mkErr := os.MkdirAll(effectiveOutputDir, 0o755); mkErr != nil {
-			return TranscodeOutput{}, fmt.Errorf("create output subdir: %w", mkErr)
-		}
+	}
+
+	if mkErr := os.MkdirAll(effectiveOutputDir, 0o755); mkErr != nil {
+		return TranscodeOutput{}, fmt.Errorf("create output dir: %w", mkErr)
 	}
 
 	inputBase := filepath.Base(filePath)

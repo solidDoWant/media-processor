@@ -612,3 +612,30 @@ func TestRunTranscode_WatcherRoot_FlatInputProducesFlatOutput(t *testing.T) {
 	_, statErr := os.Stat(expectedPath)
 	require.NoError(t, statErr, "output file should be written directly in outputDir when input is at watcher root")
 }
+
+func TestRunTranscode_WatcherRoot_InputOutsideWatcherRootReturnsError(t *testing.T) {
+	watcherRoot := t.TempDir()
+	outsideDir := t.TempDir() // separate temp dir, not under watcherRoot
+
+	src, err := os.ReadFile(testVideoPath)
+	require.NoError(t, err)
+
+	inputPath := filepath.Join(outsideDir, "video.mp4")
+	require.NoError(t, os.WriteFile(inputPath, src, 0o600))
+
+	outputDir := t.TempDir()
+
+	probe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	_, err = RunTranscode(t.Context(), inputPath, probe, outputDir, watcherRoot, "", nil)
+	require.Error(t, err, "input outside watcherRoot should return an error")
+
+	entries, readErr := os.ReadDir(outputDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "no output files or subdirs should be created when input is outside watcherRoot")
+}
