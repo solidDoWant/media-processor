@@ -78,13 +78,15 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 	normalizedBaseURL := &url.URL{Scheme: baseU.Scheme, Host: baseU.Host, Path: strings.TrimRight(baseU.Path, "/")}
 
 	for _, img := range images {
-		data, ct, err := fetchPosterCandidate(ctx, img, normalizedBaseURL, isSameBase, httpClient, apiKey)
+		data, mimeType, err := fetchPosterCandidate(ctx, img, normalizedBaseURL, isSameBase, httpClient, apiKey)
 		if err != nil {
-			return nil, "", err
+			slog.WarnContext(ctx, "skipping poster candidate: fetch error", "error", err)
+
+			continue
 		}
 
 		if data != nil {
-			return data, ct, nil
+			return data, mimeType, nil
 		}
 	}
 
@@ -93,9 +95,10 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 
 // fetchPosterCandidate attempts to fetch a single poster image candidate.
 // Returns non-nil bytes and a MIME type on success.
-// Returns nil bytes (no error) when the candidate should be skipped.
-// Returns a non-nil error only for hard failures (unreachable host, URL parse
-// error, or body read error) that should abort the entire fetch.
+// Returns nil bytes (no error) when the candidate should be skipped (unsupported
+// extension, empty URL, non-200 response, unsupported content type, or oversized body).
+// Returns a non-nil error for hard I/O failures (URL parse error, request build
+// error, network error, or body read error); callers should log and skip the candidate.
 func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseURL *url.URL, isSameBase func(*url.URL) bool, httpClient *http.Client, apiKey string) ([]byte, string, error) {
 	if img.CoverType != "poster" {
 		return nil, "", nil
@@ -158,8 +161,8 @@ func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseU
 	}
 
 	// Post-fetch Content-Type validation using the standard MIME parser.
-	ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil || (ct != MimeJPEG && ct != MimePNG) {
+	mimeType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || (mimeType != MimeJPEG && mimeType != MimePNG) {
 		slog.WarnContext(ctx, "skipping poster candidate: unsupported content type", "content_type", resp.Header.Get("Content-Type"), "url", imageURL)
 
 		return nil, "", nil
@@ -179,5 +182,5 @@ func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseU
 		return nil, "", nil
 	}
 
-	return data, ct, nil
+	return data, mimeType, nil
 }
