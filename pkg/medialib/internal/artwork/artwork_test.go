@@ -1,6 +1,7 @@
 package artwork_test
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -219,4 +220,65 @@ func TestFetchPosterImage_Unreachable(t *testing.T) {
 
 	_, _, err := artwork.FetchPosterImage(t.Context(), imgs, "http://127.0.0.1:1", "key")
 	require.Error(t, err)
+}
+
+// TestFetchPosterImage_FallsBackToNextCandidate verifies that a rejected
+// candidate (unsupported extension, bad Content-Type, non-200 status) causes
+// the function to continue to the next poster image rather than returning
+// immediately with nil.
+func TestFetchPosterImage_FallsBackToNextCandidate(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+
+	srv := imageServer(t, "test-key", "image/jpeg", jpegBytes)
+	t.Cleanup(srv.Close)
+
+	// The first image has an unsupported extension; the second is a valid JPEG.
+	imgs := []*starr.Image{
+		{CoverType: "poster", Extension: ".webp", URL: "/MediaCover/1/poster.webp"},
+		{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"},
+	}
+
+	gotBytes, gotMime, err := artwork.FetchPosterImage(t.Context(), imgs, srv.URL, "test-key")
+
+	require.NoError(t, err)
+	assert.Equal(t, jpegBytes, gotBytes, "second candidate must be returned when first is rejected")
+	assert.Equal(t, "image/jpeg", gotMime)
+}
+
+// TestFetchPosterImage_OversizedResponseSkipped verifies that a response body
+// larger than MaxPosterBytes is skipped rather than silently truncated.
+func TestFetchPosterImage_OversizedResponseSkipped(t *testing.T) {
+	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+
+	// oversizedBody is one byte more than the allowed cap.
+	oversizedBody := bytes.Repeat([]byte{0xFF}, artwork.MaxPosterBytes+1)
+
+	var callCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
+		switch callCount {
+		case 1:
+			// First request: return an oversized body.
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write(oversizedBody)
+		default:
+			// Subsequent requests: return a valid small JPEG.
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write(jpegBytes)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	imgs := []*starr.Image{
+		{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster-large.jpg"},
+		{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster-small.jpg"},
+	}
+
+	gotBytes, gotMime, err := artwork.FetchPosterImage(t.Context(), imgs, srv.URL, "")
+
+	require.NoError(t, err)
+	assert.Equal(t, jpegBytes, gotBytes, "oversized first candidate must be skipped; second must be returned")
+	assert.Equal(t, "image/jpeg", gotMime)
 }

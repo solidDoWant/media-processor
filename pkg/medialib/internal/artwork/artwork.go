@@ -24,9 +24,10 @@ const (
 	// fetchTimeout is the per-request deadline for poster image downloads.
 	fetchTimeout = 10 * time.Second
 
-	// maxPosterBytes caps the response body read to prevent memory exhaustion
+	// MaxPosterBytes caps the response body read to prevent memory exhaustion
 	// from unexpectedly large responses (e.g. from an external RemoteURL).
-	maxPosterBytes = 10 << 20 // 10 MiB
+	// Responses larger than this limit are skipped as if no poster were available.
+	MaxPosterBytes = 10 << 20 // 10 MiB
 )
 
 // FetchPosterImage finds the poster image in images, fetches it from baseURL
@@ -81,7 +82,7 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 		// Pre-fetch extension check: only accept JPEG and PNG.
 		ext := strings.ToLower(img.Extension)
 		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
-			return nil, "", nil
+			continue
 		}
 
 		imageURL := img.URL
@@ -90,7 +91,7 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 		}
 
 		if imageURL == "" {
-			return nil, "", nil
+			continue
 		}
 
 		// Relative paths are served by the arr instance; prepend the base URL.
@@ -103,11 +104,14 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 			return nil, "", fmt.Errorf("parse image URL: %w", err)
 		}
 
+		// fetchCtx and cancel are managed explicitly (not via defer) to ensure
+		// resources are released before continuing to the next candidate.
 		fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
-		defer cancel()
 
 		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, imageURL, nil)
 		if err != nil {
+			cancel()
+
 			return nil, "", fmt.Errorf("build image request: %w", err)
 		}
 
@@ -119,24 +123,43 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
+			cancel()
+
 			return nil, "", fmt.Errorf("fetch poster image: %w", err)
 		}
 
-		defer func() { _ = resp.Body.Close() }()
-
 		if resp.StatusCode != http.StatusOK {
-			return nil, "", nil
+			_ = resp.Body.Close()
+
+			cancel()
+
+			continue
 		}
 
 		// Post-fetch Content-Type validation using the standard MIME parser.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil || (ct != MimeJPEG && ct != MimePNG) {
-			return nil, "", nil
+			_ = resp.Body.Close()
+
+			cancel()
+
+			continue
 		}
 
-		data, err := io.ReadAll(io.LimitReader(resp.Body, maxPosterBytes))
+		// Read one byte beyond the cap to detect responses that exceed the limit.
+		// If the read returns more than MaxPosterBytes, skip this candidate rather
+		// than silently truncating the image data.
+		data, err := io.ReadAll(io.LimitReader(resp.Body, MaxPosterBytes+1))
+		_ = resp.Body.Close()
+
+		cancel()
+
 		if err != nil {
 			return nil, "", fmt.Errorf("read poster image: %w", err)
+		}
+
+		if len(data) > MaxPosterBytes {
+			continue
 		}
 
 		return data, ct, nil
