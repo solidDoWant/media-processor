@@ -8,8 +8,8 @@ import (
 )
 
 // Setup configures the global slog logger using the provided level string (e.g.
-// the value of the LOG_LEVEL environment variable). An empty string or
-// unrecognised value logs a warning and falls back to INFO.
+// the value of the LOG_LEVEL environment variable). An empty string is treated
+// as "info". An unrecognised value logs a warning and falls back to INFO.
 func Setup(level string) {
 	var l slog.Level
 	switch strings.ToLower(level) {
@@ -22,9 +22,9 @@ func Setup(level string) {
 	case "error":
 		l = slog.LevelError
 	default:
-		// Configure INFO first so the warning is actually emitted.
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		// Warn using the current default before reconfiguring.
 		slog.Warn("unrecognised LOG_LEVEL value, falling back to INFO", "value", level)
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 		return
 	}
 
