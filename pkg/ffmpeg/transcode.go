@@ -178,12 +178,19 @@ func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
 }
 
 // WithCoverArt embeds imageBytes as a cover art attachment stream in the MKV
-// output. mimeType must be "image/jpeg" or "image/png". When called, any
-// existing attachment streams present in the source file are excluded from the
-// output so that only the supplied artwork is embedded. A nil or empty
-// imageBytes slice is a no-op.
+// output. mimeType must be "image/jpeg" or "image/png"; any other value is
+// treated as a no-op. When called with a valid MIME type, any existing
+// attachment streams present in the source file are excluded from the output
+// so that only the supplied artwork is embedded. A nil or empty imageBytes
+// slice is a no-op.
 func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *TranscodeBuilder {
 	if len(imageBytes) == 0 {
+		return b
+	}
+
+	switch mimeType {
+	case "image/jpeg", "image/png":
+	default:
 		return b
 	}
 

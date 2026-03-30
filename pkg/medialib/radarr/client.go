@@ -101,8 +101,9 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 
 // GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
 // image bytes and MIME type for the movie at path. Returns nil bytes (no error)
-// when no JPEG or PNG poster is available. Returns an error if the library is
-// unreachable.
+// when no JPEG or PNG poster is available. Returns medialib.ErrNotFound if the
+// path cannot be matched to a movie. Returns other errors if the library is
+// unreachable or a Radarr API call fails.
 func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
 	movie, err := c.GetMovieByFilePath(ctx, path)
 	if err != nil {

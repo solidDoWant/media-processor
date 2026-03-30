@@ -94,7 +94,8 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 // GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
 // image bytes and MIME type for the series containing the episode at path.
 // Returns nil bytes (no error) when no JPEG or PNG poster is available.
-// Returns an error if the library is unreachable.
+// Returns medialib.ErrNotFound if the path cannot be matched to an episode.
+// Returns other errors if the library is unreachable or a Sonarr API call fails.
 func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
 	episode, err := c.GetEpisodeByFilePath(ctx, path)
 	if err != nil {

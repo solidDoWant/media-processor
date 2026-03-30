@@ -149,9 +149,11 @@ func codecName(c ffmpeg.Codec) string {
 // probe is the output of RunProbe for filePath.
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
-// library is the arr library used to fetch poster artwork; when nil or when
-// artwork fetch fails, transcoding proceeds without an embedded attachment and
-// TranscodeOutput.ArtworkFetchSkipped is set to true.
+// library is the arr library used to fetch poster artwork. When nil, no fetch
+// is attempted and transcoding proceeds without an embedded attachment (
+// ArtworkFetchSkipped is not set). When non-nil and the fetch yields no
+// embeddable image, transcoding proceeds without an embedded attachment and
+// ArtworkFetchSkipped is set to true.
 func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
