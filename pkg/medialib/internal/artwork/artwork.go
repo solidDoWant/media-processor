@@ -35,12 +35,14 @@ const (
 func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKey string) ([]byte, string, error) {
 	normalizedBase := strings.TrimRight(baseURL, "/")
 
-	// Use a client that refuses to follow redirects outside the configured
-	// arr instance, preventing API key leakage to external hosts.
+	// Use a client that strips the API key header before following any redirect
+	// whose target URL does not start with the configured arr base URL. This
+	// allows redirects to be followed (e.g. to an external CDN) while ensuring
+	// the API key is exclusively sent to the configured arr instance.
 	httpClient := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if !strings.HasPrefix(req.URL.String(), normalizedBase) {
-				return http.ErrUseLastResponse
+				req.Header.Del("X-Api-Key")
 			}
 
 			return nil

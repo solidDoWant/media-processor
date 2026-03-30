@@ -206,8 +206,11 @@ func TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey(t *testing.T) {
 
 	imgs := []*starr.Image{{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"}}
 
-	_, _, _ = artwork.FetchPosterImage(t.Context(), imgs, arrSrv.URL, "secret-key")
+	gotBytes, gotMime, err := artwork.FetchPosterImage(t.Context(), imgs, arrSrv.URL, "secret-key")
 
+	require.NoError(t, err)
+	assert.Equal(t, jpegBytes, gotBytes, "redirect must be followed and image returned")
+	assert.Equal(t, "image/jpeg", gotMime)
 	assert.False(t, keyReceived, "API key must not be forwarded to external redirect target")
 }
 
