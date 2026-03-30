@@ -66,6 +66,34 @@ Provides HTTP handler utilities for inbound webhook events.
 - Minimal interface for receiving and dispatching webhook payloads
 - Decoupled from any specific webhook source
 
+## Sonarr/Radarr Integration Flow
+
+This project is designed to sit transparently between a download client and Sonarr/Radarr, transcoding or transmuxing media before it is imported into the library.
+
+### Directory layout
+
+| Path | Visible to |
+|------|------------|
+| `/downloads` | Download client, watcher/worker |
+| `/processed-output` | watcher/worker |
+| `/downloads` (bind-mounted from `/processed-output`) | Sonarr/Radarr |
+
+Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This means Sonarr/Radarr cannot see files in the real `/downloads` directory — it only sees files that have been placed in `/processed-output`. This is the mechanism that prevents premature import of unprocessed files.
+
+### End-to-end flow
+
+1. **User requests media.** The user requests a movie or TV episode via Sonarr or Radarr.
+2. **Download initiated.** Sonarr/Radarr searches configured indexers, selects a release, and sends it to the configured download client.
+3. **File lands in `/downloads`.** The download client saves the completed file to the real `/downloads` directory and reports the file path back to Sonarr/Radarr.
+4. **Watcher detects the file.** The `cmd/watcher` process, which watches `/downloads` via `fsnotify`, detects the new file and submits a media-processor workflow job to Hatchet.
+5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `/processed-output`.
+6. **Library refresh triggered.** The workflow's `notify` step calls `ArrLibrary.RefreshByFilePath` with the output file path. This sends a `RefreshMovie` (Radarr) or `RefreshSeries` (Sonarr) command to the appropriate service, scoped to the specific item.
+7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans its `/downloads` path (which resolves to `/processed-output` on the host) and finds the processed file, then imports it into the library.
+
+### Why the bind-mount is necessary
+
+The download client reports the file location to Sonarr/Radarr using the path as it sees it (`/downloads/…`). Without intervention, Sonarr/Radarr would attempt to import the original unprocessed file as soon as the download completes. By bind-mounting `/processed-output` over Sonarr/Radarr's `/downloads`, the processed output directory and the download client's report path are made to coincide — so Sonarr/Radarr will not find (and therefore not import) any file until the workflow has finished processing it and written the result to `/processed-output`.
+
 ## Configuration
 
 | Config item | Mechanism | Rationale |
