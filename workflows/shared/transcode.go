@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
+	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
 // SelectVideoCodec returns CodecCopy when the video is already H.264 or H.265 in an
@@ -121,6 +123,9 @@ type TranscodeOutput struct {
 	// TranscodeDurationSeconds is the wall-clock time spent in RunTranscode (the ffmpeg call
 	// plus surrounding stat/rename operations), in seconds.
 	TranscodeDurationSeconds float64 `json:"transcode_duration_seconds"`
+	// ArtworkFetchSkipped is true when artwork fetch was attempted but yielded no
+	// embeddable image (library unreachable, no poster available, or unsupported type).
+	ArtworkFetchSkipped bool `json:"artwork_fetch_skipped,omitempty"`
 }
 
 // codecName returns a human-readable name for a codec, matching the names used
@@ -144,7 +149,10 @@ func codecName(c ffmpeg.Codec) string {
 // probe is the output of RunProbe for filePath.
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string) (TranscodeOutput, error) {
+// library is the arr library used to fetch poster artwork; when nil or when
+// artwork fetch fails, transcoding proceeds without an embedded attachment and
+// TranscodeOutput.ArtworkFetchSkipped is set to true.
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -236,6 +244,27 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		}
 	}
 
+	var (
+		artworkSkipped bool
+		artBytes       []byte
+		artMime        string
+	)
+
+	if library != nil {
+		var artErr error
+
+		artBytes, artMime, artErr = library.GetPosterImage(ctx, filePath)
+		if artErr != nil || len(artBytes) == 0 {
+			if artErr != nil {
+				slog.WarnContext(ctx, "artwork fetch failed, proceeding without cover art", "error", artErr)
+			} else {
+				slog.WarnContext(ctx, "no poster image available, proceeding without cover art")
+			}
+
+			artworkSkipped = true
+		}
+	}
+
 	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
@@ -248,6 +277,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		WithHardwareDevice(hardwareDevicePath).
+		WithCoverArt(artBytes, artMime).
 		Build().
 		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -283,5 +313,6 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		SourceFileSizeBytes:      srcSize,
 		DestFileSizeBytes:        dstInfo.Size(),
 		TranscodeDurationSeconds: time.Since(transcodeStart).Seconds(),
+		ArtworkFetchSkipped:      artworkSkipped,
 	}, nil
 }

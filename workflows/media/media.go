@@ -128,7 +128,17 @@ func NewMediaWorkflow(
 			return shared.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		return shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath)
+		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
+		if err != nil {
+			return shared.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
+		}
+
+		out, err := shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath, library)
+		if err == nil && out.ArtworkFetchSkipped {
+			recorder.RecordArtworkFetchSkipped(ctx)
+		}
+
+		return out, err
 	}, hatchet.WithParents(probeTask), skipIfInvalid)
 
 	// notify: look up the media in Radarr (movie) or Sonarr (show) and trigger a library

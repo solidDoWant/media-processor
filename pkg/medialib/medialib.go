@@ -123,4 +123,9 @@ type ArrLibrary interface {
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.
 	GetInfo(ctx context.Context, path string) (MediaInfo, error)
+	// GetPosterImage returns the raw poster image bytes and MIME type for the
+	// media item at path. Returns nil bytes and empty MIME type (with no error)
+	// when no poster is available or the image type is not JPEG or PNG.
+	// Returns an error only when the library service is unreachable.
+	GetPosterImage(ctx context.Context, path string) (imageBytes []byte, mimeType string, err error)
 }

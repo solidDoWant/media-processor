@@ -11,6 +11,7 @@ import (
 	sonarrlib "golift.io/starr/sonarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
 // Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.ArrLibrary.
@@ -88,6 +89,24 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 		SeasonNumber:  ep.SeasonNumber,
 		EpisodeNumber: ep.EpisodeNumber,
 	}, nil
+}
+
+// GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
+// image bytes and MIME type for the series containing the episode at path.
+// Returns nil bytes (no error) when no JPEG or PNG poster is available.
+// Returns an error if the library is unreachable.
+func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
+	episode, err := c.GetEpisodeByFilePath(ctx, path)
+	if err != nil {
+		return nil, "", fmt.Errorf("get episode for poster: %w", err)
+	}
+
+	series, err := c.sonarr.GetSeriesByIDContext(ctx, episode.SeriesID)
+	if err != nil {
+		return nil, "", fmt.Errorf("get series details for poster: %w", err)
+	}
+
+	return artwork.FetchPosterImage(ctx, series.Images, c.cfg.URL, c.cfg.APIKey)
 }
 
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for
