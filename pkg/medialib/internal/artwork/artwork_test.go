@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -186,12 +187,12 @@ func TestFetchPosterImage_RemoteURLExternalHost(t *testing.T) {
 func TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey(t *testing.T) {
 	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
 
-	var keyReceived bool
+	var keyReceived atomic.Bool
 
 	// External server: records whether it received the API key.
 	externalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Api-Key") != "" {
-			keyReceived = true
+			keyReceived.Store(true)
 		}
 
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -212,7 +213,7 @@ func TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, jpegBytes, gotBytes, "redirect must be followed and image returned")
 	assert.Equal(t, "image/jpeg", gotMime)
-	assert.False(t, keyReceived, "API key must not be forwarded to external redirect target")
+	assert.False(t, keyReceived.Load(), "API key must not be forwarded to external redirect target")
 }
 
 func TestFetchPosterImage_Unreachable(t *testing.T) {

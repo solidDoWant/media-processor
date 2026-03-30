@@ -178,8 +178,9 @@ func (b *TranscodeBuilder) WithDownmixTitle(title string) *TranscodeBuilder {
 }
 
 // WithCoverArt embeds imageBytes as a cover art attachment stream in the MKV
-// output. mimeType must be "image/jpeg" or "image/png"; any other value is
-// treated as a no-op. When called with a valid MIME type, any existing
+// output. This method is a no-op when the output container is not
+// ContainerMKV. mimeType must be "image/jpeg" or "image/png"; any other value
+// is treated as a no-op. When called with a valid MIME type, any existing
 // attachment streams present in the source file are excluded from the output
 // so that only the supplied artwork is embedded. A nil or empty imageBytes
 // slice is a no-op.
@@ -392,11 +393,12 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 		mediaType := inStream.CodecParameters().MediaType()
 
-		// When cover art is being embedded, drop all existing attachment streams
-		// so the output contains only the freshly fetched poster. MKV attachments
-		// are written as MediaTypeAttachment but read back by the matroska demuxer
-		// as video streams with DispositionFlagAttachedPic, so we must check both.
-		if len(t.coverArtBytes) > 0 {
+		// When cover art is being embedded into a Matroska output, drop all
+		// existing attachment streams so the output contains only the freshly
+		// fetched poster. MKV attachments are written as MediaTypeAttachment but
+		// read back by the matroska demuxer as video streams with
+		// DispositionFlagAttachedPic, so we must check both.
+		if len(t.coverArtBytes) > 0 && t.container == ContainerMKV {
 			if mediaType == astiav.MediaTypeAttachment {
 				continue
 			}
@@ -610,8 +612,8 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 		downmixOut.SetMetadata(downmixMeta)
 	}
 
-	// Add cover art attachment stream after all regular streams.
-	if len(t.coverArtBytes) > 0 {
+	// Add cover art attachment stream after all regular streams (MKV only).
+	if len(t.coverArtBytes) > 0 && t.container == ContainerMKV {
 		if err := t.addCoverArtStream(outputFmt); err != nil {
 			outputFmt.Free()
 			return nil, noopClose, err
