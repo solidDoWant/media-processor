@@ -27,6 +27,11 @@ const (
 type MediaWorkflowConfig struct {
 	// OutputDir is the local directory where transcoded files are written.
 	OutputDir string
+	// WatcherRoot is the root directory monitored by the watcher. When set,
+	// RunTranscode mirrors the subdirectory of the input file relative to
+	// WatcherRoot under OutputDir, preserving the download client's directory
+	// structure so that arr queue entries can be matched by path.
+	WatcherRoot string
 	// WebhookURL is the endpoint to notify on workflow failure.
 	WebhookURL string
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
@@ -133,7 +138,7 @@ func NewMediaWorkflow(
 			return shared.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
 		}
 
-		out, err := shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.HardwareDevicePath, library)
+		out, err := shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
@@ -154,7 +159,7 @@ func NewMediaWorkflow(
 			return struct{}{}, err
 		}
 
-		if err := library.ImportByFilePath(ctx, transcode.DestFilePath); err != nil {
+		if err := library.ImportByFilePath(ctx, input.FilePath); err != nil {
 			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
 

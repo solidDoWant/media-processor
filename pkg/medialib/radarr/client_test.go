@@ -169,12 +169,12 @@ func TestGetMovieByFilePath(t *testing.T) {
 
 func TestImportByFilePath(t *testing.T) {
 	tests := []struct {
-		name         string
-		path         string
-		cfg          radarr.Config
-		wantCmdName  string
-		wantCmdPath  string
-		errFunc      require.ErrorAssertionFunc
+		name        string
+		path        string
+		cfg         radarr.Config
+		wantCmdName string
+		wantCmdPath string
+		errFunc     require.ErrorAssertionFunc
 	}{
 		{
 			name:        "sends DownloadedMoviesScan with the given path",

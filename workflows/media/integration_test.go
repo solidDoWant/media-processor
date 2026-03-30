@@ -91,7 +91,7 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 	require.NoError(t, err)
 
 	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.True(t, strings.HasPrefix(radarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", radarrStub.importCalls[0])
+	assert.Equal(t, inputPath, radarrStub.importCalls[0], "ImportByFilePath should be called with the original input path")
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -139,7 +139,7 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 	require.NoError(t, err)
 
 	require.Len(t, sonarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.True(t, strings.HasPrefix(sonarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", sonarrStub.importCalls[0])
+	assert.Equal(t, inputPath, sonarrStub.importCalls[0], "ImportByFilePath should be called with the original input path")
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {
