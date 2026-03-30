@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
+	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
@@ -29,6 +30,8 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	logging.Setup(os.Getenv("LOG_LEVEL"))
+
 	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
@@ -103,7 +106,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
-	log.Println("connected to Hatchet, starting worker")
+	slog.Info("connected to Hatchet, starting worker")
 
 	if err := worker.StartBlocking(ctx); err != nil {
 		return fmt.Errorf("worker stopped: %w", err)

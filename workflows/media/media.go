@@ -4,7 +4,7 @@ package media
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -70,7 +70,7 @@ func NewMediaWorkflow(
 	if err != nil {
 		// Instrument registration errors are non-fatal: log for observability and fall
 		// back to a noop recorder so the workflow can still run without metrics.
-		log.Printf("media: failed to create metrics recorder: %v; falling back to noop", err)
+		slog.Warn("media: failed to create metrics recorder, falling back to noop", "error", err)
 		var noopErr error
 		recorder, noopErr = NewRecorder(noop.NewMeterProvider(), false)
 		if noopErr != nil {

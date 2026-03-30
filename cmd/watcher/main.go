@@ -4,13 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
+	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 )
 
@@ -28,12 +29,14 @@ func main() {
 }
 
 func run(ctx context.Context, configPath string) error {
+	logging.Setup(os.Getenv("LOG_LEVEL"))
+
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log.Printf("loaded %d watch mapping(s) from %s", len(cfg.Watches), configPath)
+	slog.Info("loaded watch mappings", "count", len(cfg.Watches), "config", configPath)
 
 	if err := validateWatchDirs(cfg); err != nil {
 		return fmt.Errorf("invalid watch configuration: %w", err)
@@ -54,7 +57,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("connect to Hatchet: %w", err)
 	}
 
-	log.Println("connected to Hatchet")
+	slog.Info("connected to Hatchet")
 
 	scanWorkflow, err := NewScanWorkflow(client, cfg, metricsProvider.MeterProvider())
 	if err != nil {
@@ -68,7 +71,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("create watcher worker: %w", err)
 	}
 
-	log.Printf("starting directory scan worker (schedule: %s)", cfg.CronSchedule)
+	slog.Info("starting directory scan worker", "schedule", cfg.CronSchedule)
 
 	if err := worker.StartBlocking(ctx); err != nil {
 		return fmt.Errorf("watcher stopped: %w", err)
