@@ -211,6 +211,15 @@ func (b *TranscodeBuilder) WithDownmix(idx *int) *TranscodeBuilder {
 	return b
 }
 
+// effectiveContainerIsMKV reports whether the output container is Matroska,
+// either because it was explicitly set via ToContainer or because the output
+// filename has a .mkv extension (the case where the container is inferred by
+// astiav.AllocOutputFormatContext from the filename).
+func (b *TranscodeBuilder) effectiveContainerIsMKV() bool {
+	return b.container == ContainerMKV ||
+		(b.container == "" && strings.HasSuffix(strings.ToLower(b.outputPath), ".mkv"))
+}
+
 // Build returns a runnable Transcoder.
 func (b *TranscodeBuilder) Build() *Transcoder {
 	return &Transcoder{TranscodeBuilder: *b}
@@ -398,7 +407,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		// fetched poster. MKV attachments are written as MediaTypeAttachment but
 		// read back by the matroska demuxer as video streams with
 		// DispositionFlagAttachedPic, so we must check both.
-		if len(t.coverArtBytes) > 0 && t.container == ContainerMKV {
+		if len(t.coverArtBytes) > 0 && t.effectiveContainerIsMKV() {
 			if mediaType == astiav.MediaTypeAttachment {
 				continue
 			}
@@ -613,7 +622,7 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 	}
 
 	// Add cover art attachment stream after all regular streams (MKV only).
-	if len(t.coverArtBytes) > 0 && t.container == ContainerMKV {
+	if len(t.coverArtBytes) > 0 && t.effectiveContainerIsMKV() {
 		if err := t.addCoverArtStream(outputFmt); err != nil {
 			outputFmt.Free()
 			return nil, noopClose, err

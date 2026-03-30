@@ -34,6 +34,9 @@ type stubLibraryClient struct {
 	refreshCalls []string
 	infoResult   medialib.MediaInfo
 	infoErr      error
+	posterBytes  []byte
+	posterMime   string
+	posterErr    error
 }
 
 func (s *stubLibraryClient) RefreshByFilePath(_ context.Context, path string) error {
@@ -43,4 +46,8 @@ func (s *stubLibraryClient) RefreshByFilePath(_ context.Context, path string) er
 
 func (s *stubLibraryClient) GetInfo(_ context.Context, _ string) (medialib.MediaInfo, error) {
 	return s.infoResult, s.infoErr
+}
+
+func (s *stubLibraryClient) GetPosterImage(_ context.Context, _ string) ([]byte, string, error) {
+	return s.posterBytes, s.posterMime, s.posterErr
 }
