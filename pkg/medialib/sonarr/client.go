@@ -51,6 +51,7 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 			path = c.cfg.RemotePathPrefix + after
 		}
 	}
+
 	path = filepath.Clean(path)
 
 	// Guard against path traversal: if a remote prefix is configured, reject
@@ -96,6 +97,7 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	if err != nil {
 		return nil, err
 	}
+
 	return &episode, nil
 }
 

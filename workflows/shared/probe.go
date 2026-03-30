@@ -78,12 +78,16 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 		return ProbeOutput{IsValidMedia: false}, nil
 	}
 
-	var audioStreams []AudioStreamInfo
-	var subtitleStreams []StreamInfo
+	var (
+		audioStreams    []AudioStreamInfo
+		subtitleStreams []StreamInfo
+	)
+
 	for _, s := range info.Streams {
 		switch s.CodecType {
 		case ffprobe.CodecTypeAudio:
 			reported := s.AudioChannelCount
+
 			effective := reported
 			if effective == 0 {
 				// ffprobe reports 0 when the channel layout is unknown. Use a
@@ -91,6 +95,7 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 				// incorrectly suppress synthesis by matching the stereo threshold.
 				effective = 6
 			}
+
 			audioStreams = append(audioStreams, AudioStreamInfo{
 				StreamInfo:            StreamInfo{Index: s.Index, Language: s.Tags["language"], Title: s.Tags["title"]},
 				ReportedChannelCount:  reported,

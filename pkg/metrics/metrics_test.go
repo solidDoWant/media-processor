@@ -18,10 +18,13 @@ import (
 // freeAddr returns a local TCP address with an available port.
 func freeAddr(t *testing.T) string {
 	t.Helper()
+
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+
 	addr := l.Addr().String()
 	require.NoError(t, l.Close())
+
 	return addr
 }
 
@@ -30,9 +33,11 @@ func freeAddr(t *testing.T) string {
 // closed by the HTTP server's Shutdown when a Provider is active.
 func bindListener(t *testing.T) net.Listener {
 	t.Helper()
+
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = l.Close() })
+
 	return l
 }
 
@@ -41,9 +46,11 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 
 	p, err := metrics.New(t.Context(), metrics.WithMetricsAddr(addr))
 	require.NoError(t, err)
+
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		_ = p.Shutdown(ctx) //nolint:errcheck
 	}()
 
@@ -58,6 +65,7 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 	// Verify the response Content-Type is Prometheus text exposition format.
 	contentType := resp.Header.Get("Content-Type")
 	assert.True(t, strings.HasPrefix(contentType, "text/plain"), "metrics endpoint should return Prometheus text exposition format, got: %s", contentType)
+
 	_, err = io.ReadAll(resp.Body)
 	require.NoError(t, err)
 }
@@ -89,6 +97,7 @@ func TestOTLPExporter_Enabled(t *testing.T) {
 	// the listener is not a real gRPC server — the important thing is it is called).
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	_ = p.Shutdown(ctx) // error tolerated: no real gRPC server behind the listener
 }
 
@@ -99,6 +108,7 @@ func TestOTLPExporter_Disabled(t *testing.T) {
 	// Shutdown must succeed without attempting any OTLP export.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+
 	require.NoError(t, p.Shutdown(ctx))
 }
 
@@ -114,6 +124,7 @@ func TestBothExporters_Active(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		_ = p.Shutdown(ctx) //nolint:errcheck
 	})
 
@@ -167,6 +178,7 @@ func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
+
 		_ = p.Shutdown(ctx)
 	})
 	require.NotNil(t, p.MeterProvider())
@@ -184,11 +196,15 @@ func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
 	// the gRPC connection timeout can expire before we declare failure.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer shutdownCancel()
+
 	shutdownDone := make(chan struct{})
+
 	go func() {
 		defer close(shutdownDone)
+
 		_ = p.Shutdown(shutdownCtx)
 	}()
+
 	select {
 	case <-shutdownDone:
 		// passed: Shutdown completed (with or without error from the dummy server)

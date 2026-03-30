@@ -9,9 +9,11 @@ func iso639Name(tag string) string {
 	if tag == "" {
 		return ""
 	}
+
 	lang := iso639.FromAnyCode(tag)
 	if lang == nil {
 		return tag
 	}
+
 	return lang.Name
 }

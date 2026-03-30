@@ -23,6 +23,7 @@ func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode sh
 	if hardwareAccelerated {
 		hw = "true"
 	}
+
 	return []attribute.KeyValue{
 		attribute.String("source_codec", probe.VideoCodec),
 		attribute.String("destination_codec", transcode.DestCodec),
@@ -50,5 +51,6 @@ func highCardinalityAttrs(mediaType medialib.MediaType, info medialib.MediaInfo)
 			attribute.String("episode_number", strconv.Itoa(info.GetEpisodeNumber())),
 		)
 	}
+
 	return attrs
 }

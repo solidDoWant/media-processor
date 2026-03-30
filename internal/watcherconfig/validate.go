@@ -27,9 +27,11 @@ func NewValidator() *validator.Validate {
 	if err := v.RegisterValidation("mediatype", validateMediaType); err != nil {
 		panic("failed to register validation \"mediatype\": " + err.Error())
 	}
+
 	if err := v.RegisterValidation("hatchetcron", validateHatchetCron); err != nil {
 		panic("failed to register validation \"hatchetcron\": " + err.Error())
 	}
+
 	return v
 }
 
@@ -41,6 +43,7 @@ func validateMediaType(fl validator.FieldLevel) bool {
 			return true
 		}
 	}
+
 	return false
 }
 

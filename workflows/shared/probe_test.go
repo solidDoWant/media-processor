@@ -23,6 +23,7 @@ func TestRunProbe(t *testing.T) {
 			setupPath: func(t *testing.T) string {
 				p := filepath.Join(t.TempDir(), "notavideo.txt")
 				require.NoError(t, os.WriteFile(p, []byte("hello"), 0o600))
+
 				return p
 			},
 			expected:    ProbeOutput{IsValidMedia: false},

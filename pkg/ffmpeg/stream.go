@@ -42,6 +42,7 @@ func (sd *streamDecoderState) free() {
 	if sd.codecContext != nil {
 		sd.codecContext.Free()
 	}
+
 	if sd.frame != nil {
 		sd.frame.Free()
 	}
@@ -82,6 +83,7 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 			if errors.Is(err, astiav.ErrEof) || errors.Is(err, astiav.ErrEagain) {
 				return nil
 			}
+
 			return fmt.Errorf("ffmpeg: receiving encoded packet: %w", err)
 		}
 
@@ -97,6 +99,7 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 			encPkt.Unref()
 			return fmt.Errorf("ffmpeg: writing encoded packet: %w", err)
 		}
+
 		encPkt.Unref()
 	}
 }
@@ -116,6 +119,7 @@ func remuxPacket(packet *astiav.Packet, inStream, outStream *astiav.Stream, outp
 // sendProgress emits a non-blocking progress update on ch.
 func sendProgress(ch chan<- Progress, frames int64, packet *astiav.Packet, outStream *astiav.Stream, totalDuration int64) {
 	var percentComplete float64
+
 	if totalDuration > 0 {
 		tb := outStream.TimeBase()
 		ptsInMicros := float64(packet.Pts()) * float64(tb.Num()) / float64(tb.Den()) * 1e6

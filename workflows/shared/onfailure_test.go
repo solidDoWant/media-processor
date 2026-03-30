@@ -58,10 +58,12 @@ func TestNotifyWorkflowFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
+
 			var gotPayload map[string]string
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
+
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&gotPayload))
 				w.WriteHeader(http.StatusOK)
 			}))

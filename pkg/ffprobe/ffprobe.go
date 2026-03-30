@@ -80,12 +80,14 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 
 	watchDone := make(chan struct{})
 	defer close(watchDone)
+
 	go func() {
 		select {
 		case <-ctx.Done():
 			interrupter.Interrupt()
 		case <-watchDone:
 		}
+
 		interrupter.Free()
 	}()
 
@@ -94,6 +96,7 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 		if interrupter.Interrupted() {
 			return nil, ctx.Err()
 		}
+
 		return nil, fmt.Errorf("ffprobe: opening %q: %w", path, err)
 	}
 	defer formatContext.CloseInput()
@@ -103,6 +106,7 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 		if interrupter.Interrupted() {
 			return nil, ctx.Err()
 		}
+
 		return nil, fmt.Errorf("ffprobe: finding stream info for %q: %w", path, err)
 	}
 
@@ -125,6 +129,7 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 			BitsPerSecond: codecParams.BitRate(),
 			Tags:          dictionaryToMap(stream.Metadata()),
 		}
+
 		switch codecParams.MediaType() {
 		case astiav.MediaTypeVideo:
 			streamInfo.WidthPixels = codecParams.Width()
@@ -136,6 +141,7 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 			streamInfo.AudioChannelCount = layout.Channels()
 			streamInfo.HasLFE = hasLFEChannel(layout)
 		}
+
 		info.Streams = append(info.Streams, streamInfo)
 	}
 
@@ -149,11 +155,14 @@ func Probe(ctx context.Context, path string) (*MediaInfo, error) {
 // "5.0") return false.
 func hasLFEChannel(layout astiav.ChannelLayout) bool {
 	desc := layout.String()
+
 	idx := strings.Index(desc, ".")
 	if idx < 0 || idx+1 >= len(desc) {
 		return false
 	}
+
 	c := desc[idx+1]
+
 	return c >= '1' && c <= '9'
 }
 
@@ -163,15 +172,19 @@ func dictionaryToMap(dict *astiav.Dictionary) map[string]string {
 	if dict == nil {
 		return nil
 	}
+
 	result := make(map[string]string)
+
 	var prev *astiav.DictionaryEntry
 	for {
 		entry := dict.Get("", prev, astiav.NewDictionaryFlags(astiav.DictionaryFlagIgnoreSuffix))
 		if entry == nil {
 			break
 		}
+
 		result[entry.Key()] = entry.Value()
 		prev = entry
 	}
+
 	return result
 }

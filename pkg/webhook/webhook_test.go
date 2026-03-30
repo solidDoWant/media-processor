@@ -26,10 +26,13 @@ var testEvent = webhook.FailureEvent{
 // required fields when using the default payload builder.
 func TestNotifyFailure_DefaultPayloadContents(t *testing.T) {
 	var gotBody []byte
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
 		var err error
+
 		gotBody, err = io.ReadAll(r.Body)
 		require.NoError(t, err)
 		w.WriteHeader(http.StatusOK)
@@ -89,10 +92,13 @@ func TestNotifyFailure_StatusCodes(t *testing.T) {
 
 			client := &webhook.Client{URL: srv.URL}
 			err := client.NotifyFailure(t.Context(), testEvent)
+
 			if tc.errFunc == nil {
 				tc.errFunc = require.NoError
 			}
+
 			tc.errFunc(t, err)
+
 			if tc.errMsg != "" {
 				assert.ErrorContains(t, err, tc.errMsg)
 			}
@@ -138,8 +144,10 @@ func TestNotifyFailure_UnreachableEndpoint(t *testing.T) {
 // instead of the default, enabling arbitrary endpoint formats such as Discord.
 func TestNotifyFailure_CustomPayloadFunc(t *testing.T) {
 	var gotBody []byte
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
+
 		gotBody, err = io.ReadAll(r.Body)
 		require.NoError(t, err)
 		w.WriteHeader(http.StatusNoContent)

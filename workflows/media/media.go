@@ -66,12 +66,15 @@ func NewMediaWorkflow(
 	if meterProvider == nil {
 		meterProvider = noop.NewMeterProvider()
 	}
+
 	recorder, err := NewRecorder(meterProvider, cfg.HighCardinalityLabels)
 	if err != nil {
 		// Instrument registration errors are non-fatal: log for observability and fall
 		// back to a noop recorder so the workflow can still run without metrics.
 		slog.Warn("media: failed to create metrics recorder, falling back to noop", "error", err)
+
 		var noopErr error
+
 		recorder, noopErr = NewRecorder(noop.NewMeterProvider(), false)
 		if noopErr != nil {
 			// noop.NewMeterProvider() instrument registration never returns errors in
@@ -98,11 +101,14 @@ func NewMediaWorkflow(
 	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (shared.ProbeOutput, error) {
 		start := time.Now()
+
 		out, err := shared.RunProbe(ctx, input.FilePath)
 		if err != nil {
 			return out, err
 		}
+
 		out.StartedAt = start
+
 		return out, nil
 	})
 
@@ -132,9 +138,11 @@ func NewMediaWorkflow(
 		if err != nil {
 			return struct{}{}, err
 		}
+
 		if err := library.RefreshByFilePath(ctx, input.FilePath); err != nil {
 			return struct{}{}, fmt.Errorf("notify library: %w", err)
 		}
+
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
@@ -150,12 +158,14 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			return struct{}{}, fmt.Errorf("get probe output for metrics: %w", err)
 		}
+
 		var transcode shared.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
 			return struct{}{}, fmt.Errorf("get transcode output for metrics: %w", err)
 		}
 
 		var mediaInfo medialib.MediaInfo
+
 		if cfg.HighCardinalityLabels {
 			library, libErr := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 			if libErr == nil {
@@ -174,6 +184,7 @@ func NewMediaWorkflow(
 		hardwareAccelerated := cfg.HardwareDevicePath != ""
 		totalElapsed := time.Since(probe.StartedAt)
 		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
+
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, cleanupTask), skipIfInvalid)
 

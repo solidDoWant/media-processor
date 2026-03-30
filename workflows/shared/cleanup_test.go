@@ -21,6 +21,7 @@ func TestRunCleanup(t *testing.T) {
 			setupPath: func(t *testing.T) string {
 				p := filepath.Join(t.TempDir(), "source.mkv")
 				require.NoError(t, os.WriteFile(p, []byte("data"), 0o600))
+
 				return p
 			},
 			errFunc:     require.NoError,
@@ -43,6 +44,7 @@ func TestRunCleanup(t *testing.T) {
 			err := RunCleanup(path)
 
 			tt.errFunc(t, err)
+
 			if tt.fileDeleted {
 				_, statErr := os.Stat(path)
 				assert.True(t, os.IsNotExist(statErr), "expected file to be deleted")

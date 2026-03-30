@@ -20,8 +20,10 @@ import (
 // noopInstruments returns a scanInstruments backed by a no-op MeterProvider.
 func noopInstruments(t *testing.T) *scanInstruments {
 	t.Helper()
+
 	inst, err := newScanInstruments(noop.NewMeterProvider())
 	require.NoError(t, err)
+
 	return inst
 }
 
@@ -29,20 +31,25 @@ func noopInstruments(t *testing.T) *scanInstruments {
 // values can be inspected in acceptance tests.
 func newTestInstruments(t *testing.T) (*scanInstruments, *sdkmetric.ManualReader) {
 	t.Helper()
+
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
 
 	inst, err := newScanInstruments(provider)
 	require.NoError(t, err)
+
 	return inst, reader
 }
 
 // collectMetrics gathers all current metric data from the reader.
 func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
 	t.Helper()
+
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(t.Context(), &rm))
+
 	return rm
 }
 
@@ -55,6 +62,7 @@ func findMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metrics 
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -66,6 +74,7 @@ func attrKey(name string) attribute.Key { return attribute.Key(name) }
 func findCounterDP(dps []metricdata.DataPoint[int64], attrs map[string]string) *metricdata.DataPoint[int64] {
 	for i := range dps {
 		match := true
+
 		for k, v := range attrs {
 			val, ok := dps[i].Attributes.Value(attrKey(k))
 			if !ok || val.AsString() != v {
@@ -73,10 +82,12 @@ func findCounterDP(dps []metricdata.DataPoint[int64], attrs map[string]string) *
 				break
 			}
 		}
+
 		if match {
 			return &dps[i]
 		}
 	}
+
 	return nil
 }
 
@@ -133,6 +144,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				f, err := os.CreateTemp(t.TempDir(), "notadir")
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
+
 				return &Config{Watches: []WatchEntry{{Name: "movies", Path: f.Name(), MediaType: medialib.MovieType}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -170,7 +182,9 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 		mediaType   medialib.MediaType
 		mappingName string
 	}
+
 	var calls []call
+
 	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string) error {
 		calls = append(calls, call{fp, mt, mn})
 		return nil
@@ -201,6 +215,7 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 	}
 
 	var dispatched []string
+
 	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
@@ -227,6 +242,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 	}
 
 	var count int
+
 	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string) error {
 		count++
 		return errors.New("simulated dispatch failure")
@@ -403,12 +419,16 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 	require.Len(t, h.DataPoints, 2, "expected one histogram data point per mapping")
 
 	mappingNames := make(map[string]bool)
+
 	for _, dp := range h.DataPoints {
 		val, ok := dp.Attributes.Value(attrKey("mapping_name"))
 		require.True(t, ok, "mapping_name label should be present")
+
 		mappingNames[val.AsString()] = true
+
 		assert.EqualValues(t, 1, dp.Count, "each mapping should have exactly one observation")
 	}
+
 	assert.True(t, mappingNames["movies"])
 	assert.True(t, mappingNames["shows"])
 }

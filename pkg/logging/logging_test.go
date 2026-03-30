@@ -31,6 +31,7 @@ func TestSetup(t *testing.T) {
 	for _, tc := range tests {
 		t.Run("level="+tc.input, func(t *testing.T) {
 			prev := slog.Default()
+
 			t.Cleanup(func() { slog.SetDefault(prev) })
 
 			logging.Setup(tc.input)
@@ -46,6 +47,7 @@ func TestSetup(t *testing.T) {
 
 func TestSetupUnrecognised(t *testing.T) {
 	prev := slog.Default()
+
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	var buf bytes.Buffer

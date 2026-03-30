@@ -49,6 +49,7 @@ func DefaultPayload(e FailureEvent) ([]byte, error) {
 	if e.Err != nil {
 		errMsg = e.Err.Error()
 	}
+
 	return json.Marshal(defaultPayloadShape{
 		Workflow: e.Workflow,
 		FilePath: e.FilePath,
@@ -80,18 +81,21 @@ func (c *Client) NotifyFailure(ctx context.Context, event FailureEvent) error {
 	if err != nil {
 		return fmt.Errorf("webhook: create request: %w", err)
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
+
 	httpClient := &http.Client{Timeout: timeout}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("webhook: send request: %w", err)
 	}
+
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

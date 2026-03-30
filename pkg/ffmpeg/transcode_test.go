@@ -20,16 +20,22 @@ import (
 // This is used in tests because ffprobe.StreamInfo does not expose disposition.
 func probeStreamDispositions(t *testing.T, path string) map[int]astiav.DispositionFlags {
 	t.Helper()
+
 	fmtCtx := astiav.AllocFormatContext()
+
 	require.NotNil(t, fmtCtx, "failed to allocate format context")
 	defer fmtCtx.Free()
+
 	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
 	defer fmtCtx.CloseInput()
+
 	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
 	result := make(map[int]astiav.DispositionFlags)
 	for _, s := range fmtCtx.Streams() {
 		result[s.Index()] = s.DispositionFlags()
 	}
+
 	return result
 }
 
@@ -58,12 +64,14 @@ func TestTranscode_H265_MKV(t *testing.T) {
 	assert.Equal(t, "matroska,webm", info.Format)
 
 	var foundH265 bool
+
 	for _, s := range info.Streams {
 		if s.CodecType == ffprobe.CodecTypeVideo && s.CodecName == "hevc" {
 			foundH265 = true
 			break
 		}
 	}
+
 	assert.True(t, foundH265, "output must contain an H.265 video stream")
 }
 
@@ -160,12 +168,14 @@ func TestTranscode_HWAccelAuto(t *testing.T) {
 	require.NoError(t, err)
 
 	var foundH265 bool
+
 	for _, s := range info.Streams {
 		if s.CodecType == ffprobe.CodecTypeVideo && s.CodecName == "hevc" {
 			foundH265 = true
 			break
 		}
 	}
+
 	assert.True(t, foundH265, "output must contain an H.265 video stream regardless of HW path")
 }
 
@@ -189,6 +199,7 @@ func TestTranscode_ProgressChannel(t *testing.T) {
 	for p := range progressCh {
 		updates = append(updates, p)
 	}
+
 	assert.NotEmpty(t, updates, "must receive at least one progress update")
 
 	for _, p := range updates {
@@ -224,6 +235,7 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
+
 	go func() {
 		done <- ffmpeg.NewTranscode(testVideoPath, output).
 			ToVideoCodec(ffmpeg.CodecH265).
@@ -251,12 +263,14 @@ func TestTranscode_ExcludeStreams(t *testing.T) {
 
 	// Locate the first audio stream index to exclude.
 	audioIndex := -1
+
 	for _, s := range inputInfo.Streams {
 		if s.CodecType == ffprobe.CodecTypeAudio {
 			audioIndex = s.Index
 			break
 		}
 	}
+
 	require.NotEqual(t, -1, audioIndex, "test fixture must have at least one audio stream")
 
 	output := filepath.Join(t.TempDir(), "out.mkv")
@@ -274,6 +288,7 @@ func TestTranscode_ExcludeStreams(t *testing.T) {
 		assert.NotEqual(t, ffprobe.CodecTypeAudio, s.CodecType,
 			"excluded audio stream must not appear in the output")
 	}
+
 	assert.Equal(t, len(inputInfo.Streams)-1, len(outputInfo.Streams),
 		"output must have one fewer stream than the input")
 }
@@ -290,6 +305,7 @@ func TestTranscode_DispositionPreserved(t *testing.T) {
 
 	outputDisps := probeStreamDispositions(t, output)
 	require.Len(t, outputDisps, len(inputDisps), "stream count must match")
+
 	for idx, inputDisp := range inputDisps {
 		assert.Equal(t, inputDisp, outputDisps[idx],
 			"stream %d: disposition must be preserved from input", idx)
@@ -351,12 +367,14 @@ func TestTranscode_WithDownmix(t *testing.T) {
 	require.NoError(t, err)
 
 	audioIndex := -1
+
 	for _, s := range inputInfo.Streams {
 		if s.CodecType == ffprobe.CodecTypeAudio {
 			audioIndex = s.Index
 			break
 		}
 	}
+
 	require.NotEqual(t, -1, audioIndex, "test fixture must have at least one audio stream")
 
 	output := filepath.Join(t.TempDir(), "out.mkv")
@@ -375,18 +393,23 @@ func TestTranscode_WithDownmix(t *testing.T) {
 		"output must contain one additional stream from the downmix")
 
 	// Locate the AC-3 downmix stream and verify its properties.
-	var ac3Stream *ffprobe.StreamInfo
-	var regularAudioStream *ffprobe.StreamInfo
+	var (
+		ac3Stream          *ffprobe.StreamInfo
+		regularAudioStream *ffprobe.StreamInfo
+	)
+
 	for i, s := range outputInfo.Streams {
 		if s.CodecType != ffprobe.CodecTypeAudio {
 			continue
 		}
+
 		if s.CodecName == "ac3" {
 			ac3Stream = &outputInfo.Streams[i]
 		} else if regularAudioStream == nil {
 			regularAudioStream = &outputInfo.Streams[i]
 		}
 	}
+
 	require.NotNil(t, ac3Stream, "output must contain an AC-3 audio stream from the downmix")
 
 	// Language tag must match the regular output audio stream. Both are derived
@@ -400,7 +423,9 @@ func TestTranscode_WithDownmix(t *testing.T) {
 	// Determine whether any non-downmix audio stream is already default so we
 	// can assert the correct default disposition on the downmix.
 	outputDisps := probeStreamDispositions(t, output)
+
 	var existingDefault bool
+
 	for _, s := range outputInfo.Streams {
 		if s.CodecType == ffprobe.CodecTypeAudio && s.CodecName != "ac3" {
 			if outputDisps[s.Index].Has(astiav.DispositionFlagDefault) {
@@ -424,6 +449,7 @@ func TestDetectHardwareEncoders_ValidResult(t *testing.T) {
 		ffmpeg.HWAccelVAAPI,
 		ffmpeg.HWAccelQSV,
 	}
+
 	for _, codec := range []ffmpeg.Codec{ffmpeg.CodecH264, ffmpeg.CodecH265} {
 		accs := ffmpeg.DetectHardwareEncoders(codec)
 		for _, hw := range accs {
