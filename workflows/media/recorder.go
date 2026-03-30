@@ -125,6 +125,7 @@ func (r *Recorder) RecordRun(
 	if r.highCardinality && mediaInfo != nil {
 		attrs = append(attrs, highCardinalityAttrs(input.MediaType, mediaInfo)...)
 	}
+
 	opts := otelmetric.WithAttributes(attrs...)
 
 	r.audioTrackCount.Record(ctx, float64(len(probe.AudioStreams)), opts)

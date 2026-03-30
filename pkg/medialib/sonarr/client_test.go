@@ -126,6 +126,7 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
+
 			errFunc(t, err)
 
 			if err == nil {
@@ -240,6 +241,7 @@ func TestGetInfo(t *testing.T) {
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
+
 			errFunc(t, err)
 
 			if err == nil {

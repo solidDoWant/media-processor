@@ -14,10 +14,12 @@ func init() {
 	astiav.SetLogCallback(func(_ astiav.Classer, l astiav.LogLevel, _, msg string) {
 		ctx := context.Background()
 		logger := slog.Default()
+
 		level := astiavLevelToSlog(l)
 		if !logger.Enabled(ctx, level) {
 			return
 		}
+
 		logger.Log(ctx, level, strings.TrimRight(msg, "\n"), "source", "ffmpeg")
 	})
 }

@@ -23,6 +23,7 @@ func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, wo
 	for stepName := range stepErrors {
 		steps = append(steps, stepName)
 	}
+
 	sort.Strings(steps)
 
 	errs := make([]error, 0, len(stepErrors))

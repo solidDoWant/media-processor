@@ -104,6 +104,7 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 			return fmt.Errorf("no decoder for codec ID %v", inStream.CodecParameters().CodecID())
 		}
 	}
+
 	vss.decoder.codec = codec
 
 	vss.decoder.codecContext = astiav.AllocCodecContext(codec)
@@ -132,8 +133,10 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 				slog.Debug("ffmpeg: preferred hardware pixel format not offered by decoder, using fallback",
 					"preferred", vss.decoder.hwPixFmt, "fallback", pixelFormats[0])
 				vss.decoder.hwPixFmt = pixelFormats[0]
+
 				return pixelFormats[0]
 			}
+
 			return astiav.PixelFormatNone
 		})
 	}
@@ -141,6 +144,7 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 	if err := vss.decoder.codecContext.Open(codec, nil); err != nil {
 		return fmt.Errorf("opening decoder: %w", err)
 	}
+
 	vss.decoder.codecContext.SetTimeBase(inStream.TimeBase())
 
 	vss.decoder.frame = astiav.AllocFrame()
@@ -158,6 +162,7 @@ func (vss *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.For
 	if err != nil {
 		return err
 	}
+
 	vss.encoder.codec = codec
 	vss.encoder.usesHardwareAccelerator = supportsHardwareAcceleration
 
@@ -193,6 +198,7 @@ func (vss *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Co
 				if err != nil {
 					slog.Debug("ffmpeg: hardware encoder device context creation failed, falling back to software",
 						"encoder", hwEncName, "error", err)
+
 					hwDevCtx = nil
 				}
 			}
@@ -202,6 +208,7 @@ func (vss *videoStreamState) selectVideoEncoder(hwAccel HWAccel) (enc *astiav.Co
 					// Newly created — store so free() releases it via dec.free().
 					vss.decoder.hwDevCtx = hwDevCtx
 				}
+
 				return astiav.FindEncoderByName(hwEncName), p, true, nil
 			}
 		}
@@ -260,11 +267,14 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 		// Software path: prefer YUV420P; fall back to the encoder's first
 		// supported format if it does not support YUV420P.
 		encPixFmt := astiav.PixelFormatYuv420P
+
 		fmts := enc.SupportedPixelFormats()
 		if len(fmts) > 0 && !slices.Contains(fmts, astiav.PixelFormatYuv420P) {
 			encPixFmt = fmts[0]
 		}
+
 		vss.encoder.codecContext.SetPixelFormat(encPixFmt)
+
 		return nil
 	}
 
@@ -273,6 +283,7 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt {
 		vss.isHWDecode = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
+
 		return nil
 	}
 
@@ -280,8 +291,10 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	if err := vss.setupHWFramesContext(profile); err != nil {
 		return err
 	}
+
 	vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 	vss.encoder.codecContext.SetHardwareFramesContext(vss.encoder.hardwareFrameContext)
+
 	return nil
 }
 
@@ -292,14 +305,17 @@ func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 	if vss.encoder.hardwareFrameContext == nil {
 		return errors.New("failed to allocate hardware frames context")
 	}
+
 	vss.encoder.hardwareFrameContext.SetHardwarePixelFormat(profile.hwPixFmt)
 	vss.encoder.hardwareFrameContext.SetSoftwarePixelFormat(profile.swPixFmt)
 	vss.encoder.hardwareFrameContext.SetWidth(vss.decoder.codecContext.Width())
 	vss.encoder.hardwareFrameContext.SetHeight(vss.decoder.codecContext.Height())
 	vss.encoder.hardwareFrameContext.SetInitialPoolSize(20)
+
 	if err := vss.encoder.hardwareFrameContext.Initialize(); err != nil {
 		return fmt.Errorf("initializing hardware frames context: %w", err)
 	}
+
 	return nil
 }
 
@@ -339,6 +355,7 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 		if err != nil {
 			return fmt.Errorf("creating software scale context: %w", err)
 		}
+
 		vss.encoder.softwareFrameContext = softwareFrameContext
 
 		vss.encoder.frame = astiav.AllocFrame()
@@ -360,6 +377,7 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 		if vss.encoder.frame == nil {
 			return errors.New("failed to allocate hardware frame")
 		}
+
 		if err := vss.encoder.frame.AllocHardwareBuffer(vss.encoder.hardwareFrameContext); err != nil {
 			return fmt.Errorf("allocating hardware frame buffer: %w", err)
 		}
@@ -407,6 +425,7 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 			if err := vss.encoder.softwareFrameContext.ScaleFrame(frame, vss.encoder.frame); err != nil {
 				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
 			}
+
 			vss.encoder.frame.SetPts(frame.Pts())
 			vss.encoder.frame.SetPictureType(astiav.PictureTypeNone)
 			encFrame = vss.encoder.frame
@@ -417,6 +436,7 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 			if err := encFrame.TransferHardwareData(vss.encoder.frame); err != nil {
 				return fmt.Errorf("ffmpeg: uploading frame to hardware: %w", err)
 			}
+
 			vss.encoder.frame.SetPts(encFrame.Pts())
 			vss.encoder.frame.SetPictureType(astiav.PictureTypeNone)
 			encFrame = vss.encoder.frame
