@@ -537,7 +537,7 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			out, err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "", nil)
+			out, err := RunTranscode(t.Context(), inputPath, tt.probe, outputDir, "", "", nil)
 
 			tt.errFunc(t, err)
 
@@ -550,4 +550,92 @@ func TestRunTranscode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunTranscode_WatcherRoot_SubdirIsPreservedInOutput(t *testing.T) {
+	watcherRoot := t.TempDir()
+	subdir := filepath.Join(watcherRoot, "my-media-item")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	src, err := os.ReadFile(testVideoPath)
+	require.NoError(t, err)
+
+	inputPath := filepath.Join(subdir, "video.mp4")
+	require.NoError(t, os.WriteFile(inputPath, src, 0o600))
+
+	outputDir := t.TempDir()
+
+	probe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	out, err := RunTranscode(t.Context(), inputPath, probe, outputDir, watcherRoot, "", nil)
+	require.NoError(t, err)
+
+	expectedPath := filepath.Join(outputDir, "my-media-item", "video.mkv")
+	assert.Equal(t, expectedPath, out.DestFilePath)
+
+	_, statErr := os.Stat(expectedPath)
+	require.NoError(t, statErr, "output file should exist under the mirrored subdirectory")
+
+	_, statErr = os.Stat(filepath.Join(outputDir, "video.mkv"))
+	assert.True(t, os.IsNotExist(statErr), "output file should not be written flat into outputDir")
+}
+
+func TestRunTranscode_WatcherRoot_FlatInputProducesFlatOutput(t *testing.T) {
+	watcherRoot := t.TempDir()
+
+	src, err := os.ReadFile(testVideoPath)
+	require.NoError(t, err)
+
+	inputPath := filepath.Join(watcherRoot, "video.mp4")
+	require.NoError(t, os.WriteFile(inputPath, src, 0o600))
+
+	outputDir := t.TempDir()
+
+	probe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	out, err := RunTranscode(t.Context(), inputPath, probe, outputDir, watcherRoot, "", nil)
+	require.NoError(t, err)
+
+	expectedPath := filepath.Join(outputDir, "video.mkv")
+	assert.Equal(t, expectedPath, out.DestFilePath)
+
+	_, statErr := os.Stat(expectedPath)
+	require.NoError(t, statErr, "output file should be written directly in outputDir when input is at watcher root")
+}
+
+func TestRunTranscode_WatcherRoot_InputOutsideWatcherRootReturnsError(t *testing.T) {
+	watcherRoot := t.TempDir()
+	outsideDir := t.TempDir() // separate temp dir, not under watcherRoot
+
+	src, err := os.ReadFile(testVideoPath)
+	require.NoError(t, err)
+
+	inputPath := filepath.Join(outsideDir, "video.mp4")
+	require.NoError(t, os.WriteFile(inputPath, src, 0o600))
+
+	outputDir := t.TempDir()
+
+	probe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	_, err = RunTranscode(t.Context(), inputPath, probe, outputDir, watcherRoot, "", nil)
+	require.Error(t, err, "input outside watcherRoot should return an error")
+
+	entries, readErr := os.ReadDir(outputDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "no output files or subdirs should be created when input is outside watcherRoot")
 }

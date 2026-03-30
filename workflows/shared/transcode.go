@@ -147,6 +147,10 @@ func codecName(c ffmpeg.Codec) string {
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
 // probe is the output of RunProbe for filePath.
+// watcherRoot is the root directory that the watcher monitors. When non-empty,
+// the subdirectory of filePath relative to watcherRoot is mirrored under outputDir,
+// preserving the download client's directory structure. When empty, the output is
+// written flat into outputDir (no subdirectory).
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
 // library is the arr library used to fetch poster artwork. When nil, no fetch
@@ -154,7 +158,7 @@ func codecName(c ffmpeg.Codec) string {
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, watcherRoot string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -188,10 +192,65 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		audioBaseStreams[i] = s.StreamInfo
 	}
 
+	// Compute the effective output directory. When watcherRoot is set, mirror the
+	// relative subdirectory of filePath under outputDir so that downloads placed in
+	// subdirectories (e.g. /downloads/my-show/ep.mkv) produce output under the
+	// equivalent subdirectory (e.g. /processed-output/my-show/ep.mkv).
+	effectiveOutputDir := outputDir
+
+	if watcherRoot != "" {
+		absWatcherRoot, absErr := filepath.Abs(watcherRoot)
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute watcher root: %w", absErr)
+		}
+
+		absFileDir, absErr := filepath.Abs(filepath.Dir(filePath))
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute file directory: %w", absErr)
+		}
+
+		relDir, relErr := filepath.Rel(absWatcherRoot, absFileDir)
+		if relErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute relative output subdir: %w", relErr)
+		}
+
+		// Prevent directory traversal: reject any relDir that is absolute or escapes
+		// watcherRoot via ".." components (e.g. filePath outside watcherRoot).
+		if filepath.IsAbs(relDir) || relDir == ".." || strings.HasPrefix(relDir, ".."+string(os.PathSeparator)) {
+			return TranscodeOutput{}, fmt.Errorf(
+				"refusing to derive output subdir outside watcher root (filePath=%q, watcherRoot=%q, outputDir=%q, relDir=%q)",
+				filePath, watcherRoot, outputDir, relDir,
+			)
+		}
+
+		absOutputDir, absErr := filepath.Abs(outputDir)
+		if absErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("compute absolute outputDir: %w", absErr)
+		}
+
+		candidateDir := filepath.Clean(filepath.Join(absOutputDir, relDir))
+
+		// Double-check: ensure the resulting directory is still within outputDir.
+		relToRoot, relErr := filepath.Rel(absOutputDir, candidateDir)
+		if relErr != nil {
+			return TranscodeOutput{}, fmt.Errorf("verify effective output subdir: %w", relErr)
+		}
+
+		if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(os.PathSeparator)) || filepath.IsAbs(relToRoot) {
+			return TranscodeOutput{}, fmt.Errorf("refusing to write outside outputDir: %q", candidateDir)
+		}
+
+		effectiveOutputDir = candidateDir
+	}
+
+	if mkErr := os.MkdirAll(effectiveOutputDir, 0o755); mkErr != nil {
+		return TranscodeOutput{}, fmt.Errorf("create output dir: %w", mkErr)
+	}
+
 	inputBase := filepath.Base(filePath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
-	tempPath := filepath.Join(outputDir, "._"+mkvBase+".tmp")
-	finalPath := filepath.Join(outputDir, mkvBase)
+	tempPath := filepath.Join(effectiveOutputDir, "._"+mkvBase+".tmp")
+	finalPath := filepath.Join(effectiveOutputDir, mkvBase)
 
 	// Build per-stream title map for retained audio streams.
 	// Streams with unknown channel layouts (ReportedChannelCount=0) still receive

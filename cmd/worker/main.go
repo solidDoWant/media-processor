@@ -92,6 +92,7 @@ func run(ctx context.Context) error {
 
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
+		WatcherRoot:           os.Getenv("MEDIA_WATCHER_ROOT"),
 		WebhookURL:            webhookClient.URL,
 		HardwareDevicePath:    os.Getenv("HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),

@@ -90,8 +90,9 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
+	expectedImportPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".mkv"
 	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.True(t, strings.HasPrefix(radarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", radarrStub.importCalls[0])
+	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should be called with the input path with .mkv extension")
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -138,8 +139,9 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
 	require.NoError(t, err)
 
+	expectedImportPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".mkv"
 	require.Len(t, sonarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.True(t, strings.HasPrefix(sonarrStub.importCalls[0], outputDir), "ImportByFilePath should be called with the output path, got %q", sonarrStub.importCalls[0])
+	assert.Equal(t, expectedImportPath, sonarrStub.importCalls[0], "ImportByFilePath should be called with the input path with .mkv extension")
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {
