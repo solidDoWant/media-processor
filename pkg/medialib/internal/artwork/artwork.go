@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -27,7 +28,7 @@ const (
 	// MaxPosterBytes caps the response body read to prevent memory exhaustion
 	// from unexpectedly large responses (e.g. from an external RemoteURL).
 	// Responses larger than this limit are skipped as if no poster were available.
-	MaxPosterBytes = 10 << 20 // 10 MiB
+	MaxPosterBytes = 10 * 1024 * 1024 // 10 MiB
 )
 
 // FetchPosterImage finds the poster image in images, fetches it from baseURL
@@ -72,98 +73,111 @@ func FetchPosterImage(ctx context.Context, images []*starr.Image, baseURL, apiKe
 		},
 	}
 
-	normalizedBase := baseU.Scheme + "://" + baseU.Host + strings.TrimRight(baseU.Path, "/")
+	// normalizedBaseURL is the base URL without trailing slash, query, or
+	// fragment — used to expand relative image paths.
+	normalizedBaseURL := &url.URL{Scheme: baseU.Scheme, Host: baseU.Host, Path: strings.TrimRight(baseU.Path, "/")}
 
 	for _, img := range images {
-		if img.CoverType != "poster" {
-			continue
-		}
-
-		// Pre-fetch extension check: only accept JPEG and PNG.
-		ext := strings.ToLower(img.Extension)
-		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
-			continue
-		}
-
-		imageURL := img.URL
-		if imageURL == "" {
-			imageURL = img.RemoteURL
-		}
-
-		if imageURL == "" {
-			continue
-		}
-
-		// Relative paths are served by the arr instance; prepend the base URL.
-		if strings.HasPrefix(imageURL, "/") {
-			imageURL = normalizedBase + imageURL
-		}
-
-		imageU, err := url.Parse(imageURL)
+		data, ct, err := fetchPosterCandidate(ctx, img, normalizedBaseURL, isSameBase, httpClient, apiKey)
 		if err != nil {
-			return nil, "", fmt.Errorf("parse image URL: %w", err)
+			return nil, "", err
 		}
 
-		// fetchCtx and cancel are managed explicitly (not via defer) to ensure
-		// resources are released before continuing to the next candidate.
-		fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
-
-		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, imageURL, nil)
-		if err != nil {
-			cancel()
-
-			return nil, "", fmt.Errorf("build image request: %w", err)
+		if data != nil {
+			return data, ct, nil
 		}
-
-		// Only send the API key when fetching from the configured arr instance.
-		// RemoteURL values may point to external CDNs and must not receive it.
-		if isSameBase(imageU) {
-			req.Header.Set("X-Api-Key", apiKey)
-		}
-
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			cancel()
-
-			return nil, "", fmt.Errorf("fetch poster image: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-
-			cancel()
-
-			continue
-		}
-
-		// Post-fetch Content-Type validation using the standard MIME parser.
-		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-		if err != nil || (ct != MimeJPEG && ct != MimePNG) {
-			_ = resp.Body.Close()
-
-			cancel()
-
-			continue
-		}
-
-		// Read one byte beyond the cap to detect responses that exceed the limit.
-		// If the read returns more than MaxPosterBytes, skip this candidate rather
-		// than silently truncating the image data.
-		data, err := io.ReadAll(io.LimitReader(resp.Body, MaxPosterBytes+1))
-		_ = resp.Body.Close()
-
-		cancel()
-
-		if err != nil {
-			return nil, "", fmt.Errorf("read poster image: %w", err)
-		}
-
-		if len(data) > MaxPosterBytes {
-			continue
-		}
-
-		return data, ct, nil
 	}
 
 	return nil, "", nil
+}
+
+// fetchPosterCandidate attempts to fetch a single poster image candidate.
+// Returns non-nil bytes and a MIME type on success.
+// Returns nil bytes (no error) when the candidate should be skipped.
+// Returns a non-nil error only for hard failures (unreachable host, URL parse
+// error, or body read error) that should abort the entire fetch.
+func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseURL *url.URL, isSameBase func(*url.URL) bool, httpClient *http.Client, apiKey string) ([]byte, string, error) {
+	if img.CoverType != "poster" {
+		return nil, "", nil
+	}
+
+	// Pre-fetch extension check: only accept JPEG and PNG.
+	ext := strings.ToLower(img.Extension)
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+		slog.WarnContext(ctx, "skipping poster candidate: unsupported extension", "extension", img.Extension)
+
+		return nil, "", nil
+	}
+
+	imageURL := img.URL
+	if imageURL == "" {
+		imageURL = img.RemoteURL
+	}
+
+	if imageURL == "" {
+		slog.WarnContext(ctx, "skipping poster candidate: no URL or RemoteURL set")
+
+		return nil, "", nil
+	}
+
+	// Relative paths are served by the arr instance; prepend the base URL.
+	if strings.HasPrefix(imageURL, "/") {
+		imageURL = normalizedBaseURL.String() + imageURL
+	}
+
+	imageU, err := url.Parse(imageURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse image URL: %w", err)
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("build image request: %w", err)
+	}
+
+	// Only send the API key when fetching from the configured arr instance.
+	// RemoteURL values may point to external CDNs and must not receive it.
+	if isSameBase(imageU) {
+		req.Header.Set("X-Api-Key", apiKey)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch poster image: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.WarnContext(ctx, "skipping poster candidate: non-200 response", "status", resp.StatusCode, "url", imageURL)
+
+		return nil, "", nil
+	}
+
+	// Post-fetch Content-Type validation using the standard MIME parser.
+	ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || (ct != MimeJPEG && ct != MimePNG) {
+		slog.WarnContext(ctx, "skipping poster candidate: unsupported content type", "content_type", resp.Header.Get("Content-Type"), "url", imageURL)
+
+		return nil, "", nil
+	}
+
+	// Read one byte beyond the cap to detect responses that exceed the limit.
+	// If the read returns more than MaxPosterBytes, skip this candidate rather
+	// than silently truncating the image data.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxPosterBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read poster image: %w", err)
+	}
+
+	if len(data) > MaxPosterBytes {
+		slog.WarnContext(ctx, "skipping poster candidate: response exceeds size limit", "limit_bytes", MaxPosterBytes, "url", imageURL)
+
+		return nil, "", nil
+	}
+
+	return data, ct, nil
 }

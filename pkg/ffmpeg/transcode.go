@@ -685,21 +685,26 @@ func (t *Transcoder) addCoverArtStream(outputFmt *astiav.FormatContext) error {
 	cp := artStream.CodecParameters()
 	cp.SetMediaType(astiav.MediaTypeAttachment)
 
+	var (
+		codecID  astiav.CodecID
+		filename string
+	)
+
 	switch t.coverArtMimeType {
+	case "image/jpeg":
+		codecID = astiav.CodecIDMjpeg
+		filename = "cover.jpg"
 	case "image/png":
-		cp.SetCodecID(astiav.CodecIDPng)
+		codecID = astiav.CodecIDPng
+		filename = "cover.png"
 	default:
-		// Treat image/jpeg and any unknown type as MJPEG.
-		cp.SetCodecID(astiav.CodecIDMjpeg)
+		return fmt.Errorf("ffmpeg: unsupported cover art MIME type %q", t.coverArtMimeType)
 	}
+
+	cp.SetCodecID(codecID)
 
 	if err := cp.SetExtraData(t.coverArtBytes); err != nil {
 		return fmt.Errorf("ffmpeg: setting cover art extradata: %w", err)
-	}
-
-	filename := "cover.jpg"
-	if t.coverArtMimeType == "image/png" {
-		filename = "cover.png"
 	}
 
 	meta := astiav.NewDictionary()
