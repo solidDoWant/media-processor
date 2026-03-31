@@ -10,12 +10,7 @@ import (
 
 func init() {
 	// Pass libav log messages through to slog; slog handles level filtering.
-	// LogLevelDebug is intentionally avoided: go-astiav's log.c uses a fixed
-	// 1024-byte char buffer with vsprintf, and FFmpeg emits several debug
-	// messages longer than 1024 bytes (e.g. the pixel-format negotiation list
-	// logged during avfilter_graph_config), which silently overflows that
-	// buffer and triggers glibc's stack-smashing protection.
-	astiav.SetLogLevel(astiav.LogLevelInfo)
+	astiav.SetLogLevel(astiav.LogLevelDebug)
 	astiav.SetLogCallback(func(_ astiav.Classer, l astiav.LogLevel, _, msg string) {
 		ctx := context.Background()
 		logger := slog.Default()
