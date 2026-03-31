@@ -223,11 +223,11 @@ func buildCropdetectFilterGraph(
 		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: parsing filter graph: %w", err)
 	}
 
-	// Temporarily raise the log level to Verbose before calling Configure;
-	// see https://github.com/asticode/go-astiav/issues/182.
-	prevLevel := astiav.GetLogLevel()
-
+	// A closure is used here so the deferred SetLogLevel restores the previous
+	// level even if Configure panics; see https://github.com/asticode/go-astiav/issues/182.
 	err = func() error {
+		prevLevel := astiav.GetLogLevel()
+
 		astiav.SetLogLevel(astiav.LogLevelVerbose)
 		defer astiav.SetLogLevel(prevLevel)
 
@@ -280,6 +280,9 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: getting frame from filter: %w", err)
 			}
 
+			// cropdetect accumulates its estimate across frames: each output
+			// frame's metadata already reflects the widest non-black region
+			// seen so far, so the last value is the fully-converged result.
 			if cropParameters, ok := parseCropMetadata(filterFrame); ok {
 				result = cropParameters
 				haveCrop = true
