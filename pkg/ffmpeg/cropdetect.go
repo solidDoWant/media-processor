@@ -24,15 +24,17 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 		return CropParams{}, err
 	}
 
-	defer cancelWatch()
-	defer inputFmt.CloseInput()
-	defer inputFmt.Free()
+	defer func() {
+		cancelWatch()
+		inputFmt.CloseInput()
+		inputFmt.Free()
+	}()
 
 	var videoStream *astiav.Stream
 
-	for _, s := range inputFmt.Streams() {
-		if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
-			videoStream = s
+	for _, stream := range inputFmt.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			videoStream = stream
 
 			break
 		}
@@ -221,23 +223,20 @@ func buildCropdetectFilterGraph(
 		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: parsing filter graph: %w", err)
 	}
 
-	// Temporarily raise the log level above debug before calling Configure.
-	// go-astiav's log.c uses a 1024-byte vsprintf buffer; avfilter_graph_config
-	// emits a pixel-format negotiation message at debug level that exceeds 1024
-	// bytes, overflowing the buffer and triggering glibc's stack-smashing
-	// protection. Raising to Verbose suppresses that specific message.
+	// Temporarily raise the log level to Verbose before calling Configure;
+	// see https://github.com/asticode/go-astiav/issues/182.
 	prevLevel := astiav.GetLogLevel()
 
-	astiav.SetLogLevel(astiav.LogLevelVerbose)
+	err = func() error {
+		astiav.SetLogLevel(astiav.LogLevelVerbose)
+		defer astiav.SetLogLevel(prevLevel)
 
-	configErr := fg.Configure()
-
-	astiav.SetLogLevel(prevLevel)
-
-	if configErr != nil {
+		return fg.Configure()
+	}()
+	if err != nil {
 		fg.Free()
 
-		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: configuring filter graph: %w", configErr)
+		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: configuring filter graph: %w", err)
 	}
 
 	return fg, srcCtx, sinkCtx, nil
@@ -281,8 +280,8 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: getting frame from filter: %w", err)
 			}
 
-			if cp, ok := parseCropMetadata(filterFrame); ok {
-				result = cp
+			if cropParameters, ok := parseCropMetadata(filterFrame); ok {
+				result = cropParameters
 				haveCrop = true
 			}
 
@@ -371,7 +370,9 @@ func runCropdetectLoop(
 		return CropParams{}, err
 	}
 
-	// Flush the filter graph.
+	// Signal EOF to the filter graph. Any error here is intentionally ignored:
+	// the nil frame flush may return EAGAIN or EINVAL once all real frames have
+	// been processed, and drainFilter below collects any remaining output.
 	_ = srcCtx.AddFrame(nil, astiav.NewBuffersrcFlags())
 
 	if err := drainFilter(); err != nil {
@@ -388,8 +389,8 @@ func runCropdetectLoop(
 // parseCropMetadata reads lavfi.cropdetect.{w,h,x,y} from a filter output
 // frame's metadata dictionary. Returns the parsed CropParams and true on
 // success, or the zero value and false if any key is absent or unparseable.
-func parseCropMetadata(f *astiav.Frame) (CropParams, bool) {
-	meta := f.Metadata()
+func parseCropMetadata(frame *astiav.Frame) (CropParams, bool) {
+	meta := frame.Metadata()
 	if meta == nil {
 		return CropParams{}, false
 	}
@@ -402,12 +403,12 @@ func parseCropMetadata(f *astiav.Frame) (CropParams, bool) {
 			return 0, false
 		}
 
-		v, err := strconv.Atoi(entry.Value())
+		value, err := strconv.Atoi(entry.Value())
 		if err != nil {
 			return 0, false
 		}
 
-		return v, true
+		return value, true
 	}
 
 	w, ok := get("lavfi.cropdetect.w")
