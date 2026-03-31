@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/asticode/go-astiav"
@@ -73,7 +74,8 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 
 	defer fg.Free()
 
-	return runCropdetectLoop(ctx, inputFmt, codecCtx, videoStream.Index(), srcCtx, sinkCtx)
+	sampleInterval := calculateSampleInterval(videoStream)
+	return runCropdetectLoop(ctx, inputFmt, codecCtx, videoStream.Index(), srcCtx, sinkCtx, videoStream, sampleInterval)
 }
 
 // openInputForDetectCrop opens the input file and returns the format context
@@ -126,6 +128,69 @@ func openInputForDetectCrop(ctx context.Context, inputPath string) (*astiav.Form
 	}
 
 	return inputFmt, cancelWatch, nil
+}
+
+// calculateSampleInterval determines the frame sampling interval for crop detection.
+// It ensures at least 100 frames are sampled and selects an interval between 10-100.
+// To avoid sampling at the exact frame rate, it uses a nearby prime number when possible.
+func calculateSampleInterval(videoStream *astiav.Stream) int {
+	// Get total frame count using duration and frame rate
+	duration := videoStream.Duration()
+	avgFrameRate := videoStream.AvgFrameRate()
+
+	var totalFrames int
+	if avgFrameRate.Den() > 0 {
+		fps := float64(avgFrameRate.Num()) / float64(avgFrameRate.Den())
+		// Duration is in stream time base, need to convert to seconds
+		timeBase := videoStream.TimeBase()
+		durationSec := float64(duration) * float64(timeBase.Num()) / float64(timeBase.Den())
+		totalFrames = int(durationSec * fps)
+	} else {
+		// Fallback: assume a default 24fps and reasonable duration
+		timeBase := videoStream.TimeBase()
+		durationSec := float64(duration) * float64(timeBase.Num()) / float64(timeBase.Den())
+		totalFrames = int(durationSec * 24.0)
+	}
+
+	// If we have fewer than 100 frames, sample every frame
+	if totalFrames <= 100 {
+		return 1
+	}
+
+	// Calculate target interval to get ~100-200 samples
+	// Interval = totalFrames / targetSamples
+	targetSamples := 150
+	interval := totalFrames / targetSamples
+
+	// Clamp interval to [10, 100] as required
+	if interval < 10 {
+		interval = 10
+	} else if interval > 100 {
+		interval = 100
+	}
+
+	// Try to avoid exact FPS by using a nearby prime number
+	if avgFrameRate.Den() > 0 {
+		fps := float64(avgFrameRate.Num()) / float64(avgFrameRate.Den())
+		nearestFps := int(math.Round(fps))
+
+		// If interval is close to the FPS, adjust to the nearest prime
+		if math.Abs(float64(interval)-fps) < 0.5*fps && nearestFps > 0 {
+			// Small primes near common frame rates
+			primes := []int{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101}
+
+			// Find the closest prime that's still within [10, 100]
+			bestPrime := interval
+			for _, p := range primes {
+				if p >= 10 && p <= 100 && math.Abs(float64(p)-fps) < math.Abs(float64(bestPrime)-fps) {
+					bestPrime = p
+				}
+			}
+			interval = bestPrime
+		}
+	}
+
+	return interval
 }
 
 // buildCropdetectFilterGraph wires a buffer → cropdetect → buffersink filter
@@ -242,9 +307,9 @@ func buildCropdetectFilterGraph(
 	return fg, srcCtx, sinkCtx, nil
 }
 
-// runCropdetectLoop decodes all frames from inputFmt, pushes them through the
-// cropdetect filter graph, and returns the last detected crop region. It returns
-// an error if no crop metadata was produced.
+// runCropdetectLoop decodes frames from inputFmt, pushes them through the
+// cropdetect filter graph (with frame sampling), and returns the last detected
+// crop region. It returns an error if no crop metadata was produced.
 func runCropdetectLoop(
 	ctx context.Context,
 	inputFmt *astiav.FormatContext,
@@ -252,6 +317,8 @@ func runCropdetectLoop(
 	videoStreamIndex int,
 	srcCtx *astiav.BuffersrcFilterContext,
 	sinkCtx *astiav.BuffersinkFilterContext,
+	videoStream *astiav.Stream,
+	sampleInterval int,
 ) (CropParams, error) {
 	decFrame := astiav.AllocFrame()
 	defer decFrame.Free()
@@ -265,6 +332,7 @@ func runCropdetectLoop(
 	var result CropParams
 
 	haveCrop := false
+	frameCounter := 0
 
 	drainFilter := func() error {
 		for {
@@ -306,21 +374,27 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: receiving frame: %w", err)
 			}
 
-			if err := srcCtx.AddFrame(decFrame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
-				decFrame.Unref()
+			// Implement frame sampling: only push every Nth frame to the filter.
+			// Always include frame 0 to ensure we get some data.
+			if sampleInterval == 1 || frameCounter%sampleInterval == 0 {
+				if err := srcCtx.AddFrame(decFrame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
+					decFrame.Unref()
 
-				if ctx.Err() != nil {
-					return ctx.Err()
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+
+					return fmt.Errorf("ffmpeg: DetectCrop: adding frame to filter: %w", err)
 				}
 
-				return fmt.Errorf("ffmpeg: DetectCrop: adding frame to filter: %w", err)
+				if err := drainFilter(); err != nil {
+					decFrame.Unref()
+					return err
+				}
 			}
 
+			frameCounter++
 			decFrame.Unref()
-
-			if err := drainFilter(); err != nil {
-				return err
-			}
 		}
 	}
 
