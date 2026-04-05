@@ -126,6 +126,8 @@ type TranscodeOutput struct {
 	// ArtworkFetchSkipped is true when artwork fetch was attempted but yielded no
 	// embeddable image (library unreachable, no poster available, or unsupported type).
 	ArtworkFetchSkipped bool `json:"artwork_fetch_skipped,omitempty"`
+	// CropApplied is true when a crop filter was applied during transcoding.
+	CropApplied bool `json:"crop_applied,omitempty"`
 }
 
 // codecName returns a human-readable name for a codec, matching the names used
@@ -147,6 +149,9 @@ func codecName(c ffmpeg.Codec) string {
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
 // probe is the output of RunProbe for filePath.
+// cropParams is the crop region to apply, or nil for no cropping.
+// When cropParams is non-nil and videoCodec would be CodecCopy, the codec is
+// promoted to CodecH265 so the crop filter can be applied.
 // watcherRoot is the root directory that the watcher monitors. When non-empty,
 // the subdirectory of filePath relative to watcherRoot is mirrored under outputDir,
 // preserving the download client's directory structure. When empty, the output is
@@ -158,7 +163,7 @@ func codecName(c ffmpeg.Codec) string {
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outputDir string, watcherRoot string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -169,6 +174,12 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 	srcSize := srcInfo.Size()
 
 	videoCodec := SelectVideoCodec(probe.VideoCodec, probe.Format)
+
+	// Crop requires re-encoding: promote CodecCopy to CodecH265 so the crop
+	// filter can be applied.
+	if cropParams != nil && videoCodec == ffmpeg.CodecCopy {
+		videoCodec = ffmpeg.CodecH265
+	}
 
 	audioExclude := nonEnglishAudioIndices(probe.AudioStreams)
 	excludeIndices := append(audioExclude, nonEnglishSubtitleIndices(probe.SubtitleStreams)...)
@@ -326,9 +337,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		}
 	}
 
-	if err := ffmpeg.NewTranscode(filePath, tempPath).
+	builder := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
+		HardwareAccel(ffmpeg.HWAccelAuto).
 		ExcludeStreams(excludeIndices...).
 		WithDefaultAudioStream(firstEnglishIndex(audioBaseStreams)).
 		WithDefaultSubtitleStream(firstEnglishIndex(probe.SubtitleStreams)).
@@ -338,9 +350,13 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		WithHardwareDevice(hardwareDevicePath).
-		WithCoverArt(artBytes, artMime).
-		Build().
-		Run(ctx); err != nil {
+		WithCoverArt(artBytes, artMime)
+
+	if cropParams != nil {
+		builder = builder.WithCrop(*cropParams)
+	}
+
+	if err := builder.Build().Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return TranscodeOutput{}, errors.Join(
 				fmt.Errorf("transcode: %w", err),
@@ -375,5 +391,6 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, outpu
 		DestFileSizeBytes:        dstInfo.Size(),
 		TranscodeDurationSeconds: time.Since(transcodeStart).Seconds(),
 		ArtworkFetchSkipped:      artworkSkipped,
+		CropApplied:              cropParams != nil,
 	}, nil
 }

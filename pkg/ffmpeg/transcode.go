@@ -29,6 +29,7 @@ type TranscodeBuilder struct {
 	downmixTitle          string         // title prefix prepended to the downmix channel layout label
 	coverArtBytes         []byte         // raw image bytes to embed as MKV attachment; nil = no cover art
 	coverArtMimeType      string         // MIME type of coverArtBytes ("image/jpeg" or "image/png")
+	cropParams            *CropParams    // crop region to apply during video encode; nil = no crop
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -197,6 +198,21 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 
 	b.coverArtBytes = imageBytes
 	b.coverArtMimeType = mimeType
+
+	return b
+}
+
+// WithCrop applies a crop filter to the video stream during encoding. The crop
+// region is specified by params: W and H are the output dimensions in pixels,
+// and X and Y are the offsets from the top-left corner of the input frame.
+// WithCrop is a no-op when videoCodec is CodecCopy, since a crop filter
+// requires decoding and re-encoding the video stream.
+func (b *TranscodeBuilder) WithCrop(params CropParams) *TranscodeBuilder {
+	if b.videoCodec == CodecCopy {
+		return b
+	}
+
+	b.cropParams = &params
 
 	return b
 }
@@ -424,10 +440,17 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath}
+			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath, cropParams: t.cropParams}
 			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
+			}
+
+			if t.cropParams != nil {
+				if err := videoState.setupCropFilter(inStream, hwAccel); err != nil {
+					freeStreams(streams)
+					return nil, fmt.Errorf("ffmpeg: setting up crop filter for stream %d: %w", inStream.Index(), err)
+				}
 			}
 
 			s = videoState

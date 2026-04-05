@@ -24,6 +24,11 @@ func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode sh
 		hw = "true"
 	}
 
+	cropApplied := "false"
+	if transcode.CropApplied {
+		cropApplied = "true"
+	}
+
 	return []attribute.KeyValue{
 		attribute.String("source_codec", probe.VideoCodec),
 		attribute.String("destination_codec", transcode.DestCodec),
@@ -32,6 +37,7 @@ func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode sh
 		mediaTypeAttr(input.MediaType),
 		mappingNameAttr(input.MappingName),
 		attribute.String("hardware_accelerated", hw),
+		attribute.String("crop_applied", cropApplied),
 	}
 }
 

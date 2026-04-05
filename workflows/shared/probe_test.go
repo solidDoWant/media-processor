@@ -74,6 +74,8 @@ func TestRunProbe_ValidMediaFile(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{
 			{StreamInfo: StreamInfo{Index: 1, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2},
 		},
+		VideoWidth:  320,
+		VideoHeight: 180,
 	}, gotWithoutDuration)
 	// DurationSeconds is a float64 derived from ffprobe; use InDelta to tolerate minor rounding.
 	assert.InDelta(t, 5.013333, got.DurationSeconds, 0.001, "DurationSeconds should match actual file duration")

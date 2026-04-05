@@ -9,6 +9,19 @@ import (
 	"github.com/asticode/go-astiav"
 )
 
+// videoCropFilterState holds the filter graph used to apply a spatial crop to
+// decoded video frames. For software-decoded streams the graph is simply
+// "crop=W:H:X:Y". For hardware-decoded streams "hwdownload" is prepended so
+// that the crop filter receives frames in system memory; the output pixel
+// format is the profile's software pixel format (e.g. NV12).
+type videoCropFilterState struct {
+	graph       *astiav.FilterGraph
+	srcCtx      *astiav.BuffersrcFilterContext
+	sinkCtx     *astiav.BuffersinkFilterContext
+	frame       *astiav.Frame
+	srcHWFrames *astiav.HardwareFramesContext // non-nil when source frames are in HW memory
+}
+
 type videoEncoderState struct {
 	codecID                 astiav.CodecID
 	codec                   *astiav.Codec
@@ -38,6 +51,14 @@ type videoStreamState struct {
 	encoder            videoEncoderState
 	isHWDecode         bool
 	hardwareDevicePath string // device path for CreateHardwareDeviceContext; "" = auto-select
+
+	// Crop filter state. Non-nil when a crop region has been requested via
+	// WithCrop. The filter graph is set up in setupCropFilter after the
+	// decoder is initialised so that source pixel format and dimensions are
+	// known.
+	cropParams             *CropParams           // crop region; nil = no crop
+	cropFilter             *videoCropFilterState // non-nil when crop filter graph is active
+	effectiveDecodedPixFmt astiav.PixelFormat    // pixel format of frames entering the encoder pipeline (post crop filter)
 }
 
 func (vds *videoDecoderState) free() {
@@ -71,6 +92,20 @@ func (vss *videoStreamState) free() {
 
 	if vss.encoder.hardwareFrameContext != nil {
 		vss.encoder.hardwareFrameContext.Free()
+	}
+
+	if vss.cropFilter != nil {
+		if vss.cropFilter.graph != nil {
+			vss.cropFilter.graph.Free()
+		}
+
+		if vss.cropFilter.frame != nil {
+			vss.cropFilter.frame.Free()
+		}
+
+		if vss.cropFilter.srcHWFrames != nil {
+			vss.cropFilter.srcHWFrames.Free()
+		}
 	}
 }
 
@@ -155,6 +190,228 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 	return nil
 }
 
+// setupCropFilter builds the libavfilter graph that applies the crop region to
+// decoded video frames. It must be called after setupDecoder so that the
+// decoder's pixel format and dimensions are known.
+//
+// For hardware-decoded streams the filter graph is "hwdownload,crop=W:H:X:Y"
+// so that frames are transferred to system memory before cropping. For
+// software-decoded streams the graph is simply "crop=W:H:X:Y".
+//
+// effectiveDecodedPixFmt is set to the pixel format of frames leaving the
+// filter (used by setupVideoConversion to configure the scaler correctly).
+func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HWAccel) error {
+	cp := vss.cropParams // guaranteed non-nil by caller
+
+	cropStr := fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y)
+
+	var (
+		filterStr   string
+		srcPixFmt   astiav.PixelFormat
+		srcHWFrames *astiav.HardwareFramesContext
+	)
+
+	if vss.decoder.hwDevCtx != nil {
+		// HW decode: prepend hwdownload so the crop filter receives frames in
+		// system memory. effectiveDecodedPixFmt becomes the profile's SW
+		// pixel format (e.g. NV12) — the format after the download step.
+		filterStr = "hwdownload," + cropStr
+		srcPixFmt = vss.decoder.hwPixFmt
+
+		profile := hwProfiles[hwAccel]
+		vss.effectiveDecodedPixFmt = profile.swPixFmt
+
+		// Allocate a hardware frames context describing the frames produced by
+		// the HW decoder so that the buffersrc filter knows their format.
+		hfc := astiav.AllocHardwareFramesContext(vss.decoder.hwDevCtx)
+		if hfc == nil {
+			return errors.New("ffmpeg: failed to allocate crop filter hardware frames context")
+		}
+
+		hfc.SetHardwarePixelFormat(vss.decoder.hwPixFmt)
+		hfc.SetSoftwarePixelFormat(profile.swPixFmt)
+		hfc.SetWidth(vss.decoder.codecContext.Width())
+		hfc.SetHeight(vss.decoder.codecContext.Height())
+		hfc.SetInitialPoolSize(0)
+
+		if err := hfc.Initialize(); err != nil {
+			hfc.Free()
+
+			return fmt.Errorf("ffmpeg: initializing crop filter hardware frames context: %w", err)
+		}
+
+		srcHWFrames = hfc
+	} else {
+		// SW decode: crop filter operates directly on the decoded frames.
+		filterStr = cropStr
+		srcPixFmt = vss.decoder.codecContext.PixelFormat()
+		vss.effectiveDecodedPixFmt = srcPixFmt
+	}
+
+	fg := astiav.AllocFilterGraph()
+	if fg == nil {
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: failed to allocate crop filter graph")
+	}
+
+	buffersrc := astiav.FindFilterByName("buffer")
+	if buffersrc == nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: buffer filter not found for crop")
+	}
+
+	buffersink := astiav.FindFilterByName("buffersink")
+	if buffersink == nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: buffersink filter not found for crop")
+	}
+
+	srcCtx, err := fg.NewBuffersrcFilterContext(buffersrc, "in")
+	if err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: creating crop buffersrc context: %w", err)
+	}
+
+	sinkCtx, err := fg.NewBuffersinkFilterContext(buffersink, "out")
+	if err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: creating crop buffersink context: %w", err)
+	}
+
+	srcParams := astiav.AllocBuffersrcFilterContextParameters()
+	defer srcParams.Free()
+
+	srcParams.SetPixelFormat(srcPixFmt)
+	srcParams.SetWidth(vss.decoder.codecContext.Width())
+	srcParams.SetHeight(vss.decoder.codecContext.Height())
+	srcParams.SetTimeBase(inStream.TimeBase())
+	srcParams.SetSampleAspectRatio(vss.decoder.codecContext.SampleAspectRatio())
+
+	if srcHWFrames != nil {
+		srcParams.SetHardwareFramesContext(srcHWFrames)
+	}
+
+	if err := srcCtx.SetParameters(srcParams); err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: setting crop buffersrc parameters: %w", err)
+	}
+
+	if err := srcCtx.Initialize(nil); err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: initializing crop buffersrc: %w", err)
+	}
+
+	outputs := astiav.AllocFilterInOut()
+	if outputs == nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: failed to allocate crop filter in/out (outputs)")
+	}
+
+	defer outputs.Free()
+
+	inputs := astiav.AllocFilterInOut()
+	if inputs == nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: failed to allocate crop filter in/out (inputs)")
+	}
+
+	defer inputs.Free()
+
+	outputs.SetName("in")
+	outputs.SetFilterContext(srcCtx.FilterContext())
+	outputs.SetPadIdx(0)
+	outputs.SetNext(nil)
+
+	inputs.SetName("out")
+	inputs.SetFilterContext(sinkCtx.FilterContext())
+	inputs.SetPadIdx(0)
+	inputs.SetNext(nil)
+
+	if err := fg.Parse(filterStr, inputs, outputs); err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: parsing crop filter graph %q: %w", filterStr, err)
+	}
+
+	if err := fg.Configure(); err != nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return fmt.Errorf("ffmpeg: configuring crop filter graph: %w", err)
+	}
+
+	filterFrame := astiav.AllocFrame()
+	if filterFrame == nil {
+		fg.Free()
+
+		if srcHWFrames != nil {
+			srcHWFrames.Free()
+		}
+
+		return errors.New("ffmpeg: failed to allocate crop filter output frame")
+	}
+
+	vss.cropFilter = &videoCropFilterState{
+		graph:       fg,
+		srcCtx:      srcCtx,
+		sinkCtx:     sinkCtx,
+		frame:       filterFrame,
+		srcHWFrames: srcHWFrames,
+	}
+
+	return nil
+}
+
 // setupEncoder implements the stream interface for video. If a hardware encoder
 // is requested but unavailable, it falls back to software encoding transparently.
 func (vss *videoStreamState) setupEncoder(hwAccel HWAccel, outputFmt *astiav.FormatContext) error {
@@ -233,8 +490,16 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 		return errors.New("failed to allocate encoder codec context")
 	}
 
-	vss.encoder.codecContext.SetWidth(vss.decoder.codecContext.Width())
-	vss.encoder.codecContext.SetHeight(vss.decoder.codecContext.Height())
+	encW := vss.decoder.codecContext.Width()
+	encH := vss.decoder.codecContext.Height()
+
+	if vss.cropParams != nil {
+		encW = vss.cropParams.W
+		encH = vss.cropParams.H
+	}
+
+	vss.encoder.codecContext.SetWidth(encW)
+	vss.encoder.codecContext.SetHeight(encH)
 	vss.encoder.codecContext.SetSampleAspectRatio(vss.decoder.codecContext.SampleAspectRatio())
 	vss.encoder.codecContext.SetTimeBase(vss.decoder.codecContext.TimeBase())
 	vss.encoder.codecContext.SetFramerate(vss.decoder.codecContext.Framerate())
@@ -279,8 +544,10 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	}
 
 	// HW encode with HW decode: decoded frames are already in GPU memory —
-	// share those surfaces directly with the encoder.
-	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt {
+	// share those surfaces directly with the encoder. The crop filter
+	// downloads frames to CPU memory, so the zero-copy path is unavailable
+	// when a crop filter is active.
+	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.cropFilter == nil {
 		vss.isHWDecode = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 
@@ -306,10 +573,18 @@ func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 		return errors.New("failed to allocate hardware frames context")
 	}
 
+	hwFCW := vss.decoder.codecContext.Width()
+	hwFCH := vss.decoder.codecContext.Height()
+
+	if vss.cropParams != nil {
+		hwFCW = vss.cropParams.W
+		hwFCH = vss.cropParams.H
+	}
+
 	vss.encoder.hardwareFrameContext.SetHardwarePixelFormat(profile.hwPixFmt)
 	vss.encoder.hardwareFrameContext.SetSoftwarePixelFormat(profile.swPixFmt)
-	vss.encoder.hardwareFrameContext.SetWidth(vss.decoder.codecContext.Width())
-	vss.encoder.hardwareFrameContext.SetHeight(vss.decoder.codecContext.Height())
+	vss.encoder.hardwareFrameContext.SetWidth(hwFCW)
+	vss.encoder.hardwareFrameContext.SetHeight(hwFCH)
 	vss.encoder.hardwareFrameContext.SetInitialPoolSize(20)
 
 	if err := vss.encoder.hardwareFrameContext.Initialize(); err != nil {
@@ -337,7 +612,23 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 		return nil
 	}
 
-	decoderPixelFormat := vss.decoder.codecContext.PixelFormat()
+	// When a crop filter is active, effectiveDecodedPixFmt holds the pixel
+	// format of the frames coming OUT of the filter graph (e.g. NV12 after
+	// hwdownload). Otherwise fall back to the decoder's native format.
+	decoderPixelFormat := vss.effectiveDecodedPixFmt
+	if decoderPixelFormat == astiav.PixelFormatNone {
+		decoderPixelFormat = vss.decoder.codecContext.PixelFormat()
+	}
+
+	// Source dimensions entering the scaler: crop output dimensions when a
+	// crop filter is active, decoder input dimensions otherwise.
+	srcW := vss.decoder.codecContext.Width()
+	srcH := vss.decoder.codecContext.Height()
+
+	if vss.cropParams != nil {
+		srcW = vss.cropParams.W
+		srcH = vss.cropParams.H
+	}
 
 	// For HW encode with SW decode, target the SW pixel format (e.g. NV12)
 	// before uploading; for pure SW encode, target the encoder pixel format.
@@ -348,8 +639,8 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 
 	if decoderPixelFormat != encoderPixelFormat {
 		softwareFrameContext, err := astiav.CreateSoftwareScaleContext(
-			vss.decoder.codecContext.Width(), vss.decoder.codecContext.Height(), decoderPixelFormat,
-			vss.decoder.codecContext.Width(), vss.decoder.codecContext.Height(), encoderPixelFormat,
+			srcW, srcH, decoderPixelFormat,
+			srcW, srcH, encoderPixelFormat,
 			astiav.NewSoftwareScaleContextFlags(astiav.SoftwareScaleContextFlagBilinear),
 		)
 		if err != nil {
@@ -363,8 +654,8 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 			return errors.New("failed to allocate scaled frame")
 		}
 
-		vss.encoder.frame.SetWidth(vss.decoder.codecContext.Width())
-		vss.encoder.frame.SetHeight(vss.decoder.codecContext.Height())
+		vss.encoder.frame.SetWidth(srcW)
+		vss.encoder.frame.SetHeight(srcH)
 		vss.encoder.frame.SetPixelFormat(encoderPixelFormat)
 
 		if err := vss.encoder.frame.AllocBuffer(0); err != nil {
@@ -416,17 +707,33 @@ func (vss *videoStreamState) processPacket(packet *astiav.Packet, outputFmt *ast
 // encodeVideoFrame converts and encodes a single decoded video frame.
 // On the fully hardware path (isHWDecode=true) the frame is already in GPU
 // memory and is passed directly to the encoder without any CPU conversion.
+// When a crop filter is active, the frame is first pushed through the filter
+// graph and the cropped output is used for the remainder of the pipeline.
 func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	encFrame := frame
+
+	if vss.cropFilter != nil {
+		if err := vss.cropFilter.srcCtx.AddFrame(frame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
+			return fmt.Errorf("ffmpeg: adding frame to crop filter: %w", err)
+		}
+
+		if err := vss.cropFilter.sinkCtx.GetFrame(vss.cropFilter.frame, astiav.NewBuffersinkFlags()); err != nil {
+			return fmt.Errorf("ffmpeg: getting frame from crop filter: %w", err)
+		}
+
+		defer vss.cropFilter.frame.Unref()
+
+		encFrame = vss.cropFilter.frame
+	}
 
 	if !vss.isHWDecode {
 		// Software decode path: convert pixel format if needed.
 		if vss.encoder.softwareFrameContext != nil {
-			if err := vss.encoder.softwareFrameContext.ScaleFrame(frame, vss.encoder.frame); err != nil {
+			if err := vss.encoder.softwareFrameContext.ScaleFrame(encFrame, vss.encoder.frame); err != nil {
 				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
 			}
 
-			vss.encoder.frame.SetPts(frame.Pts())
+			vss.encoder.frame.SetPts(encFrame.Pts())
 			vss.encoder.frame.SetPictureType(astiav.PictureTypeNone)
 			encFrame = vss.encoder.frame
 		}

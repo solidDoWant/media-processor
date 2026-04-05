@@ -612,6 +612,71 @@ func TestTranscode_WithCoverArt_NilBytesIsNoop(t *testing.T) {
 	assert.Empty(t, probeAttachments(t, output), "no attachment expected when cover art bytes are nil")
 }
 
+// testBlackBarsVideoPath is a 320x220 H.264 video with 22-pixel black bars on the
+// top and bottom, producing a 320x176 active picture area (crop=320:176:0:22).
+const testBlackBarsVideoPath = "testdata/video_black_bars.mp4"
+
+// TestWithCrop_NarrowsOutputDimensions verifies that WithCrop reduces the output
+// video dimensions to the crop region (320x176 from the 320x220 source).
+func TestWithCrop_NarrowsOutputDimensions(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	crop := ffmpeg.CropParams{W: 320, H: 176, X: 0, Y: 22}
+
+	err := ffmpeg.NewTranscode(testBlackBarsVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCrop(crop).
+		Build().
+		Run(context.Background())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(context.Background(), output)
+	require.NoError(t, err)
+
+	var videoStream *ffprobe.StreamInfo
+
+	for i := range info.Streams {
+		if info.Streams[i].CodecType == ffprobe.CodecTypeVideo {
+			videoStream = &info.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, videoStream, "output file should contain a video stream")
+	assert.Equal(t, 320, videoStream.WidthPixels, "output width should match crop width")
+	assert.Equal(t, 176, videoStream.HeightPixels, "output height should match crop height")
+}
+
+// TestWithoutCrop_DimensionsUnchanged verifies that omitting WithCrop preserves
+// the source video dimensions (320x220).
+func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testBlackBarsVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(context.Background())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(context.Background(), output)
+	require.NoError(t, err)
+
+	var videoStream *ffprobe.StreamInfo
+
+	for i := range info.Streams {
+		if info.Streams[i].CodecType == ffprobe.CodecTypeVideo {
+			videoStream = &info.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, videoStream, "output file should contain a video stream")
+	assert.Equal(t, 320, videoStream.WidthPixels, "width should be unchanged without crop")
+	assert.Equal(t, 220, videoStream.HeightPixels, "height should be unchanged without crop")
+}
+
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
 // returns only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present.

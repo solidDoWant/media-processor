@@ -45,6 +45,14 @@ type MediaWorkflowConfig struct {
 	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
 	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
 	HighCardinalityLabels bool
+	// MinCropX is the minimum number of pixels that must be trimmed horizontally
+	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
+	// Defaults to 10 when not set.
+	MinCropX int
+	// MinCropY is the minimum number of pixels that must be trimmed vertically
+	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
+	// Defaults to 10 when not set.
+	MinCropY int
 }
 
 // MediaInput is the workflow's trigger payload.
@@ -125,6 +133,34 @@ func NewMediaWorkflow(
 	// not checked. Verified in hatchet/pkg/repository/trigger.go.
 	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
 
+	// detectcrop: run the ffmpeg cropdetect filter to find black bars. Returns a nil
+	// Crop pointer when no crop is warranted (both axes disabled or trim below threshold).
+	// Uses MinCropX/MinCropY from config; a value of 0 in MediaWorkflowConfig means
+	// the field was not set — treat it as the default of 10.
+	minCropX := cfg.MinCropX
+	if minCropX == 0 {
+		minCropX = 10
+	}
+
+	minCropY := cfg.MinCropY
+	if minCropY == 0 {
+		minCropY = 10
+	}
+
+	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (shared.DetectCropOutput, error) {
+		var probe shared.ProbeOutput
+		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
+			return shared.DetectCropOutput{}, fmt.Errorf("get probe output: %w", err)
+		}
+
+		crop, err := shared.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, minCropX, minCropY)
+		if err != nil {
+			return shared.DetectCropOutput{}, err
+		}
+
+		return shared.DetectCropOutput{Crop: crop}, nil
+	}, hatchet.WithParents(probeTask), skipIfInvalid)
+
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
 	// directory (rather than the system temp dir) means the rename is always within the
@@ -135,18 +171,23 @@ func NewMediaWorkflow(
 			return shared.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
+		var detectcrop shared.DetectCropOutput
+		if err := ctx.ParentOutput(detectcropTask, &detectcrop); err != nil {
+			return shared.TranscodeOutput{}, fmt.Errorf("get detectcrop output: %w", err)
+		}
+
 		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
 			return shared.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
 		}
 
-		out, err := shared.RunTranscode(ctx, input.FilePath, probe, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
+		out, err := shared.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
 
 		return out, err
-	}, hatchet.WithParents(probeTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid)
 
 	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
 	// for the processed output file, triggering import into the library. The import path is
