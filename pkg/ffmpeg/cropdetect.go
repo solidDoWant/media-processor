@@ -311,16 +311,7 @@ func runCropdetectLoop(
 			// Implement frame sampling:
 			// - Always include the first 50 frames
 			// - Sample every 20th frame in the middle
-			// - Track the last 50 frames to process them at EOF
-			shouldProcess := frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0
-
-			// Manage sliding window of last 50 frames
-			decFrameRef := decFrame.Clone()
-			if decFrameRef == nil {
-				return errors.New("ffmpeg: DetectCrop: failed to clone frame")
-			}
-
-			if shouldProcess {
+			if frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0 {
 				if err := srcCtx.AddFrame(decFrame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
 					decFrame.Unref()
 
