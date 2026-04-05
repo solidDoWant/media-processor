@@ -25,9 +25,9 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 	}
 
 	defer func() {
-		cancelWatch()
 		inputFmt.CloseInput()
 		inputFmt.Free()
+		cancelWatch()
 	}()
 
 	var videoStream *astiav.Stream
@@ -263,9 +263,10 @@ func runCropdetectLoop(
 
 	// Sample 1 in 20 frames (5% sampling rate) to balance accuracy and performance.
 	// For a 2-hour movie at 24fps (~173K frames), this processes ~8,640 frames.
-	// Always include the first 50 frames to ensure sufficient coverage for short 
+	// Always include the first 50 frames to ensure sufficient coverage for short
 	// videos and to capture header/trailer content.
 	const sampleInterval = 20
+
 	const alwaysIncludeCount = 50
 
 	drainFilter := func() error {
@@ -329,6 +330,7 @@ func runCropdetectLoop(
 			}
 
 			frameCounter++
+
 			decFrame.Unref()
 		}
 	}
