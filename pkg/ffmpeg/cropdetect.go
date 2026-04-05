@@ -223,17 +223,7 @@ func buildCropdetectFilterGraph(
 		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: parsing filter graph: %w", err)
 	}
 
-	// A closure is used here so the deferred SetLogLevel restores the previous
-	// level even if Configure panics; see https://github.com/asticode/go-astiav/issues/182.
-	err = func() error {
-		prevLevel := astiav.GetLogLevel()
-
-		astiav.SetLogLevel(astiav.LogLevelVerbose)
-		defer astiav.SetLogLevel(prevLevel)
-
-		return fg.Configure()
-	}()
-	if err != nil {
+	if err := fg.Configure(); err != nil {
 		fg.Free()
 
 		return nil, nil, nil, fmt.Errorf("ffmpeg: DetectCrop: configuring filter graph: %w", err)
@@ -269,7 +259,20 @@ func runCropdetectLoop(
 
 	// Sample 1 in 20 frames (5% sampling rate) to balance accuracy and performance.
 	// For a 2-hour movie at 24fps (~173K frames), this processes ~8,640 frames.
+	// Always include the first and last 50 frames to ensure sufficient coverage for
+	// short videos and to capture header/trailer content.
 	const sampleInterval = 20
+	const alwaysIncludeCount = 50
+
+	// Track the last 50 frames to ensure they're all sampled when we reach EOF.
+	var lastFrames []*astiav.Frame
+	defer func() {
+		for _, f := range lastFrames {
+			if f != nil {
+				f.Free()
+			}
+		}
+	}()
 
 	drainFilter := func() error {
 		for {
@@ -311,9 +314,28 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: receiving frame: %w", err)
 			}
 
-			// Implement frame sampling: only push every Nth frame to the filter.
-			// Always include frame 0 to ensure we get some data.
-			if frameCounter%sampleInterval == 0 {
+			// Implement frame sampling:
+			// - Always include the first 50 frames
+			// - Sample every 20th frame in the middle
+			// - Track the last 50 frames to process them at EOF
+			shouldProcess := frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0
+
+			// Manage sliding window of last 50 frames
+			decFrameRef := decFrame.Clone()
+			if decFrameRef == nil {
+				return errors.New("ffmpeg: DetectCrop: failed to clone frame")
+			}
+			lastFrames = append(lastFrames, decFrameRef)
+			if len(lastFrames) > alwaysIncludeCount {
+				oldest := lastFrames[0]
+				lastFrames = lastFrames[1:]
+				// Free the oldest frame only if it wasn't already processed
+				if !shouldProcess {
+					oldest.Free()
+				}
+			}
+
+			if shouldProcess {
 				if err := srcCtx.AddFrame(decFrame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
 					decFrame.Unref()
 
