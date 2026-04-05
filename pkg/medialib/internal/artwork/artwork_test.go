@@ -219,8 +219,10 @@ func TestFetchPosterImage_CrossHostRedirectDoesNotSendAPIKey(t *testing.T) {
 func TestFetchPosterImage_Unreachable(t *testing.T) {
 	imgs := []*starr.Image{{CoverType: "poster", Extension: ".jpg", URL: "/MediaCover/1/poster.jpg"}}
 
-	_, _, err := artwork.FetchPosterImage(t.Context(), imgs, "http://127.0.0.1:1", "key")
-	require.Error(t, err)
+	gotBytes, gotMime, err := artwork.FetchPosterImage(t.Context(), imgs, "http://127.0.0.1:1", "key")
+	require.NoError(t, err)
+	assert.Nil(t, gotBytes)
+	assert.Empty(t, gotMime)
 }
 
 // TestFetchPosterImage_FallsBackToNextCandidate verifies that a rejected

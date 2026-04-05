@@ -3,7 +3,8 @@ module github.com/solidDoWant/media-processor
 go 1.26
 
 require (
-	github.com/asticode/go-astiav v0.40.0
+	// Needed to fix https://github.com/asticode/go-astiav/issues/182
+	github.com/asticode/go-astiav v0.40.1-0.20260401095951-3a5456442686
 	github.com/barbashov/iso639-3 v1.0.0
 	github.com/creasty/defaults v1.8.0
 	github.com/go-playground/validator/v10 v10.30.1

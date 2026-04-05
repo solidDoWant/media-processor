@@ -44,6 +44,13 @@ const (
 	HWAccelAuto
 )
 
+// CropParams describes the non-black region detected by the cropdetect filter.
+// All values are in pixels.
+type CropParams struct {
+	W, H int
+	X, Y int
+}
+
 // Progress is a periodic update emitted during transcoding.
 type Progress struct {
 	// FramesProcessed is the number of encoded frames written so far.

@@ -9,7 +9,7 @@ import (
 )
 
 func init() {
-	// Pass all libav log messages through to slog; slog handles level filtering.
+	// Pass libav log messages through to slog; slog handles level filtering.
 	astiav.SetLogLevel(astiav.LogLevelDebug)
 	astiav.SetLogCallback(func(_ astiav.Classer, l astiav.LogLevel, _, msg string) {
 		ctx := context.Background()
