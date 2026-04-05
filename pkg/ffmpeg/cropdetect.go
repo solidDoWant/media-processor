@@ -263,20 +263,10 @@ func runCropdetectLoop(
 
 	// Sample 1 in 20 frames (5% sampling rate) to balance accuracy and performance.
 	// For a 2-hour movie at 24fps (~173K frames), this processes ~8,640 frames.
-	// Always include the first and last 50 frames to ensure sufficient coverage for
-	// short videos and to capture header/trailer content.
+	// Always include the first 50 frames to ensure sufficient coverage for short 
+	// videos and to capture header/trailer content.
 	const sampleInterval = 20
 	const alwaysIncludeCount = 50
-
-	// Track the last 50 frames to ensure they're all sampled when we reach EOF.
-	var lastFrames []*astiav.Frame
-	defer func() {
-		for _, f := range lastFrames {
-			if f != nil {
-				f.Free()
-			}
-		}
-	}()
 
 	drainFilter := func() error {
 		for {
@@ -328,15 +318,6 @@ func runCropdetectLoop(
 			decFrameRef := decFrame.Clone()
 			if decFrameRef == nil {
 				return errors.New("ffmpeg: DetectCrop: failed to clone frame")
-			}
-			lastFrames = append(lastFrames, decFrameRef)
-			if len(lastFrames) > alwaysIncludeCount {
-				oldest := lastFrames[0]
-				lastFrames = lastFrames[1:]
-				// Free the oldest frame only if it wasn't already processed
-				if !shouldProcess {
-					oldest.Free()
-				}
 			}
 
 			if shouldProcess {
