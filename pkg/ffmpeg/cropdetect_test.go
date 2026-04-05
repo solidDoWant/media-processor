@@ -56,7 +56,7 @@ func TestDetectCrop_ContextCancelledDuringRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	go func() {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		cancel()
 	}()
 

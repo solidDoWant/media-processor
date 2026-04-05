@@ -66,6 +66,10 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: opening codec: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return CropParams{}, err
+	}
+
 	fg, srcCtx, sinkCtx, err := buildCropdetectFilterGraph(codecCtx, videoStream)
 	if err != nil {
 		return CropParams{}, err
