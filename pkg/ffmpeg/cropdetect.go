@@ -46,7 +46,7 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 
 	codec := astiav.FindDecoder(videoStream.CodecParameters().CodecID())
 	if codec == nil {
-		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: no decoder for codec %s", videoStream.CodecParameters().CodecID())
+		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: no decoder for codec %v", videoStream.CodecParameters().CodecID())
 	}
 
 	codecCtx := astiav.AllocCodecContext(codec)
