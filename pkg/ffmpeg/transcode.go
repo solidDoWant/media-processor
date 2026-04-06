@@ -205,14 +205,14 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 // WithCrop applies a crop filter to the video stream during encoding. The crop
 // region is specified by params: W and H are the output dimensions in pixels,
 // and X and Y are the offsets from the top-left corner of the input frame.
-// WithCrop is a no-op when videoCodec is CodecCopy, since a crop filter
-// requires decoding and re-encoding the video stream.
-func (b *TranscodeBuilder) WithCrop(params CropParams) *TranscodeBuilder {
-	if b.videoCodec == CodecCopy {
+// WithCrop is a no-op when params is nil or when videoCodec is CodecCopy,
+// since a crop filter requires decoding and re-encoding the video stream.
+func (b *TranscodeBuilder) WithCrop(params *CropParams) *TranscodeBuilder {
+	if params == nil || b.videoCodec == CodecCopy {
 		return b
 	}
 
-	b.cropParams = &params
+	b.cropParams = params
 
 	return b
 }
@@ -447,7 +447,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 			}
 
 			if t.cropParams != nil {
-				if err := videoState.setupCropFilter(inStream, hwAccel); err != nil {
+				if err := videoState.setupCropFilter(inStream); err != nil {
 					freeStreams(streams)
 					return nil, fmt.Errorf("ffmpeg: setting up crop filter for stream %d: %w", inStream.Index(), err)
 				}

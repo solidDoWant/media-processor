@@ -337,7 +337,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		}
 	}
 
-	builder := ffmpeg.NewTranscode(filePath, tempPath).
+	if err := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		HardwareAccel(ffmpeg.HWAccelAuto).
@@ -350,13 +350,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		WithHardwareDevice(hardwareDevicePath).
-		WithCoverArt(artBytes, artMime)
-
-	if cropParams != nil {
-		builder = builder.WithCrop(*cropParams)
-	}
-
-	if err := builder.Build().Run(ctx); err != nil {
+		WithCoverArt(artBytes, artMime).
+		WithCrop(cropParams).
+		Build().
+		Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return TranscodeOutput{}, errors.Join(
 				fmt.Errorf("transcode: %w", err),

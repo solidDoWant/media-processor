@@ -621,7 +621,7 @@ const testBlackBarsVideoPath = "testdata/video_black_bars.mp4"
 func TestWithCrop_NarrowsOutputDimensions(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
 
-	crop := ffmpeg.CropParams{W: 320, H: 176, X: 0, Y: 22}
+	crop := &ffmpeg.CropParams{W: 320, H: 176, X: 0, Y: 22}
 
 	err := ffmpeg.NewTranscode(testBlackBarsVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
