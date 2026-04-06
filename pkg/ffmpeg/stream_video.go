@@ -10,9 +10,8 @@ import (
 )
 
 // videoCropFilterState holds the filter graph used to apply a spatial crop to
-// decoded video frames. The graph is always "crop=W:H:X:Y" operating on
-// software (CPU) frames; hardware decode is disabled when crop is active so
-// that frames arrive in system memory without a separate hwdownload step.
+// decoded video frames. The exact graph depends on the active hardware
+// accelerator; see setupCropFilter for the per-path strategies.
 type videoCropFilterState struct {
 	graph   *astiav.FilterGraph
 	srcCtx  *astiav.BuffersrcFilterContext
@@ -55,6 +54,7 @@ type videoStreamState struct {
 	// decoder is initialised so that source pixel format and dimensions are
 	// known.
 	cropParams             *CropParams           // crop region; nil = no crop
+	cuvidCropApplied       bool                  // true when the cuvid decoder handled crop via its dict option (no filter needed)
 	cropFilter             *videoCropFilterState // non-nil when crop filter graph is active
 	effectiveDecodedPixFmt astiav.PixelFormat    // pixel format of frames entering the encoder pipeline (post crop filter)
 }
@@ -108,30 +108,27 @@ func (vss *videoStreamState) free() {
 // remain in GPU memory, enabling a zero-copy decode→encode pipeline.
 // Falls back silently to software decoding if HW decode is unavailable.
 //
-// When a crop filter is active (cropParams != nil), hardware decode is skipped
-// unconditionally. HW decode requires the crop filter's buffersrc to be
-// initialised with a hardware frames context that exactly matches the decoder's
-// internal pool — a setup that varies across CUDA, VAAPI, and QSV backends and
-// is fragile to get right. SW decode + crop filter + HW encode is still
-// hardware-accelerated on the encode side and is the supported path when
-// cropping is requested.
+// For CUDA (NVENC) with a crop region, the cuvid decoder's built-in crop
+// dictionary option is tried first. If the option is accepted, the crop is
+// applied at decode time with no filter graph (cuvidCropApplied = true).
+// If the option is rejected (unsupported codec or driver), the context is
+// rebuilt and opened without the option; setupCropFilter will then use
+// the hwdownload→crop→hwupload filter path instead.
 func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
 	var codec *astiav.Codec
 
-	if vss.cropParams == nil {
-		if profile, ok := hwProfiles[hwAccel]; ok {
-			hwDecName := hwDecoderNameForCodec(inStream.CodecParameters().CodecID(), profile)
-			if hwDecName != "" {
-				if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
-					hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
-					if err == nil {
-						vss.decoder.hwDevCtx = hwDevCtx
-						vss.decoder.hwPixFmt = profile.hwPixFmt
-						codec = hwDec
-					} else {
-						slog.Debug("ffmpeg: hardware decoder setup failed, falling back to software",
-							"decoder", hwDecName, "error", err)
-					}
+	if profile, ok := hwProfiles[hwAccel]; ok {
+		hwDecName := hwDecoderNameForCodec(inStream.CodecParameters().CodecID(), profile)
+		if hwDecName != "" {
+			if hwDec := astiav.FindDecoderByName(hwDecName); hwDec != nil {
+				hwDevCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
+				if err == nil {
+					vss.decoder.hwDevCtx = hwDevCtx
+					vss.decoder.hwPixFmt = profile.hwPixFmt
+					codec = hwDec
+				} else {
+					slog.Debug("ffmpeg: hardware decoder setup failed, falling back to software",
+						"decoder", hwDecName, "error", err)
 				}
 			}
 		}
@@ -146,42 +143,94 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 
 	vss.decoder.codec = codec
 
-	vss.decoder.codecContext = astiav.AllocCodecContext(codec)
-	if vss.decoder.codecContext == nil {
-		return errors.New("failed to allocate decoder codec context")
+	// allocAndConfigCodecContext allocates and configures a fresh decoder codec
+	// context. Extracted as a closure so it can be called a second time when the
+	// cuvid crop-dict Open attempt fails and the context must be rebuilt before
+	// retrying without the option.
+	allocAndConfigCodecContext := func() error {
+		if vss.decoder.codecContext != nil {
+			vss.decoder.codecContext.Free()
+		}
+
+		vss.decoder.codecContext = astiav.AllocCodecContext(codec)
+		if vss.decoder.codecContext == nil {
+			return errors.New("failed to allocate decoder codec context")
+		}
+
+		if err := inStream.CodecParameters().ToCodecContext(vss.decoder.codecContext); err != nil {
+			return fmt.Errorf("copying codec parameters to context: %w", err)
+		}
+
+		vss.decoder.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
+
+		if vss.decoder.hwDevCtx != nil {
+			vss.decoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
+			vss.decoder.codecContext.SetPixelFormatCallback(func(pixelFormats []astiav.PixelFormat) astiav.PixelFormat {
+				for _, pixelFormat := range pixelFormats {
+					if pixelFormat == vss.decoder.hwPixFmt {
+						return pixelFormat
+					}
+				}
+				// HW pixel format not offered — fall back to the first available format.
+				// Update vss.decoder.hwPixFmt so configureEncoderPixelFormat correctly
+				// detects that the decoder is not outputting the HW format.
+				if len(pixelFormats) > 0 {
+					slog.Debug("ffmpeg: preferred hardware pixel format not offered by decoder, using fallback",
+						"preferred", vss.decoder.hwPixFmt, "fallback", pixelFormats[0])
+					vss.decoder.hwPixFmt = pixelFormats[0]
+
+					return pixelFormats[0]
+				}
+
+				return astiav.PixelFormatNone
+			})
+		}
+
+		return nil
 	}
 
-	if err := inStream.CodecParameters().ToCodecContext(vss.decoder.codecContext); err != nil {
-		return fmt.Errorf("copying codec parameters to context: %w", err)
+	if err := allocAndConfigCodecContext(); err != nil {
+		return err
 	}
 
-	vss.decoder.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
+	// For CUDA (NVENC) with a crop region, try the cuvid decoder's built-in crop
+	// dictionary option (crop=TxBxLxR). On success the crop is applied at decode
+	// time with zero CPU copies and no filter graph is needed. If the option is
+	// rejected, rebuild the context and open without it; setupCropFilter will use
+	// the hwdownload→crop→hwupload fallback path.
+	opened := false
 
-	if vss.decoder.hwDevCtx != nil {
-		vss.decoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
-		vss.decoder.codecContext.SetPixelFormatCallback(func(pixelFormats []astiav.PixelFormat) astiav.PixelFormat {
-			for _, pixelFormat := range pixelFormats {
-				if pixelFormat == vss.decoder.hwPixFmt {
-					return pixelFormat
+	if vss.decoder.hwDevCtx != nil && hwAccel == HWAccelNVENC && vss.cropParams != nil {
+		cp := vss.cropParams
+		inW := inStream.CodecParameters().Width()
+		inH := inStream.CodecParameters().Height()
+		top := cp.Y
+		bottom := inH - cp.Y - cp.H
+		left := cp.X
+		right := inW - cp.X - cp.W
+
+		cropDict := astiav.NewDictionary()
+		defer cropDict.Free()
+
+		if setErr := cropDict.Set("crop", fmt.Sprintf("%dx%dx%dx%d", top, bottom, left, right), astiav.NewDictionaryFlags()); setErr == nil {
+			if openErr := vss.decoder.codecContext.Open(codec, cropDict); openErr == nil {
+				vss.cuvidCropApplied = true
+				opened = true
+			} else {
+				slog.Debug("ffmpeg: cuvid crop dict option unsupported, will use hwdownload/crop/hwupload filter",
+					"error", openErr)
+
+				if err := allocAndConfigCodecContext(); err != nil {
+					return err
 				}
 			}
-			// HW pixel format not offered — fall back to the first available format.
-			// Update vss.decoder.hwPixFmt so configureEncoderPixelFormat correctly
-			// detects that the decoder is not outputting the HW format.
-			if len(pixelFormats) > 0 {
-				slog.Debug("ffmpeg: preferred hardware pixel format not offered by decoder, using fallback",
-					"preferred", vss.decoder.hwPixFmt, "fallback", pixelFormats[0])
-				vss.decoder.hwPixFmt = pixelFormats[0]
-
-				return pixelFormats[0]
-			}
-
-			return astiav.PixelFormatNone
-		})
+		}
 	}
 
-	if err := vss.decoder.codecContext.Open(codec, nil); err != nil {
-		return fmt.Errorf("opening decoder: %w", err)
+	if !opened {
+		if err := vss.decoder.codecContext.Open(codec, nil); err != nil {
+			return fmt.Errorf("opening decoder: %w", err)
+		}
 	}
 
 	vss.decoder.codecContext.SetTimeBase(inStream.TimeBase())
@@ -196,21 +245,109 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 
 // setupCropFilter builds the libavfilter graph that applies the crop region to
 // decoded video frames. It must be called after setupDecoder so that the
-// decoder's pixel format and dimensions are known.
+// decoder's pixel format, dimensions, and hardware state are known.
 //
-// The filter graph is always "crop=W:H:X:Y" operating on software (CPU) frames.
-// Hardware decode is disabled when crop is active (see setupDecoder), so frames
-// always arrive in system memory without a separate hwdownload step.
+// The filter strategy depends on the active hardware accelerator:
 //
-// effectiveDecodedPixFmt is set to the decoder's pixel format, so that
-// setupVideoConversion creates the right scaler/upload path after cropping.
-func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream) error {
+//   - SW:                crop=W:H:X:Y
+//   - VAAPI (SW decode): crop=W:H:X:Y,scale_vaapi  — uploads cropped frames to VAAPI
+//   - VAAPI (HW decode): hwdownload,crop=W:H:X:Y,scale_vaapi  — download, crop, re-upload
+//   - QSV (HW decode):   vpp_qsv=w=W:h=H:cx=X:cy=Y  — GPU-native crop
+//   - CUDA (cuvid dict): returns nil immediately (crop already applied by decoder)
+//   - CUDA (HW decode):  hwdownload,crop=W:H:X:Y,hwupload  — download, crop, re-upload
+//
+// For VAAPI with SW decode, a VAAPI device context is created here and stored
+// in vss.decoder.hwDevCtx so it can be reused by the encoder later.
+//
+// effectiveDecodedPixFmt is set to the output pixel format of the filter graph
+// (e.g. PixelFormatVaapi for VAAPI paths). configureEncoderPixelFormat uses
+// this to enable the zero-copy GPU path when the filter already outputs HW frames.
+func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HWAccel) error {
 	cp := vss.cropParams // guaranteed non-nil by caller
 
-	filterStr := fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y)
+	// CUDA: crop was already applied by the cuvid decoder's dict option.
+	if vss.cuvidCropApplied {
+		return nil
+	}
 
-	srcPixFmt := vss.decoder.codecContext.PixelFormat()
-	vss.effectiveDecodedPixFmt = srcPixFmt
+	profile, hasHW := hwProfiles[hwAccel]
+	hwDecodeActive := vss.decoder.hwDevCtx != nil
+
+	// filterConfig describes the filter graph to build.
+	type filterConfig struct {
+		str         string             // avfilter graph string
+		srcPixFmt   astiav.PixelFormat // pixel format of frames entering buffersrc
+		useHWFrames bool               // init buffersrc with decoder's hw_frames_ctx
+		hwFilters   []string           // filter node names that need hw_device_ctx set
+		outPixFmt   astiav.PixelFormat // effective pixel format after the graph (PixelFormatNone = unchanged SW)
+	}
+
+	var cfg filterConfig
+
+	switch {
+	case hasHW && hwAccel == HWAccelNVENC && hwDecodeActive:
+		// CUDA fallback: cuvid is active but its crop dict option was unsupported.
+		// Download frames to CPU, crop in software, re-upload to CUDA.
+		cfg = filterConfig{
+			str:         fmt.Sprintf("hwdownload,crop=%d:%d:%d:%d,hwupload", cp.W, cp.H, cp.X, cp.Y),
+			srcPixFmt:   astiav.PixelFormatCuda,
+			useHWFrames: true,
+			hwFilters:   []string{"hwupload"},
+			outPixFmt:   astiav.PixelFormatCuda,
+		}
+
+	case hasHW && hwAccel == HWAccelVAAPI && hwDecodeActive:
+		// VAAPI HW decode: download to CPU, apply SW crop, re-upload via scale_vaapi.
+		cfg = filterConfig{
+			str:         fmt.Sprintf("hwdownload,crop=%d:%d:%d:%d,scale_vaapi", cp.W, cp.H, cp.X, cp.Y),
+			srcPixFmt:   astiav.PixelFormatVaapi,
+			useHWFrames: true,
+			hwFilters:   []string{"scale_vaapi"},
+			outPixFmt:   astiav.PixelFormatVaapi,
+		}
+
+	case hasHW && hwAccel == HWAccelVAAPI && !hwDecodeActive:
+		// VAAPI SW decode: crop in software, then upload to VAAPI via scale_vaapi.
+		// A VAAPI device context is needed for scale_vaapi. If one cannot be
+		// created, fall back to a pure software crop.
+		devCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
+		if err != nil {
+			slog.Debug("ffmpeg: VAAPI device context unavailable for crop filter, using SW-only crop", "error", err)
+
+			cfg = filterConfig{
+				str:       fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y),
+				srcPixFmt: vss.decoder.codecContext.PixelFormat(),
+			}
+		} else {
+			// Store the device context so the encoder (set up later) can reuse it.
+			vss.decoder.hwDevCtx = devCtx
+			vss.decoder.hwPixFmt = profile.hwPixFmt
+
+			cfg = filterConfig{
+				str:       fmt.Sprintf("crop=%d:%d:%d:%d,scale_vaapi", cp.W, cp.H, cp.X, cp.Y),
+				srcPixFmt: vss.decoder.codecContext.PixelFormat(),
+				hwFilters: []string{"scale_vaapi"},
+				outPixFmt: astiav.PixelFormatVaapi,
+			}
+		}
+
+	case hasHW && hwAccel == HWAccelQSV && hwDecodeActive:
+		// QSV: GPU-native crop and scale via vpp_qsv.
+		cfg = filterConfig{
+			str:         fmt.Sprintf("vpp_qsv=w=%d:h=%d:cx=%d:cy=%d", cp.W, cp.H, cp.X, cp.Y),
+			srcPixFmt:   astiav.PixelFormatQsv,
+			useHWFrames: true,
+			hwFilters:   []string{"vpp_qsv"},
+			outPixFmt:   astiav.PixelFormatQsv,
+		}
+
+	default:
+		// Software path (SW hwAccel, or HW decode unavailable).
+		cfg = filterConfig{
+			str:       fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y),
+			srcPixFmt: vss.decoder.codecContext.PixelFormat(),
+		}
+	}
 
 	fg := astiav.AllocFilterGraph()
 	if fg == nil {
@@ -248,11 +385,15 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream) error {
 	srcParams := astiav.AllocBuffersrcFilterContextParameters()
 	defer srcParams.Free()
 
-	srcParams.SetPixelFormat(srcPixFmt)
+	srcParams.SetPixelFormat(cfg.srcPixFmt)
 	srcParams.SetWidth(vss.decoder.codecContext.Width())
 	srcParams.SetHeight(vss.decoder.codecContext.Height())
 	srcParams.SetTimeBase(inStream.TimeBase())
 	srcParams.SetSampleAspectRatio(vss.decoder.codecContext.SampleAspectRatio())
+
+	if cfg.useHWFrames {
+		srcParams.SetHardwareFramesContext(vss.decoder.codecContext.HardwareFramesContext())
+	}
 
 	if err := srcCtx.SetParameters(srcParams); err != nil {
 		fg.Free()
@@ -294,10 +435,25 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream) error {
 	inputs.SetPadIdx(0)
 	inputs.SetNext(nil)
 
-	if err := fg.Parse(filterStr, inputs, outputs); err != nil {
+	if err := fg.Parse(cfg.str, inputs, outputs); err != nil {
 		fg.Free()
 
-		return fmt.Errorf("ffmpeg: parsing crop filter graph %q: %w", filterStr, err)
+		return fmt.Errorf("ffmpeg: parsing crop filter graph %q: %w", cfg.str, err)
+	}
+
+	// Set the hardware device context on filters that require it (scale_vaapi,
+	// vpp_qsv, hwupload). Must be done after Parse() and before Configure().
+	if len(cfg.hwFilters) > 0 && vss.decoder.hwDevCtx != nil {
+		hwFilterSet := make(map[string]bool, len(cfg.hwFilters))
+		for _, name := range cfg.hwFilters {
+			hwFilterSet[name] = true
+		}
+
+		for _, fc := range fg.Filters() {
+			if hwFilterSet[fc.Filter().Name()] {
+				fc.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
+			}
+		}
 	}
 
 	if err := fg.Configure(); err != nil {
@@ -311,6 +467,10 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream) error {
 		fg.Free()
 
 		return errors.New("ffmpeg: failed to allocate crop filter output frame")
+	}
+
+	if cfg.outPixFmt != astiav.PixelFormatNone {
+		vss.effectiveDecodedPixFmt = cfg.outPixFmt
 	}
 
 	vss.cropFilter = &videoCropFilterState{
@@ -454,13 +614,28 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 		return nil
 	}
 
-	// HW encode with HW decode: decoded frames are already in GPU memory —
-	// share those surfaces directly with the encoder. The crop filter
-	// downloads frames to CPU memory, so the zero-copy path is unavailable
-	// when a crop filter is active.
+	// HW encode with HW decode and no crop filter: decoded frames are already
+	// in GPU memory — share those surfaces directly with the encoder. This also
+	// covers the CUDA cuvid crop-dict path where the crop is applied by the
+	// decoder itself (cuvidCropApplied=true, cropFilter=nil).
 	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.cropFilter == nil {
 		vss.isHWDecode = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
+
+		return nil
+	}
+
+	// HW encode with a crop filter whose output is already in HW pixel format
+	// (scale_vaapi, vpp_qsv, hwupload). The filter handles the CPU↔GPU transfer;
+	// frames arrive at the encoder ready for zero-copy encoding.
+	if vss.effectiveDecodedPixFmt != astiav.PixelFormatNone && vss.effectiveDecodedPixFmt == profile.hwPixFmt {
+		vss.isHWDecode = true
+		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
+		// Provide the hardware device context so the encoder can initialise its
+		// hardware-specific state (e.g. create hw_frames_ctx from hw_device_ctx).
+		if vss.decoder.hwDevCtx != nil {
+			vss.encoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
+		}
 
 		return nil
 	}

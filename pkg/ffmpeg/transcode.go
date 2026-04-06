@@ -447,7 +447,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 			}
 
 			if t.cropParams != nil {
-				if err := videoState.setupCropFilter(inStream); err != nil {
+				if err := videoState.setupCropFilter(inStream, hwAccel); err != nil {
 					freeStreams(streams)
 					return nil, fmt.Errorf("ffmpeg: setting up crop filter for stream %d: %w", inStream.Index(), err)
 				}
