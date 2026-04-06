@@ -44,10 +44,14 @@ type videoStreamState struct {
 	copyStreamState
 
 	// Decoder state.
-	decoder            videoDecoderState
-	encoder            videoEncoderState
-	isHWDecode         bool
-	hardwareDevicePath string // device path for CreateHardwareDeviceContext; "" = auto-select
+	decoder videoDecoderState
+	encoder videoEncoderState
+	// encoderReceivesHWFrames is true when frames arriving at the encoder are
+	// already in GPU pixel format (HW decode without filter, cuvid crop dict, or
+	// a crop filter whose output is a HW surface such as VAAPI/QSV/CUDA).
+	// When true, setupVideoConversion skips CPU-side scaling and upload.
+	encoderReceivesHWFrames bool
+	hardwareDevicePath      string // device path for CreateHardwareDeviceContext; "" = auto-select
 
 	// Crop filter state. Non-nil when a crop region has been requested via
 	// WithCrop. The filter graph is set up in setupCropFilter after the
@@ -243,21 +247,84 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 	return nil
 }
 
+// cropFilterConfig describes the libavfilter graph used to apply a spatial crop.
+// The strategy is chosen per hardware accelerator by selectCropFilterConfig.
+type cropFilterConfig struct {
+	str         string             // avfilter graph string
+	srcPixFmt   astiav.PixelFormat // pixel format of frames entering buffersrc
+	useHWFrames bool               // initialise buffersrc with decoder's hw_frames_ctx
+	hwFilters   []string           // filter node names that require hw_device_ctx to be set
+	outPixFmt   astiav.PixelFormat // effective pixel format after the graph (PixelFormatNone = unchanged SW)
+}
+
+// selectCropFilterConfig returns the cropFilterConfig for the given hardware
+// accelerator and decoder state. It is a pure function — no FFmpeg state is
+// accessed — which makes all six filter paths unit-testable in isolation.
+//
+// For VAAPI with SW decode (hwDecodeActive=false) the returned config includes
+// scale_vaapi; the caller (setupCropFilter) is responsible for ensuring a VAAPI
+// device context exists before building the graph, and must fall back to the SW
+// config (HWAccelNone) if device creation fails.
+func selectCropFilterConfig(hwAccel HWAccel, hwDecodeActive bool, decoderPixFmt astiav.PixelFormat, cp CropParams) cropFilterConfig {
+	cropStr := fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y)
+
+	switch {
+	case hwAccel == HWAccelNVENC && hwDecodeActive:
+		// CUDA fallback: cuvid is active but its crop dict option was unsupported.
+		// Download frames to CPU, crop in software, re-upload to CUDA.
+		return cropFilterConfig{
+			str:         fmt.Sprintf("hwdownload,%s,hwupload", cropStr),
+			srcPixFmt:   astiav.PixelFormatCuda,
+			useHWFrames: true,
+			hwFilters:   []string{"hwupload"},
+			outPixFmt:   astiav.PixelFormatCuda,
+		}
+
+	case hwAccel == HWAccelVAAPI && hwDecodeActive:
+		// VAAPI HW decode: download to CPU, apply SW crop, re-upload via scale_vaapi.
+		return cropFilterConfig{
+			str:         fmt.Sprintf("hwdownload,%s,scale_vaapi", cropStr),
+			srcPixFmt:   astiav.PixelFormatVaapi,
+			useHWFrames: true,
+			hwFilters:   []string{"scale_vaapi"},
+			outPixFmt:   astiav.PixelFormatVaapi,
+		}
+
+	case hwAccel == HWAccelVAAPI && !hwDecodeActive:
+		// VAAPI SW decode: crop in software, upload via scale_vaapi.
+		return cropFilterConfig{
+			str:       fmt.Sprintf("%s,scale_vaapi", cropStr),
+			srcPixFmt: decoderPixFmt,
+			hwFilters: []string{"scale_vaapi"},
+			outPixFmt: astiav.PixelFormatVaapi,
+		}
+
+	case hwAccel == HWAccelQSV && hwDecodeActive:
+		// QSV: GPU-native crop and scale via vpp_qsv.
+		return cropFilterConfig{
+			str:         fmt.Sprintf("vpp_qsv=w=%d:h=%d:cx=%d:cy=%d", cp.W, cp.H, cp.X, cp.Y),
+			srcPixFmt:   astiav.PixelFormatQsv,
+			useHWFrames: true,
+			hwFilters:   []string{"vpp_qsv"},
+			outPixFmt:   astiav.PixelFormatQsv,
+		}
+
+	default:
+		// Software path (SW hwAccel, QSV/NVENC without HW decode, or explicit fallback).
+		return cropFilterConfig{
+			str:       cropStr,
+			srcPixFmt: decoderPixFmt,
+		}
+	}
+}
+
 // setupCropFilter builds the libavfilter graph that applies the crop region to
 // decoded video frames. It must be called after setupDecoder so that the
 // decoder's pixel format, dimensions, and hardware state are known.
 //
-// The filter strategy depends on the active hardware accelerator:
-//
-//   - SW:                crop=W:H:X:Y
-//   - VAAPI (SW decode): crop=W:H:X:Y,scale_vaapi  — uploads cropped frames to VAAPI
-//   - VAAPI (HW decode): hwdownload,crop=W:H:X:Y,scale_vaapi  — download, crop, re-upload
-//   - QSV (HW decode):   vpp_qsv=w=W:h=H:cx=X:cy=Y  — GPU-native crop
-//   - CUDA (cuvid dict): returns nil immediately (crop already applied by decoder)
-//   - CUDA (HW decode):  hwdownload,crop=W:H:X:Y,hwupload  — download, crop, re-upload
-//
-// For VAAPI with SW decode, a VAAPI device context is created here and stored
-// in vss.decoder.hwDevCtx so it can be reused by the encoder later.
+// The filter strategy is chosen by selectCropFilterConfig based on the active
+// hardware accelerator. For VAAPI with SW decode, a VAAPI device context is
+// created here and stored in vss.decoder.hwDevCtx so the encoder can reuse it.
 //
 // effectiveDecodedPixFmt is set to the output pixel format of the filter graph
 // (e.g. PixelFormatVaapi for VAAPI paths). configureEncoderPixelFormat uses
@@ -270,84 +337,26 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HW
 		return nil
 	}
 
-	profile, hasHW := hwProfiles[hwAccel]
 	hwDecodeActive := vss.decoder.hwDevCtx != nil
 
-	// filterConfig describes the filter graph to build.
-	type filterConfig struct {
-		str         string             // avfilter graph string
-		srcPixFmt   astiav.PixelFormat // pixel format of frames entering buffersrc
-		useHWFrames bool               // init buffersrc with decoder's hw_frames_ctx
-		hwFilters   []string           // filter node names that need hw_device_ctx set
-		outPixFmt   astiav.PixelFormat // effective pixel format after the graph (PixelFormatNone = unchanged SW)
-	}
-
-	var cfg filterConfig
-
-	switch {
-	case hasHW && hwAccel == HWAccelNVENC && hwDecodeActive:
-		// CUDA fallback: cuvid is active but its crop dict option was unsupported.
-		// Download frames to CPU, crop in software, re-upload to CUDA.
-		cfg = filterConfig{
-			str:         fmt.Sprintf("hwdownload,crop=%d:%d:%d:%d,hwupload", cp.W, cp.H, cp.X, cp.Y),
-			srcPixFmt:   astiav.PixelFormatCuda,
-			useHWFrames: true,
-			hwFilters:   []string{"hwupload"},
-			outPixFmt:   astiav.PixelFormatCuda,
-		}
-
-	case hasHW && hwAccel == HWAccelVAAPI && hwDecodeActive:
-		// VAAPI HW decode: download to CPU, apply SW crop, re-upload via scale_vaapi.
-		cfg = filterConfig{
-			str:         fmt.Sprintf("hwdownload,crop=%d:%d:%d:%d,scale_vaapi", cp.W, cp.H, cp.X, cp.Y),
-			srcPixFmt:   astiav.PixelFormatVaapi,
-			useHWFrames: true,
-			hwFilters:   []string{"scale_vaapi"},
-			outPixFmt:   astiav.PixelFormatVaapi,
-		}
-
-	case hasHW && hwAccel == HWAccelVAAPI && !hwDecodeActive:
-		// VAAPI SW decode: crop in software, then upload to VAAPI via scale_vaapi.
-		// A VAAPI device context is needed for scale_vaapi. If one cannot be
-		// created, fall back to a pure software crop.
-		devCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
-		if err != nil {
-			slog.Debug("ffmpeg: VAAPI device context unavailable for crop filter, using SW-only crop", "error", err)
-
-			cfg = filterConfig{
-				str:       fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y),
-				srcPixFmt: vss.decoder.codecContext.PixelFormat(),
-			}
-		} else {
-			// Store the device context so the encoder (set up later) can reuse it.
-			vss.decoder.hwDevCtx = devCtx
-			vss.decoder.hwPixFmt = profile.hwPixFmt
-
-			cfg = filterConfig{
-				str:       fmt.Sprintf("crop=%d:%d:%d:%d,scale_vaapi", cp.W, cp.H, cp.X, cp.Y),
-				srcPixFmt: vss.decoder.codecContext.PixelFormat(),
-				hwFilters: []string{"scale_vaapi"},
-				outPixFmt: astiav.PixelFormatVaapi,
+	// VAAPI with SW decode: create a device context for scale_vaapi if possible.
+	// If creation fails, degrade to a pure software crop by clearing hwAccel so
+	// selectCropFilterConfig falls through to the default SW case.
+	if hwAccel == HWAccelVAAPI && !hwDecodeActive {
+		if profile, ok := hwProfiles[hwAccel]; ok {
+			devCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
+			if err != nil {
+				slog.Debug("ffmpeg: VAAPI device context unavailable for crop filter, using SW-only crop", "error", err)
+				hwAccel = HWAccelNone
+			} else {
+				// Store so the encoder (set up later in buildStreamStates) reuses it.
+				vss.decoder.hwDevCtx = devCtx
+				vss.decoder.hwPixFmt = profile.hwPixFmt
 			}
 		}
-
-	case hasHW && hwAccel == HWAccelQSV && hwDecodeActive:
-		// QSV: GPU-native crop and scale via vpp_qsv.
-		cfg = filterConfig{
-			str:         fmt.Sprintf("vpp_qsv=w=%d:h=%d:cx=%d:cy=%d", cp.W, cp.H, cp.X, cp.Y),
-			srcPixFmt:   astiav.PixelFormatQsv,
-			useHWFrames: true,
-			hwFilters:   []string{"vpp_qsv"},
-			outPixFmt:   astiav.PixelFormatQsv,
-		}
-
-	default:
-		// Software path (SW hwAccel, or HW decode unavailable).
-		cfg = filterConfig{
-			str:       fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y),
-			srcPixFmt: vss.decoder.codecContext.PixelFormat(),
-		}
 	}
+
+	cfg := selectCropFilterConfig(hwAccel, hwDecodeActive, vss.decoder.codecContext.PixelFormat(), *cp)
 
 	fg := astiav.AllocFilterGraph()
 	if fg == nil {
@@ -619,7 +628,7 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// covers the CUDA cuvid crop-dict path where the crop is applied by the
 	// decoder itself (cuvidCropApplied=true, cropFilter=nil).
 	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.cropFilter == nil {
-		vss.isHWDecode = true
+		vss.encoderReceivesHWFrames = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 
 		return nil
@@ -629,7 +638,7 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// (scale_vaapi, vpp_qsv, hwupload). The filter handles the CPU↔GPU transfer;
 	// frames arrive at the encoder ready for zero-copy encoding.
 	if vss.effectiveDecodedPixFmt != astiav.PixelFormatNone && vss.effectiveDecodedPixFmt == profile.hwPixFmt {
-		vss.isHWDecode = true
+		vss.encoderReceivesHWFrames = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 		// Provide the hardware device context so the encoder can initialise its
 		// hardware-specific state (e.g. create hw_frames_ctx from hw_device_ctx).
@@ -686,14 +695,14 @@ func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 //
 // For the SW decode + HW encode path, decoded YUV frames are converted on the
 // CPU before being uploaded to GPU memory. A fully hardware-accelerated
-// decode→encode pipeline (isHWDecode=true) eliminates this CPU step by
+// decode→encode pipeline (encoderReceivesHWFrames=true) eliminates this CPU step by
 // sharing GPU surfaces between the decoder and encoder.
 //
 // Note: side-data formats such as Dolby Vision RPU are currently not
 // preserved across re-encoding. Copy streams (CodecCopy) always preserve all
 // side data since the bitstream is passed through unchanged.
 func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
-	if vss.isHWDecode {
+	if vss.encoderReceivesHWFrames {
 		// Decoded frames are already in the correct HW pixel format.
 		return nil
 	}
@@ -791,7 +800,7 @@ func (vss *videoStreamState) processPacket(packet *astiav.Packet, outputFmt *ast
 }
 
 // encodeVideoFrame converts and encodes a single decoded video frame.
-// On the fully hardware path (isHWDecode=true) the frame is already in GPU
+// On the fully hardware path (encoderReceivesHWFrames=true) the frame is already in GPU
 // memory and is passed directly to the encoder without any CPU conversion.
 // When a crop filter is active, the frame is first pushed through the filter
 // graph and the cropped output is used for the remainder of the pipeline.
@@ -804,6 +813,12 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 		}
 
 		if err := vss.cropFilter.sinkCtx.GetFrame(vss.cropFilter.frame, astiav.NewBuffersinkFlags()); err != nil {
+			if errors.Is(err, astiav.ErrEagain) {
+				// Filter needs more input before it can produce output (should not
+				// occur for a simple crop filter, but handled gracefully).
+				return nil
+			}
+
 			return fmt.Errorf("ffmpeg: getting frame from crop filter: %w", err)
 		}
 
@@ -812,7 +827,7 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 		encFrame = vss.cropFilter.frame
 	}
 
-	if !vss.isHWDecode {
+	if !vss.encoderReceivesHWFrames {
 		// Software decode path: convert pixel format if needed.
 		if vss.encoder.softwareFrameContext != nil {
 			if err := vss.encoder.softwareFrameContext.ScaleFrame(encFrame, vss.encoder.frame); err != nil {

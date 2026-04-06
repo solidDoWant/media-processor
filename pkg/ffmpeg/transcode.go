@@ -205,10 +205,12 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 // WithCrop applies a crop filter to the video stream during encoding. The crop
 // region is specified by params: W and H are the output dimensions in pixels,
 // and X and Y are the offsets from the top-left corner of the input frame.
-// WithCrop is a no-op when params is nil or when videoCodec is CodecCopy,
-// since a crop filter requires decoding and re-encoding the video stream.
+// WithCrop is a no-op when params is nil. Crop is silently skipped at build
+// time when videoCodec is CodecCopy, since copying a stream precludes any
+// filter. Storing cropParams unconditionally avoids a call-order dependency:
+// WithCrop and ToVideoCodec may be called in any order on the builder.
 func (b *TranscodeBuilder) WithCrop(params *CropParams) *TranscodeBuilder {
-	if params == nil || b.videoCodec == CodecCopy {
+	if params == nil {
 		return b
 	}
 
