@@ -448,6 +448,31 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
 
+			// For NVENC with a crop region, try to apply the crop via the cuvid
+			// decoder's built-in dictionary option (zero CPU copies). If successful
+			// the context is already open; otherwise it is left in a configured but
+			// unopened state for the normal Open below.
+			cuvidApplied, err := videoState.tryCuvidCropOption(inStream, inputFmt, hwAccel)
+			if err != nil {
+				freeStreams(streams)
+				return nil, fmt.Errorf("ffmpeg: trying cuvid crop option for stream %d: %w", inStream.Index(), err)
+			}
+
+			if !cuvidApplied {
+				if err := videoState.decoder.codecContext.Open(videoState.decoder.codec, nil); err != nil {
+					freeStreams(streams)
+					return nil, fmt.Errorf("ffmpeg: opening decoder for stream %d: %w", inStream.Index(), err)
+				}
+			}
+
+			videoState.decoder.codecContext.SetTimeBase(inStream.TimeBase())
+
+			videoState.decoder.frame = astiav.AllocFrame()
+			if videoState.decoder.frame == nil {
+				freeStreams(streams)
+				return nil, errors.New("ffmpeg: failed to allocate decoder frame")
+			}
+
 			if t.cropParams != nil {
 				if err := videoState.setupCropFilter(inStream, hwAccel); err != nil {
 					freeStreams(streams)
