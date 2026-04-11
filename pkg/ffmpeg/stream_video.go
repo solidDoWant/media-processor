@@ -242,7 +242,7 @@ func (vss *videoStreamState) tryCuvidCropOption(inStream *astiav.Stream, inputFm
 	defer cropDict.Free()
 
 	if setErr := cropDict.Set("crop", fmt.Sprintf("%dx%dx%dx%d", top, bottom, left, right), astiav.NewDictionaryFlags()); setErr != nil {
-		return false, nil
+		return false, fmt.Errorf("ffmpeg: setting cuvid crop dictionary option: %w", setErr)
 	}
 
 	if openErr := vss.decoder.codecContext.Open(vss.decoder.codec, cropDict); openErr == nil {
