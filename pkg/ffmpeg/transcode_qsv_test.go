@@ -15,6 +15,38 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
 
+// TestTranscode_CropWithQSV verifies that the vpp_qsv crop path produces output
+// with the correct dimensions when QSV hardware is available.
+// Requires QSV hardware (qsvtest build tag).
+func TestTranscode_CropWithQSV(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	crop := &ffmpeg.CropParams{W: 320, H: 176, X: 0, Y: 22}
+
+	err := ffmpeg.NewTranscode(testBlackBarsVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		HardwareAccel(ffmpeg.HWAccelQSV).
+		WithCrop(crop).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var videoStream *ffprobe.StreamInfo
+	for i := range info.Streams {
+		if info.Streams[i].CodecType == ffprobe.CodecTypeVideo {
+			videoStream = &info.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, videoStream, "output must contain a video stream")
+	assert.Equal(t, crop.W, videoStream.WidthPixels, "output width must match crop width")
+	assert.Equal(t, crop.H, videoStream.HeightPixels, "output height must match crop height")
+}
+
 // TestTranscode_QSVPerformanceMatchesFFmpegCLI verifies that our QSV transcode
 // implementation performs within 1.25× of the ffmpeg CLI with identical QSV
 // parameters. This guards against accidentally falling back to software

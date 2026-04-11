@@ -39,28 +39,43 @@ type videoDecoderState struct {
 	hwPixFmt astiav.PixelFormat // expected HW pixel format from the HW decoder
 }
 
+// videoProcessingPlan captures the outputs of the decoder and crop-filter setup
+// phases. It is populated by setupDecoder and setupCropFilter, then consumed by
+// configureEncoderPixelFormat, setupVideoConversion, and encodeVideoFrame.
+// Grouping these inter-phase values makes the data flow between setup stages
+// explicit rather than relying on implicit field mutation order across
+// videoStreamState.
+type videoProcessingPlan struct {
+	// cuvidCropApplied is true when NVDEC hardware applied the crop at decode
+	// time via the cuvid AVOption; setupCropFilter skips the filter graph.
+	cuvidCropApplied bool
+	// cropFilter is the active libavfilter graph, or nil when no spatial crop
+	// filter is needed (no crop requested, or cuvid handled it).
+	cropFilter *videoCropFilterState
+	// effectiveDecodedPixFmt is the pixel format of frames entering the encoder
+	// pipeline. Set by setupCropFilter to the filter output format (e.g.
+	// PixelFormatVaapi for VAAPI paths); zero value when no crop filter is active.
+	effectiveDecodedPixFmt astiav.PixelFormat
+	// encoderReceivesHWFrames is true when frames at the encoder input are
+	// already in GPU pixel format. Set by configureEncoderPixelFormat; read by
+	// setupVideoConversion and encodeVideoFrame.
+	encoderReceivesHWFrames bool
+}
+
 // videoStreamState decodes and re-encodes a video stream.
 type videoStreamState struct {
 	copyStreamState
 
 	// Decoder state.
-	decoder videoDecoderState
-	encoder videoEncoderState
-	// encoderReceivesHWFrames is true when frames arriving at the encoder are
-	// already in GPU pixel format (HW decode without filter, cuvid crop dict, or
-	// a crop filter whose output is a HW surface such as VAAPI/QSV/CUDA).
-	// When true, setupVideoConversion skips CPU-side scaling and upload.
-	encoderReceivesHWFrames bool
-	hardwareDevicePath      string // device path for CreateHardwareDeviceContext; "" = auto-select
+	decoder            videoDecoderState
+	encoder            videoEncoderState
+	hardwareDevicePath string // device path for CreateHardwareDeviceContext; "" = auto-select
 
-	// Crop filter state. Non-nil when a crop region has been requested via
-	// WithCrop. The filter graph is set up in setupCropFilter after the
-	// decoder is initialised so that source pixel format and dimensions are
-	// known.
-	cropParams             *CropParams           // crop region; nil = no crop
-	cuvidCropApplied       bool                  // true when the cuvid decoder handled crop via its dict option (no filter needed)
-	cropFilter             *videoCropFilterState // non-nil when crop filter graph is active
-	effectiveDecodedPixFmt astiav.PixelFormat    // pixel format of frames entering the encoder pipeline (post crop filter)
+	// cropParams is the requested spatial crop region, or nil when no crop is needed.
+	cropParams *CropParams
+	// plan captures the outputs of the decoder and crop-filter setup phases and
+	// is consumed by the encoder setup and per-frame processing. See videoProcessingPlan.
+	plan videoProcessingPlan
 }
 
 func (vds *videoDecoderState) free() {
@@ -96,13 +111,13 @@ func (vss *videoStreamState) free() {
 		vss.encoder.hardwareFrameContext.Free()
 	}
 
-	if vss.cropFilter != nil {
-		if vss.cropFilter.graph != nil {
-			vss.cropFilter.graph.Free()
+	if vss.plan.cropFilter != nil {
+		if vss.plan.cropFilter.graph != nil {
+			vss.plan.cropFilter.graph.Free()
 		}
 
-		if vss.cropFilter.frame != nil {
-			vss.cropFilter.frame.Free()
+		if vss.plan.cropFilter.frame != nil {
+			vss.plan.cropFilter.frame.Free()
 		}
 	}
 }
@@ -114,7 +129,7 @@ func (vss *videoStreamState) free() {
 //
 // For CUDA (NVENC) with a crop region, the cuvid decoder's built-in crop
 // dictionary option is tried first. If the option is accepted, the crop is
-// applied at decode time with no filter graph (cuvidCropApplied = true).
+// applied at decode time with no filter graph (plan.cuvidCropApplied = true).
 // If the option is rejected (unsupported codec or driver), the context is
 // rebuilt and opened without the option; setupCropFilter will then use
 // the hwdownload→crop→hwupload filter path instead.
@@ -218,7 +233,7 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 
 		if setErr := cropDict.Set("crop", fmt.Sprintf("%dx%dx%dx%d", top, bottom, left, right), astiav.NewDictionaryFlags()); setErr == nil {
 			if openErr := vss.decoder.codecContext.Open(codec, cropDict); openErr == nil {
-				vss.cuvidCropApplied = true
+				vss.plan.cuvidCropApplied = true
 				opened = true
 			} else {
 				slog.Debug("ffmpeg: cuvid crop dict option unsupported, will use hwdownload/crop/hwupload filter",
@@ -326,14 +341,14 @@ func selectCropFilterConfig(hwAccel HWAccel, hwDecodeActive bool, decoderPixFmt 
 // hardware accelerator. For VAAPI with SW decode, a VAAPI device context is
 // created here and stored in vss.decoder.hwDevCtx so the encoder can reuse it.
 //
-// effectiveDecodedPixFmt is set to the output pixel format of the filter graph
+// plan.effectiveDecodedPixFmt is set to the output pixel format of the filter graph
 // (e.g. PixelFormatVaapi for VAAPI paths). configureEncoderPixelFormat uses
 // this to enable the zero-copy GPU path when the filter already outputs HW frames.
 func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HWAccel) error {
 	cp := vss.cropParams // guaranteed non-nil by caller
 
 	// CUDA: crop was already applied by the cuvid decoder's dict option.
-	if vss.cuvidCropApplied {
+	if vss.plan.cuvidCropApplied {
 		return nil
 	}
 
@@ -479,10 +494,10 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HW
 	}
 
 	if cfg.outPixFmt != astiav.PixelFormatNone {
-		vss.effectiveDecodedPixFmt = cfg.outPixFmt
+		vss.plan.effectiveDecodedPixFmt = cfg.outPixFmt
 	}
 
-	vss.cropFilter = &videoCropFilterState{
+	vss.plan.cropFilter = &videoCropFilterState{
 		graph:   fg,
 		srcCtx:  srcCtx,
 		sinkCtx: sinkCtx,
@@ -626,9 +641,9 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// HW encode with HW decode and no crop filter: decoded frames are already
 	// in GPU memory — share those surfaces directly with the encoder. This also
 	// covers the CUDA cuvid crop-dict path where the crop is applied by the
-	// decoder itself (cuvidCropApplied=true, cropFilter=nil).
-	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.cropFilter == nil {
-		vss.encoderReceivesHWFrames = true
+	// decoder itself (plan.cuvidCropApplied=true, plan.cropFilter=nil).
+	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.plan.cropFilter == nil {
+		vss.plan.encoderReceivesHWFrames = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 
 		return nil
@@ -637,8 +652,8 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// HW encode with a crop filter whose output is already in HW pixel format
 	// (scale_vaapi, vpp_qsv, hwupload). The filter handles the CPU↔GPU transfer;
 	// frames arrive at the encoder ready for zero-copy encoding.
-	if vss.effectiveDecodedPixFmt != astiav.PixelFormatNone && vss.effectiveDecodedPixFmt == profile.hwPixFmt {
-		vss.encoderReceivesHWFrames = true
+	if vss.plan.effectiveDecodedPixFmt != astiav.PixelFormatNone && vss.plan.effectiveDecodedPixFmt == profile.hwPixFmt {
+		vss.plan.encoderReceivesHWFrames = true
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 		// Provide the hardware device context so the encoder can initialise its
 		// hardware-specific state (e.g. create hw_frames_ctx from hw_device_ctx).
@@ -695,22 +710,22 @@ func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 //
 // For the SW decode + HW encode path, decoded YUV frames are converted on the
 // CPU before being uploaded to GPU memory. A fully hardware-accelerated
-// decode→encode pipeline (encoderReceivesHWFrames=true) eliminates this CPU step by
+// decode→encode pipeline (plan.encoderReceivesHWFrames=true) eliminates this CPU step by
 // sharing GPU surfaces between the decoder and encoder.
 //
 // Note: side-data formats such as Dolby Vision RPU are currently not
 // preserved across re-encoding. Copy streams (CodecCopy) always preserve all
 // side data since the bitstream is passed through unchanged.
 func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
-	if vss.encoderReceivesHWFrames {
+	if vss.plan.encoderReceivesHWFrames {
 		// Decoded frames are already in the correct HW pixel format.
 		return nil
 	}
 
-	// When a crop filter is active, effectiveDecodedPixFmt holds the pixel
+	// When a crop filter is active, plan.effectiveDecodedPixFmt holds the pixel
 	// format of the frames coming OUT of the filter graph (e.g. NV12 after
 	// hwdownload). Otherwise fall back to the decoder's native format.
-	decoderPixelFormat := vss.effectiveDecodedPixFmt
+	decoderPixelFormat := vss.plan.effectiveDecodedPixFmt
 	if decoderPixelFormat == astiav.PixelFormatNone {
 		decoderPixelFormat = vss.decoder.codecContext.PixelFormat()
 	}
@@ -800,19 +815,19 @@ func (vss *videoStreamState) processPacket(packet *astiav.Packet, outputFmt *ast
 }
 
 // encodeVideoFrame converts and encodes a single decoded video frame.
-// On the fully hardware path (encoderReceivesHWFrames=true) the frame is already in GPU
+// On the fully hardware path (plan.encoderReceivesHWFrames=true) the frame is already in GPU
 // memory and is passed directly to the encoder without any CPU conversion.
 // When a crop filter is active, the frame is first pushed through the filter
 // graph and the cropped output is used for the remainder of the pipeline.
 func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	encFrame := frame
 
-	if vss.cropFilter != nil {
-		if err := vss.cropFilter.srcCtx.AddFrame(frame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
+	if vss.plan.cropFilter != nil {
+		if err := vss.plan.cropFilter.srcCtx.AddFrame(frame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
 			return fmt.Errorf("ffmpeg: adding frame to crop filter: %w", err)
 		}
 
-		if err := vss.cropFilter.sinkCtx.GetFrame(vss.cropFilter.frame, astiav.NewBuffersinkFlags()); err != nil {
+		if err := vss.plan.cropFilter.sinkCtx.GetFrame(vss.plan.cropFilter.frame, astiav.NewBuffersinkFlags()); err != nil {
 			if errors.Is(err, astiav.ErrEagain) {
 				// Filter needs more input before it can produce output (should not
 				// occur for a simple crop filter, but handled gracefully).
@@ -822,12 +837,12 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 			return fmt.Errorf("ffmpeg: getting frame from crop filter: %w", err)
 		}
 
-		defer vss.cropFilter.frame.Unref()
+		defer vss.plan.cropFilter.frame.Unref()
 
-		encFrame = vss.cropFilter.frame
+		encFrame = vss.plan.cropFilter.frame
 	}
 
-	if !vss.encoderReceivesHWFrames {
+	if !vss.plan.encoderReceivesHWFrames {
 		// Software decode path: convert pixel format if needed.
 		if vss.encoder.softwareFrameContext != nil {
 			if err := vss.encoder.softwareFrameContext.ScaleFrame(encFrame, vss.encoder.frame); err != nil {

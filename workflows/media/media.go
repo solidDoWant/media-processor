@@ -47,11 +47,13 @@ type MediaWorkflowConfig struct {
 	HighCardinalityLabels bool
 	// MinCropX is the minimum number of pixels that must be trimmed horizontally
 	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// Defaults to 10 when not set.
+	// 0 means no minimum (any detected crop is applied). Defaults are applied by
+	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropX int
 	// MinCropY is the minimum number of pixels that must be trimmed vertically
 	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// Defaults to 10 when not set.
+	// 0 means no minimum (any detected crop is applied). Defaults are applied by
+	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropY int
 }
 
@@ -135,25 +137,15 @@ func NewMediaWorkflow(
 
 	// detectcrop: run the ffmpeg cropdetect filter to find black bars. Returns a nil
 	// Crop pointer when no crop is warranted (both axes disabled or trim below threshold).
-	// Uses MinCropX/MinCropY from config; a value of 0 in MediaWorkflowConfig means
-	// the field was not set — treat it as the default of 10.
-	minCropX := cfg.MinCropX
-	if minCropX == 0 {
-		minCropX = 10
-	}
-
-	minCropY := cfg.MinCropY
-	if minCropY == 0 {
-		minCropY = 10
-	}
-
+	// cfg.MinCropX and cfg.MinCropY are passed directly; defaults are applied by the
+	// caller (cmd/worker) via parseCropThreshold before constructing MediaWorkflowConfig.
 	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (shared.DetectCropOutput, error) {
 		var probe shared.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			return shared.DetectCropOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		crop, err := shared.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, minCropX, minCropY)
+		crop, err := shared.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
 		if err != nil {
 			return shared.DetectCropOutput{}, err
 		}
