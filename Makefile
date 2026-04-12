@@ -55,6 +55,10 @@ test: fmt vet ## Run tests.
 test-integration: hatchet-up ## Run integration tests against a local Hatchet server (starts server, generates token).
 	env $$(cat $(HATCHET_ENV_FILE)) go test -v -race -count=1 -tags=integration ./...
 
+.PHONY: test-e2e
+test-e2e: ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
+	go test -v -timeout 30m -tags=e2e -count=1 ./e2e/...
+
 .PHONY: lint
 lint: ## Run golangci-lint.
 	golangci-lint run ./...

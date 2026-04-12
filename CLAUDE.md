@@ -43,6 +43,7 @@ media-processor/
 - Test: `make test`
 - Lint: `make lint`
 - Fmt: `make fmt`
+- E2E tests: `make test-e2e` (requires Docker; first run downloads ~700 MB BBB fixture)
 
 ## Dev Tools
 

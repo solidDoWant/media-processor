@@ -1,0 +1,107 @@
+services:
+  postgres:
+    image: postgres:18
+    command: postgres -c 'max_connections=1000'
+    hostname: postgres
+    environment:
+      POSTGRES_USER: hatchet
+      POSTGRES_PASSWORD: hatchet
+      POSTGRES_DB: hatchet
+    ports:
+      - "5436:5432"
+    volumes:
+      - e2e_hatchet_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  migration:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.83.1
+    command: /hatchet/hatchet-migrate
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  setup-config:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.83.1
+    command: >
+      /hatchet/hatchet-admin quickstart
+      --skip certs
+      --generated-config-dir /hatchet/config
+      --overwrite=false
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
+      SERVER_MSGQUEUE_KIND: postgres
+      SERVER_AUTH_COOKIE_DOMAIN: "localhost:8080"
+      SERVER_AUTH_COOKIE_INSECURE: "t"
+      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
+      SERVER_GRPC_INSECURE: "t"
+      SERVER_GRPC_BROADCAST_ADDRESS: "localhost:7079"
+      SERVER_DEFAULT_ENGINE_VERSION: "V1"
+      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: "hatchet-engine:7070"
+    volumes:
+      - e2e_hatchet_certs:/hatchet/certs
+      - e2e_hatchet_config:/hatchet/config
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  hatchet-engine:
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.83.1
+    command: /hatchet/hatchet-engine --config /hatchet/config
+    restart: on-failure
+    ports:
+      - "7079:7070"
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
+      SERVER_MSGQUEUE_KIND: postgres
+      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
+      SERVER_GRPC_INSECURE: "t"
+    volumes:
+      - e2e_hatchet_certs:/hatchet/certs
+      - e2e_hatchet_config:/hatchet/config
+    depends_on:
+      setup-config:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+
+  radarr:
+    image: ghcr.io/home-operations/radarr:6.1.2
+    environment:
+      TZ: UTC
+      Radarr__Auth__ApiKey: e2e-radarr-api-key
+    ports:
+      - "7878:7878"
+    volumes:
+      - /tmp/e2e-media-processor/config/radarr:/config
+      - /tmp/e2e-media-processor/processed-output/radarr:/downloads
+      - /tmp/e2e-media-processor/processed-output/radarr-library:/movies
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sonarr:
+    image: ghcr.io/home-operations/sonarr:4.0.17
+    environment:
+      TZ: UTC
+      Sonarr__Auth__ApiKey: e2e-sonarr-api-key
+    ports:
+      - "8989:8989"
+    volumes:
+      - /tmp/e2e-media-processor/config/sonarr:/config
+      - /tmp/e2e-media-processor/processed-output/sonarr:/downloads
+      - /tmp/e2e-media-processor/processed-output/sonarr-library:/tv
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  e2e_hatchet_postgres_data:
+  e2e_hatchet_config:
+  e2e_hatchet_certs:
