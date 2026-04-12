@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -90,6 +91,16 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet client: %w", err)
 	}
 
+	minCropX, err := parseCropThreshold("MEDIA_MIN_CROP_X", 10)
+	if err != nil {
+		return err
+	}
+
+	minCropY, err := parseCropThreshold("MEDIA_MIN_CROP_Y", 10)
+	if err != nil {
+		return err
+	}
+
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_WATCHER_ROOT"),
@@ -97,6 +108,8 @@ func run(ctx context.Context) error {
 		HardwareDevicePath:    os.Getenv("HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
+		MinCropX:              minCropX,
+		MinCropY:              minCropY,
 	}, radarrClient, sonarrClient, webhookClient)
 
 	worker, err := client.NewWorker(
@@ -114,4 +127,21 @@ func run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// parseCropThreshold reads an integer from the named environment variable.
+// If the variable is unset or empty, defaultVal is returned. A value of -1 is
+// accepted (disables the threshold). Any other non-integer value is a fatal error.
+func parseCropThreshold(envVar string, defaultVal int) (int, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer (got %q): %w", envVar, raw, err)
+	}
+
+	return v, nil
 }

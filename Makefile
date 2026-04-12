@@ -25,17 +25,26 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 # Detect hardware encoders via ffmpeg CLI — independent of our DetectHardwareEncoders() logic.
-# This ensures hwtest/qsvtest runs even if our detection has bugs, allowing tests to catch them.
-HAS_HW_ENCODER := $(shell ffmpeg -hide_banner -encoders 2>/dev/null | \
-	grep -qE '^\s+V..... (hevc|h264)_(qsv|nvenc|vaapi)' && echo "1" || echo "0")
-HAS_QSV_ENCODER := $(shell ffmpeg -hide_banner -encoders 2>/dev/null | \
-	grep -qE '^\s+V..... (hevc|h264)_qsv' && echo "1" || echo "0")
+# This ensures hardware-specific build tags are set even if our detection has bugs, allowing
+# tests to catch those bugs.
+#
+# detect_encoder checks whether ffmpeg exposes an h264 or hevc encoder for the
+# given HW family (e.g. qsv, vaapi, nvenc). Outputs "1" if found, "0" otherwise.
+detect_encoder = $(shell ffmpeg -hide_banner -encoders 2>/dev/null | \
+	grep -qE '^\s+V..... (hevc|h264)_$(1)' && echo "1" || echo "0")
 
-# Build tags: hwtest when any HW encoder is present; qsvtest when QSV specifically is present.
+HAS_QSV_ENCODER := $(call detect_encoder,qsv)
+HAS_VAAPI_ENCODER := $(call detect_encoder,vaapi)
+HAS_NVENC_ENCODER := $(call detect_encoder,nvenc)
+# HAS_HW_ENCODER is true when at least one of the per-family flags is set.
+HAS_HW_ENCODER := $(if $(filter 1,$(HAS_QSV_ENCODER) $(HAS_VAAPI_ENCODER) $(HAS_NVENC_ENCODER)),1,0)
+
+# Build tags: hwtest when any HW encoder is present; dedicated tags (qsvtest, vaapitest,
+# nvenctest) when the corresponding hardware encoder is specifically present.
 comma := ,
 empty :=
 space := $(empty) $(empty)
-_test_tags := $(strip $(if $(filter 1,$(HAS_HW_ENCODER)),hwtest )$(if $(filter 1,$(HAS_QSV_ENCODER)),qsvtest))
+_test_tags := $(strip $(if $(filter 1,$(HAS_HW_ENCODER)),hwtest )$(if $(filter 1,$(HAS_QSV_ENCODER)),qsvtest )$(if $(filter 1,$(HAS_VAAPI_ENCODER)),vaapitest )$(if $(filter 1,$(HAS_NVENC_ENCODER)),nvenctest))
 TEST_TAG_FLAGS := $(if $(_test_tags),-tags $(subst $(space),$(comma),$(_test_tags)))
 
 .PHONY: test

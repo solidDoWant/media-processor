@@ -19,11 +19,6 @@ func mappingNameAttr(name string) attribute.KeyValue {
 
 // buildStandardAttrs returns the full standard label set for processing metrics.
 func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode shared.TranscodeOutput, hardwareAccelerated bool) []attribute.KeyValue {
-	hw := "false"
-	if hardwareAccelerated {
-		hw = "true"
-	}
-
 	return []attribute.KeyValue{
 		attribute.String("source_codec", probe.VideoCodec),
 		attribute.String("destination_codec", transcode.DestCodec),
@@ -31,7 +26,8 @@ func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode sh
 		attribute.String("destination_container", transcode.DestContainer),
 		mediaTypeAttr(input.MediaType),
 		mappingNameAttr(input.MappingName),
-		attribute.String("hardware_accelerated", hw),
+		attribute.String("hardware_accelerated", strconv.FormatBool(hardwareAccelerated)),
+		attribute.String("crop_applied", strconv.FormatBool(transcode.CropApplied)),
 	}
 }
 

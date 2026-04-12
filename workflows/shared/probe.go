@@ -53,6 +53,10 @@ type ProbeOutput struct {
 	// SubtitleStreams lists every subtitle stream found in the file, in stream order.
 	// Only meaningful when IsValidMedia is true.
 	SubtitleStreams []StreamInfo `json:"subtitle_streams,omitempty"`
+	// VideoWidth and VideoHeight are the pixel dimensions of the first video stream.
+	// Only meaningful when IsValidMedia is true; zero otherwise.
+	VideoWidth  int `json:"video_width,omitempty"`
+	VideoHeight int `json:"video_height,omitempty"`
 	// StartedAt is the wall-clock time at which the probe step began. It is NOT set
 	// by RunProbe; the workflow step closure sets it before calling RunProbe so that
 	// downstream steps can compute elapsed durations.
@@ -120,6 +124,8 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 				DurationSeconds: info.Duration.Seconds(),
 				AudioStreams:    audioStreams,
 				SubtitleStreams: subtitleStreams,
+				VideoWidth:      s.WidthPixels,
+				VideoHeight:     s.HeightPixels,
 			}, nil
 		}
 	}

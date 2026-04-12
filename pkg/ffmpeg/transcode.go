@@ -29,6 +29,7 @@ type TranscodeBuilder struct {
 	downmixTitle          string         // title prefix prepended to the downmix channel layout label
 	coverArtBytes         []byte         // raw image bytes to embed as MKV attachment; nil = no cover art
 	coverArtMimeType      string         // MIME type of coverArtBytes ("image/jpeg" or "image/png")
+	cropParams            *CropParams    // crop region to apply during video encode; nil = no crop
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -197,6 +198,23 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 
 	b.coverArtBytes = imageBytes
 	b.coverArtMimeType = mimeType
+
+	return b
+}
+
+// WithCrop applies a crop filter to the video stream during encoding. The crop
+// region is specified by params: W and H are the output dimensions in pixels,
+// and X and Y are the offsets from the top-left corner of the input frame.
+// WithCrop is a no-op when params is nil. Crop is silently skipped at build
+// time when videoCodec is CodecCopy, since copying a stream precludes any
+// filter. Storing cropParams unconditionally avoids a call-order dependency:
+// WithCrop and ToVideoCodec may be called in any order on the builder.
+func (b *TranscodeBuilder) WithCrop(params *CropParams) *TranscodeBuilder {
+	if params == nil {
+		return b
+	}
+
+	b.cropParams = params
 
 	return b
 }
@@ -424,10 +442,42 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath}
+			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath, cropParams: t.cropParams}
 			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
+			}
+
+			// For NVENC with a crop region, try to apply the crop via the cuvid
+			// decoder's built-in dictionary option (zero CPU copies). If successful
+			// the context is already open; otherwise it is left in a configured but
+			// unopened state for the normal Open below.
+			cuvidApplied, err := videoState.tryCuvidCropOption(inStream, inputFmt, hwAccel)
+			if err != nil {
+				freeStreams(streams)
+				return nil, fmt.Errorf("ffmpeg: trying cuvid crop option for stream %d: %w", inStream.Index(), err)
+			}
+
+			if !cuvidApplied {
+				if err := videoState.decoder.codecContext.Open(videoState.decoder.codec, nil); err != nil {
+					freeStreams(streams)
+					return nil, fmt.Errorf("ffmpeg: opening decoder for stream %d: %w", inStream.Index(), err)
+				}
+			}
+
+			videoState.decoder.codecContext.SetTimeBase(inStream.TimeBase())
+
+			videoState.decoder.frame = astiav.AllocFrame()
+			if videoState.decoder.frame == nil {
+				freeStreams(streams)
+				return nil, errors.New("ffmpeg: failed to allocate decoder frame")
+			}
+
+			if t.cropParams != nil {
+				if err := videoState.setupCropFilter(inStream, hwAccel); err != nil {
+					freeStreams(streams)
+					return nil, fmt.Errorf("ffmpeg: setting up crop filter for stream %d: %w", inStream.Index(), err)
+				}
 			}
 
 			s = videoState

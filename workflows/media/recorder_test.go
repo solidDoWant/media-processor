@@ -128,6 +128,47 @@ func TestRecorder_ValidRunRecordsAllProcessingHistograms(t *testing.T) {
 	}
 }
 
+func TestRecorder_CropAppliedLabel(t *testing.T) {
+	tests := []struct {
+		name            string
+		cropApplied     bool
+		wantCropApplied string
+	}{
+		{
+			name:            "crop not applied — label is false",
+			cropApplied:     false,
+			wantCropApplied: "false",
+		},
+		{
+			name:            "crop applied — label is true",
+			cropApplied:     true,
+			wantCropApplied: "true",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, reader := newTestRecorder(t, false)
+
+			transcode := sampleTranscode()
+			transcode.CropApplied = tc.cropApplied
+
+			rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, false, 5*time.Second)
+
+			rm := collectMetrics(t, reader)
+
+			m := findMetric(rm, "media_workflow_audio_track_count")
+			require.NotNil(t, m)
+			dps := histogramDataPoints(t, m)
+			require.Len(t, dps, 1)
+
+			val, present := dps[0].Attributes.Value(attributeKey("crop_applied"))
+			assert.True(t, present, "crop_applied label should be present")
+			assert.Equal(t, tc.wantCropApplied, val.AsString())
+		})
+	}
+}
+
 func TestRecorder_InvalidFileRecordsOnlyCounter(t *testing.T) {
 	rec, reader := newTestRecorder(t, false)
 
