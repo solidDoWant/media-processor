@@ -32,19 +32,12 @@ type Torrent struct {
 	Eta        int     `json:"eta"`
 }
 
-// Category holds a qBittorrent download category.
-type Category struct {
-	Name     string `json:"name"`
-	SavePath string `json:"savePath"`
-}
-
 // Server is an in-process qBittorrent Web API stub.
 // On torrent-add it copies a fixture file into the download directory so the
 // watcher subprocess can detect it.
 type Server struct {
 	mu          sync.Mutex
 	torrents    map[string]*Torrent
-	categories  map[string]*Category
 	listener    net.Listener
 	server      *http.Server
 	fixturePath string
@@ -63,7 +56,6 @@ func New(fixturePath, downloadDir string) (*Server, error) {
 
 	s := &Server{
 		torrents:    make(map[string]*Torrent),
-		categories:  make(map[string]*Category),
 		listener:    ln,
 		fixturePath: fixturePath,
 		downloadDir: downloadDir,
@@ -131,17 +123,8 @@ func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTorrentsCategories(w http.ResponseWriter, r *http.Request) {
 	log.Printf("qbt stub: torrents/categories from %s", r.RemoteAddr)
 
-	s.mu.Lock()
-	out := make(map[string]*Category, len(s.categories))
-
-	for name, cat := range s.categories {
-		out[name] = cat
-	}
-
-	s.mu.Unlock()
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	_, _ = fmt.Fprint(w, "{}")
 }
 
 func (s *Server) handleTorrentsCreateCategory(w http.ResponseWriter, r *http.Request) {
@@ -155,16 +138,6 @@ func (s *Server) handleTorrentsCreateCategory(w http.ResponseWriter, r *http.Req
 	savePath := r.FormValue("savePath")
 
 	log.Printf("qbt stub: createCategory %q savePath=%q from %s", name, savePath, r.RemoteAddr)
-
-	if name == "" {
-		http.Error(w, "category name required", http.StatusBadRequest)
-
-		return
-	}
-
-	s.mu.Lock()
-	s.categories[name] = &Category{Name: name, SavePath: savePath}
-	s.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }

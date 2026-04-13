@@ -1,9 +1,11 @@
 services:
   postgres:
     image: postgres:18
-    # Hatchet's workflow engine opens many concurrent database connections; the
-    # default PostgreSQL limit (100) is too low and causes connection errors.
-    command: postgres -c 'max_connections=1000'
+    # Hatchet uses PostgreSQL as its message queue (SERVER_MSGQUEUE_KIND=postgres),
+    # which requires many concurrent connections for its internal pollers and
+    # listeners regardless of active workflow count. The default limit of 100 is
+    # too low; 200 is sufficient for a single engine instance.
+    command: postgres -c 'max_connections=200'
     hostname: postgres
     environment:
       POSTGRES_USER: hatchet

@@ -24,10 +24,6 @@ var (
 // ---- directory management -----------------------------------------------
 
 func resetDirs() error {
-	if err := os.RemoveAll(baseDir); err != nil {
-		return fmt.Errorf("remove base dir: %w", err)
-	}
-
 	for _, dir := range []string{
 		filepath.Join(downloadsDir, "radarr"),
 		filepath.Join(downloadsDir, "sonarr"),
