@@ -31,9 +31,8 @@ func astiavLevelToSlog(l astiav.LogLevel) slog.Level {
 		return slog.LevelError
 	case l <= astiav.LogLevelWarning:
 		return slog.LevelWarn
-	case l <= astiav.LogLevelInfo:
-		return slog.LevelInfo
 	default:
+		// Info level libav logs can still be quite noisy, so treat them as debug output.
 		return slog.LevelDebug
 	}
 }
