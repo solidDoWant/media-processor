@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
+	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogLevel; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/solidDoWant/media-processor/pkg/logging"
@@ -86,7 +87,9 @@ func run(ctx context.Context) error {
 		URL: os.Getenv("WEBHOOK_URL"),
 	}
 
-	client, err := hatchet.NewClient()
+	client, err := hatchet.NewClient(
+		v0Client.WithLogLevel(logging.ZerologLevel(os.Getenv("LOG_LEVEL"))), //nolint:staticcheck // no non-deprecated API for client log level in SDK v0.83
+	)
 	if err != nil {
 		return fmt.Errorf("create Hatchet client: %w", err)
 	}
