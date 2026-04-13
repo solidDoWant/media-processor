@@ -32,3 +32,19 @@ func Setup(level string) {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
 }
+
+// ZerologLevel returns a zerolog-compatible level string for the given
+// LOG_LEVEL value. This is useful for configuring third-party libraries (like
+// the Hatchet SDK) that use zerolog internally.
+func ZerologLevel(level string) string {
+	switch strings.ToLower(level) {
+	case "debug":
+		return "debug"
+	case "warn", "warning":
+		return "warn"
+	case "error":
+		return "error"
+	default:
+		return "info"
+	}
+}
