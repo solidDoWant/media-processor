@@ -225,9 +225,17 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	destPath := filepath.Join(destDir, releaseName+".mp4")
+	tmpPath := destPath + ".tmp"
 
-	if err := copyFile(s.fixturePath, destPath); err != nil {
+	if err := copyFile(s.fixturePath, tmpPath); err != nil {
 		http.Error(w, fmt.Sprintf("copy fixture: %v", err), http.StatusInternalServerError)
+
+		return
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, fmt.Sprintf("rename fixture: %v", err), http.StatusInternalServerError)
 
 		return
 	}
