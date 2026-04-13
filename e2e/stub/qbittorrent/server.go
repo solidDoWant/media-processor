@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,12 +32,19 @@ type Torrent struct {
 	Eta        int     `json:"eta"`
 }
 
+// Category holds a qBittorrent download category.
+type Category struct {
+	Name     string `json:"name"`
+	SavePath string `json:"savePath"`
+}
+
 // Server is an in-process qBittorrent Web API stub.
 // On torrent-add it copies a fixture file into the download directory so the
 // watcher subprocess can detect it.
 type Server struct {
 	mu          sync.Mutex
 	torrents    map[string]*Torrent
+	categories  map[string]*Category
 	listener    net.Listener
 	server      *http.Server
 	fixturePath string
@@ -55,6 +63,7 @@ func New(fixturePath, downloadDir string) (*Server, error) {
 
 	s := &Server{
 		torrents:    make(map[string]*Torrent),
+		categories:  make(map[string]*Category),
 		listener:    ln,
 		fixturePath: fixturePath,
 		downloadDir: downloadDir,
@@ -64,9 +73,18 @@ func New(fixturePath, downloadDir string) (*Server, error) {
 	mux.HandleFunc("POST /api/v2/auth/login", s.handleLogin)
 	mux.HandleFunc("GET /api/v2/app/version", s.handleVersion)
 	mux.HandleFunc("GET /api/v2/app/webapiVersion", s.handleWebAPIVersion)
+	mux.HandleFunc("GET /api/v2/app/preferences", s.handlePreferences)
+	mux.HandleFunc("GET /api/v2/torrents/categories", s.handleTorrentsCategories)
+	mux.HandleFunc("POST /api/v2/torrents/createCategory", s.handleTorrentsCreateCategory)
 	mux.HandleFunc("GET /api/v2/torrents/info", s.handleTorrentsInfo)
 	mux.HandleFunc("POST /api/v2/torrents/add", s.handleTorrentsAdd)
 	mux.HandleFunc("POST /api/v2/torrents/delete", s.handleTorrentsDelete)
+	// Catch-all: log unmatched requests and return empty JSON so connection tests pass.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("qbt stub: unmatched request: %s %s (from %s)", r.Method, r.URL.RequestURI(), r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, "{}")
+	})
 
 	s.server = &http.Server{Handler: mux}
 
@@ -85,27 +103,87 @@ func (s *Server) Close() {
 	_ = s.server.Close()
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	log.Printf("qbt stub: login from %s", r.RemoteAddr)
+
 	_, _ = fmt.Fprint(w, "Ok.")
 }
 
-func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	log.Printf("qbt stub: version from %s", r.RemoteAddr)
+
 	_, _ = fmt.Fprint(w, "5.0.0")
 }
 
-func (s *Server) handleWebAPIVersion(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleWebAPIVersion(w http.ResponseWriter, r *http.Request) {
+	log.Printf("qbt stub: webapiVersion from %s", r.RemoteAddr)
+
 	_, _ = fmt.Fprint(w, "2.9.3")
 }
 
-func (s *Server) handleTorrentsInfo(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
+	log.Printf("qbt stub: preferences from %s", r.RemoteAddr)
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprint(w, `{"save_path":"/downloads","use_subcategories":false,"use_category_paths_in_manual_mode":true,"dht":true}`)
+}
+
+func (s *Server) handleTorrentsCategories(w http.ResponseWriter, r *http.Request) {
+	log.Printf("qbt stub: torrents/categories from %s", r.RemoteAddr)
+
+	s.mu.Lock()
+	out := make(map[string]*Category, len(s.categories))
+
+	for k, v := range s.categories {
+		out[k] = v
+	}
+
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (s *Server) handleTorrentsCreateCategory(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	name := r.FormValue("category")
+	savePath := r.FormValue("savePath")
+
+	log.Printf("qbt stub: createCategory %q savePath=%q from %s", name, savePath, r.RemoteAddr)
+
+	if name == "" {
+		http.Error(w, "category name required", http.StatusBadRequest)
+
+		return
+	}
+
+	s.mu.Lock()
+	s.categories[name] = &Category{Name: name, SavePath: savePath}
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
+	categoryFilter := r.URL.Query().Get("category")
+
 	s.mu.Lock()
 
 	list := make([]*Torrent, 0, len(s.torrents))
 	for _, t := range s.torrents {
-		list = append(list, t)
+		if categoryFilter == "" || t.Category == categoryFilter {
+			list = append(list, t)
+		}
 	}
 
 	s.mu.Unlock()
+
+	log.Printf("qbt stub: torrents/info (query=%s) → %d torrents from %s", r.URL.RawQuery, len(list), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(list)
@@ -130,6 +208,8 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hash := syntheticHash(releaseName)
+
+	log.Printf("qbt stub: torrents/add category=%q releaseName=%q hash=%s from %s", category, releaseName, hash, r.RemoteAddr)
 
 	destDir := filepath.Join(s.downloadDir, category)
 

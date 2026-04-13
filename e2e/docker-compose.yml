@@ -75,6 +75,7 @@ services:
 
   radarr:
     image: ghcr.io/home-operations/radarr:6.1.2
+    user: "0:0"
     environment:
       TZ: UTC
       Radarr__Auth__ApiKey: e2e-radarr-api-key
@@ -89,6 +90,7 @@ services:
 
   sonarr:
     image: ghcr.io/home-operations/sonarr:4.0.17
+    user: "0:0"
     environment:
       TZ: UTC
       Sonarr__Auth__ApiKey: e2e-sonarr-api-key

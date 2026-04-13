@@ -51,14 +51,15 @@ const (
 
 // Package-level state set during TestMain.
 var (
-	hatchetToken   string
-	qbtStub        *qbittorrent.Server
-	radarrMovieID  int
-	sonarrSeriesID int
-	fixturePath    string // path to BBB mp4 fixture
-	binDir         string // temp dir holding built binaries
-	watcherCmd     *exec.Cmd
-	workerCmd      *exec.Cmd
+	hatchetToken    string
+	qbtStub         *qbittorrent.Server
+	radarrMovieID   int
+	sonarrSeriesID  int
+	sonarrEpisodeID int    // Sonarr episode ID for S01E01 of the test series
+	fixturePath     string // path to BBB mp4 fixture
+	binDir          string // temp dir holding built binaries
+	watcherCmd      *exec.Cmd
+	workerCmd       *exec.Cmd
 )
 
 func TestMain(m *testing.M) {
@@ -66,6 +67,11 @@ func TestMain(m *testing.M) {
 }
 
 func run(m *testing.M) int {
+	// 0. Tear down any leftover services from a previous killed run.
+	// This ensures we always start from a clean Docker state even when the
+	// previous run's deferred composeDown did not execute (e.g. SIGKILL).
+	composeDown()
+
 	// 1. Clean and recreate all directories.
 	if err := resetDirs(); err != nil {
 		log.Printf("e2e: resetDirs: %v", err)
@@ -83,9 +89,19 @@ func run(m *testing.M) int {
 		return 1
 	}
 
+	// 2a. Derive a short MKV fixture from the BBB MP4 so the worker uses the
+	// CodecCopy path (matroska+H.264 → no re-encode) and the e2e round-trip
+	// completes well within the per-test 5-minute polling timeout.
+	qbtFixturePath, err := ensureShortMKVFixture(fixturePath)
+	if err != nil {
+		log.Printf("e2e: ensureShortMKVFixture: %v", err)
+
+		return 1
+	}
+
 	// 3. Start the in-process qBittorrent stub.
 	// It binds to 0.0.0.0 so Docker containers can reach it via host.docker.internal.
-	qbtStub, err = qbittorrent.New(fixturePath, downloadsDir)
+	qbtStub, err = qbittorrent.New(qbtFixturePath, downloadsDir)
 	if err != nil {
 		log.Printf("e2e: start qbt stub: %v", err)
 
@@ -107,7 +123,8 @@ func run(m *testing.M) int {
 	defer composeDown()
 
 	// 5. Wait for Radarr, Sonarr, and Hatchet to be healthy.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// 10-minute timeout to accommodate image pulls on first run.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 
 	if err = waitForServices(ctx); err != nil {
 		cancel()
@@ -146,6 +163,16 @@ func run(m *testing.M) int {
 
 	log.Printf("e2e: Sonarr series ID %d", sonarrSeriesID)
 
+	// Fetch S01E01 episode ID for use in the Sonarr release push.
+	sonarrEpisodeID, err = fetchSonarrS01E01(sonarrSeriesID)
+	if err != nil {
+		log.Printf("e2e: fetchSonarrS01E01: %v", err)
+
+		return 1
+	}
+
+	log.Printf("e2e: Sonarr S01E01 episode ID %d", sonarrEpisodeID)
+
 	// 9. Build watcher and worker binaries, write watcher config, start both.
 	if err = startProcesses(); err != nil {
 		log.Printf("e2e: startProcesses: %v", err)
@@ -161,7 +188,30 @@ func run(m *testing.M) int {
 
 // ---- directory management -----------------------------------------------
 
+// forceRemoveDir removes dir and all its contents using a Docker container
+// running as root to handle any files or directories owned by root (created by
+// containers running as root). It mounts the parent directory so the target
+// directory itself can also be removed. It is a no-op if dir does not exist.
+func forceRemoveDir(dir string) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return
+	}
+
+	parent := filepath.Dir(dir)
+	base := filepath.Base(dir)
+
+	cmd := exec.Command("docker", "run", "--rm",
+		"-v", parent+":/target-parent",
+		"alpine", "rm", "-rf", "/target-parent/"+base,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+}
+
 func resetDirs() error {
+	forceRemoveDir(baseDir)
+
 	if err := os.RemoveAll(baseDir); err != nil {
 		return fmt.Errorf("remove base dir: %w", err)
 	}
@@ -224,6 +274,64 @@ func ensureBBBFixture() (string, error) {
 	log.Printf("e2e: BBB fixture cached at %s", mp4Path)
 
 	return mp4Path, nil
+}
+
+// ensureShortMKVFixture creates a 15-minute H.264-in-MKV clip from srcPath,
+// cached at testdata/cache/fixture_15min.mkv. Three properties are critical:
+//
+//  1. Matroska container: the worker's SelectVideoCodec function recognises the
+//     file as already-MKV and issues a stream-copy transcode (CodecCopy) instead
+//     of a full H.265 re-encode, keeping per-test runtime inside the 5-minute
+//     polling timeout.
+//
+//  2. No letterboxing: the video is scaled to fill the full 1280x720 frame so
+//     the worker's crop-detection step finds no crop, preserving CodecCopy (a
+//     detected crop would promote CodecCopy to CodecH265 and slow the transcode).
+//
+//  3. ≥ 13 minutes duration: both Radarr's and Sonarr's sample-rejection
+//     specifications must pass.
+//     - Radarr's SampleSpecification rejects files whose runtime is less than
+//       ~20% of the movie's TMDB runtime. Big Buck Bunny is listed as 8 minutes
+//       on TMDB, so ≥ 96 seconds is required; 15 minutes clears that easily.
+//     - Sonarr's EpisodeFileIsNotSampleSpecification rejects files whose runtime
+//       is less than 50% of the series' expected episode runtime. The Lone Ranger
+//       (TVDB 72059) has ~26-minute episodes, so ≥ 13 minutes is required;
+//       15 minutes (57.7% of 26 min) clears that threshold.
+func ensureShortMKVFixture(srcPath string) (string, error) {
+	const mkvName = "fixture_15min.mkv"
+
+	cacheDir := "testdata/cache"
+	mkvPath := filepath.Join(cacheDir, mkvName)
+
+	if _, err := os.Stat(mkvPath); err == nil {
+		log.Printf("e2e: MKV fixture already cached at %s", mkvPath)
+
+		return mkvPath, nil
+	}
+
+	log.Printf("e2e: creating 15-minute MKV fixture from %s (this takes ~2min)...", srcPath)
+
+	// Scale to 1280x720 (fills the 16:9 frame, no letterboxing) and re-encode
+	// with libx264 ultrafast at CRF 28 so the fixture is created quickly and
+	// the cached file stays under ~200 MB.
+	cmd := exec.Command("ffmpeg", "-y",
+		"-t", "900",
+		"-i", srcPath,
+		"-vf", "scale=1280:720",
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+		"-c:a", "copy",
+		mkvPath,
+	)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.Remove(mkvPath)
+
+		return "", fmt.Errorf("create MKV fixture: %w\n%s", err, out)
+	}
+
+	log.Printf("e2e: MKV fixture cached at %s", mkvPath)
+
+	return mkvPath, nil
 }
 
 func downloadFile(rawURL, dest string) error {
@@ -323,6 +431,9 @@ func composeDown() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	_ = cmd.Run()
+
+	forceRemoveDir(baseDir)
+
 	_ = os.RemoveAll(baseDir)
 }
 
@@ -517,7 +628,7 @@ func configureRadarr(qbtPort int) (int, error) {
 	profileID := profiles[0].ID
 
 	// Download client (qBittorrent stub).
-	dcBody := qbtDownloadClientBody("e2e-radarr-qbt", qbtPort, "radarr")
+	dcBody := qbtDownloadClientBody("e2e-radarr-qbt", qbtPort, "radarr", "category")
 
 	if err := c.post("/api/v3/downloadclient", dcBody, nil); err != nil {
 		return 0, fmt.Errorf("add download client: %w", err)
@@ -588,7 +699,9 @@ func configureSonarr(qbtPort int) (int, error) {
 	profileID := profiles[0].ID
 
 	// Download client (qBittorrent stub).
-	dcBody := qbtDownloadClientBody("e2e-sonarr-qbt", qbtPort, "sonarr")
+	// Sonarr's qBittorrent integration uses "tvCategory" (not "category") as the
+	// field name for the TV download category.
+	dcBody := qbtDownloadClientBody("e2e-sonarr-qbt", qbtPort, "sonarr", "tvCategory")
 
 	if err := c.post("/api/v3/downloadclient", dcBody, nil); err != nil {
 		return 0, fmt.Errorf("add download client: %w", err)
@@ -614,12 +727,12 @@ func configureSonarr(qbtPort int) (int, error) {
 	// Overlay mandatory add fields.
 	lookupSeries["qualityProfileId"] = profileID
 	lookupSeries["rootFolderPath"] = "/tv"
-	lookupSeries["monitored"] = false
+	lookupSeries["monitored"] = true
 	lookupSeries["seasonFolder"] = true
 	lookupSeries["addOptions"] = map[string]any{
 		"searchForMissingEpisodes":     false,
 		"searchForCutoffUnmetEpisodes": false,
-		"monitor":                      "none",
+		"monitor":                      "pilot",
 	}
 
 	var addedSeries struct {
@@ -640,9 +753,33 @@ func configureSonarr(qbtPort int) (int, error) {
 	return addedSeries.ID, nil
 }
 
+// fetchSonarrS01E01 returns the Sonarr episode ID for Season 1, Episode 1 of the given series.
+func fetchSonarrS01E01(seriesID int) (int, error) {
+	c := newArrClient(sonarrBase, sonarrAPIKey)
+
+	var episodes []struct {
+		ID            int `json:"id"`
+		SeasonNumber  int `json:"seasonNumber"`
+		EpisodeNumber int `json:"episodeNumber"`
+	}
+
+	if err := c.get(fmt.Sprintf("/api/v3/episode?seriesId=%d&seasonNumber=1", seriesID), &episodes); err != nil {
+		return 0, fmt.Errorf("fetch episodes for series %d: %w", seriesID, err)
+	}
+
+	for _, ep := range episodes {
+		if ep.SeasonNumber == 1 && ep.EpisodeNumber == 1 {
+			return ep.ID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("S01E01 not found for series %d (got %d episodes in season 1)", seriesID, len(episodes))
+}
+
 // qbtDownloadClientBody returns the JSON body for adding a qBittorrent download client
-// to Radarr or Sonarr. category should be "radarr" or "sonarr".
-func qbtDownloadClientBody(name string, port int, category string) map[string]any {
+// to Radarr or Sonarr. categoryField is the Arr-service-specific field name that holds
+// the qBittorrent category: Radarr uses "category"; Sonarr uses "tvCategory".
+func qbtDownloadClientBody(name string, port int, category, categoryField string) map[string]any {
 	return map[string]any{
 		"name":           name,
 		"enable":         true,
@@ -657,7 +794,7 @@ func qbtDownloadClientBody(name string, port int, category string) map[string]an
 			{"name": "urlBase", "value": ""},
 			{"name": "username", "value": ""},
 			{"name": "password", "value": ""},
-			{"name": "category", "value": category},
+			{"name": categoryField, "value": category},
 			{"name": "initialState", "value": 0},
 			{"name": "sequentialOrder", "value": false},
 			{"name": "firstAndLast", "value": false},
@@ -816,6 +953,8 @@ func TestRadarrHappyPath(t *testing.T) {
 
 	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%040x&dn=%s", 1, releaseTitle)
 
+	var pushResp []json.RawMessage
+
 	require.NoError(t, radarr.post("/api/v3/release/push", map[string]any{
 		"title":       releaseTitle,
 		"downloadUrl": magnet,
@@ -823,7 +962,12 @@ func TestRadarrHappyPath(t *testing.T) {
 		"publishDate": time.Now().UTC().Format(time.RFC3339),
 		"indexer":     "e2e-test",
 		"size":        700_000_000,
-	}, nil), "push release to Radarr")
+		"movieId":     radarrMovieID,
+	}, &pushResp), "push release to Radarr")
+
+	if len(pushResp) > 0 {
+		t.Logf("Radarr push response: %s", pushResp)
+	}
 
 	// Poll until Radarr has imported the movie (hasFile=true).
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
@@ -864,18 +1008,29 @@ func TestRadarrHappyPath(t *testing.T) {
 func TestSonarrHappyPath(t *testing.T) {
 	sonarr := newArrClient(sonarrBase, sonarrAPIKey)
 
-	const releaseTitle = "The.Lone.Ranger.S01E01.1080p.WEB-DL"
+	// Include the year so Sonarr's title parser resolves "The Lone Ranger" with
+	// year 1949 and matches the library entry stored as "The Lone Ranger (1949)".
+	const releaseTitle = "The.Lone.Ranger.1949.S01E01.1080p.WEB-DL"
 
 	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%040x&dn=%s", 2, releaseTitle)
 
+	var sonarrPushResp []json.RawMessage
+
 	require.NoError(t, sonarr.post("/api/v3/release/push", map[string]any{
-		"title":       releaseTitle,
-		"downloadUrl": magnet,
-		"protocol":    "Torrent",
-		"publishDate": time.Now().UTC().Format(time.RFC3339),
-		"indexer":     "e2e-test",
-		"size":        700_000_000,
-	}, nil), "push release to Sonarr")
+		"title":              releaseTitle,
+		"downloadUrl":        magnet,
+		"protocol":           "Torrent",
+		"publishDate":        time.Now().UTC().Format(time.RFC3339),
+		"indexer":            "e2e-test",
+		"size":               700_000_000,
+		"mappedSeriesId":     sonarrSeriesID,
+		"mappedSeasonNumber": 1,
+		"mappedEpisodeIds":   []int{sonarrEpisodeID},
+	}, &sonarrPushResp), "push release to Sonarr")
+
+	if len(sonarrPushResp) > 0 {
+		t.Logf("Sonarr push response: %s", sonarrPushResp)
+	}
 
 	// Poll until Sonarr has at least one imported episode file.
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
