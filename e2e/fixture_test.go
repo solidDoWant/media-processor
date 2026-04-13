@@ -16,12 +16,7 @@ import (
 
 func ensureBBBFixture() (string, error) {
 	// testdata/cache/ is relative to the e2e package directory.
-	// Use an absolute path so that callers (e.g. the qbt stub) can use it as a
-	// symlink target that resolves correctly regardless of working directory.
-	cacheDir, err := filepath.Abs("testdata/cache")
-	if err != nil {
-		return "", fmt.Errorf("abs cache dir: %w", err)
-	}
+	cacheDir := "testdata/cache"
 
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir cache: %w", err)
