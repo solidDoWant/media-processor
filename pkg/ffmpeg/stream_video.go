@@ -612,7 +612,20 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 		vss.encoder.codecContext.SetFlags(vss.encoder.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := vss.encoder.codecContext.Open(vss.encoder.codec, nil); err != nil {
+	var openDict *astiav.Dictionary
+
+	// libx265 has its own logging that writes directly to stderr, bypassing
+	// FFmpeg's av_log callback. Align its log level with the application logger
+	// so that x265 info-level noise is suppressed unless debug logging is on.
+	if enc.Name() == "libx265" {
+		openDict = astiav.NewDictionary()
+
+		if err := openDict.Set("x265-params", "log-level="+x265LogLevel(), astiav.NewDictionaryFlags()); err != nil {
+			return fmt.Errorf("setting x265-params: %w", err)
+		}
+	}
+
+	if err := vss.encoder.codecContext.Open(vss.encoder.codec, openDict); err != nil {
 		return fmt.Errorf("opening video encoder: %w", err)
 	}
 
