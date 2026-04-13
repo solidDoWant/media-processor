@@ -362,7 +362,6 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HW
 			devCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
 			if err != nil {
 				slog.Debug("ffmpeg: VAAPI device context unavailable for crop filter, using SW-only crop", "error", err)
-
 				hwAccel = HWAccelNone
 			} else {
 				// Store so the encoder (set up later in buildStreamStates) reuses it.

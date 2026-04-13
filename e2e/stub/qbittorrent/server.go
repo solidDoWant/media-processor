@@ -134,8 +134,8 @@ func (s *Server) handleTorrentsCategories(w http.ResponseWriter, r *http.Request
 	s.mu.Lock()
 	out := make(map[string]*Category, len(s.categories))
 
-	for k, v := range s.categories {
-		out[k] = v
+	for name, cat := range s.categories {
+		out[name] = cat
 	}
 
 	s.mu.Unlock()
@@ -207,7 +207,10 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 		releaseName = "unknown-release"
 	}
 
-	hash := syntheticHash(releaseName)
+	hash := extractBTIH(magnetStr)
+	if hash == "" {
+		hash = "0000000000000000000000000000000000000000"
+	}
 
 	log.Printf("qbt stub: torrents/add category=%q releaseName=%q hash=%s from %s", category, releaseName, hash, r.RemoteAddr)
 
@@ -256,14 +259,14 @@ func (s *Server) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, h := range strings.Split(r.FormValue("hashes"), "|") {
-		h = strings.TrimSpace(h)
-		if h == "" {
+	for _, hash := range strings.Split(r.FormValue("hashes"), "|") {
+		hash = strings.TrimSpace(hash)
+		if hash == "" {
 			continue
 		}
 
 		s.mu.Lock()
-		delete(s.torrents, h)
+		delete(s.torrents, hash)
 		s.mu.Unlock()
 	}
 
@@ -280,18 +283,21 @@ func extractDN(magnet string) string {
 	return u.Query().Get("dn")
 }
 
-// syntheticHash returns a deterministic 40-hex-char string derived from name.
-// It is used as a stable fake infohash for the stub torrent registry.
-func syntheticHash(name string) string {
-	// FNV-1a 64-bit, zero-padded to 40 hex chars (20 bytes).
-	var h uint64 = 14695981039346656037
-
-	for _, b := range []byte(name) {
-		h ^= uint64(b)
-		h *= 1099511628211
+// extractBTIH parses the xt=urn:btih:<hash> parameter from a magnet URI and
+// returns the hash in lowercase. Returns an empty string if not found.
+func extractBTIH(magnet string) string {
+	u, err := url.Parse(magnet)
+	if err != nil || u.Scheme != "magnet" {
+		return ""
 	}
 
-	return fmt.Sprintf("%040x", h)
+	for _, xt := range u.Query()["xt"] {
+		if after, ok := strings.CutPrefix(xt, "urn:btih:"); ok {
+			return strings.ToLower(after)
+		}
+	}
+
+	return ""
 }
 
 func copyFile(src, dst string) error {

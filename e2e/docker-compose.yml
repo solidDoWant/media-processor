@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:18
+    # Hatchet's workflow engine opens many concurrent database connections; the
+    # default PostgreSQL limit (100) is too low and causes connection errors.
     command: postgres -c 'max_connections=1000'
     hostname: postgres
     environment:
@@ -75,7 +77,9 @@ services:
 
   radarr:
     image: ghcr.io/home-operations/radarr:6.1.2
-    user: "0:0"
+    # Run as the host user so volume-mounted directories are owned by the
+    # current user and can be cleaned up without requiring elevated privileges.
+    user: "1000:1000"
     environment:
       TZ: UTC
       Radarr__Auth__ApiKey: e2e-radarr-api-key
@@ -90,7 +94,9 @@ services:
 
   sonarr:
     image: ghcr.io/home-operations/sonarr:4.0.17
-    user: "0:0"
+    # Run as the host user so volume-mounted directories are owned by the
+    # current user and can be cleaned up without requiring elevated privileges.
+    user: "1000:1000"
     environment:
       TZ: UTC
       Sonarr__Auth__ApiKey: e2e-sonarr-api-key
