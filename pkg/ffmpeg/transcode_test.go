@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -675,6 +676,121 @@ func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
 	require.NotNil(t, videoStream, "output file should contain a video stream")
 	assert.Equal(t, 320, videoStream.WidthPixels, "width should be unchanged without crop")
 	assert.Equal(t, 220, videoStream.HeightPixels, "height should be unchanged without crop")
+}
+
+// TestTranscode_H265_VideoTimestampsValid verifies that transcoding to H.265
+// produces output with correct video timestamps: every video packet must have a
+// valid PTS (not AV_NOPTS_VALUE), display-order PTS values must increase
+// monotonically, and the output frame rate must match the input.
+//
+// This test guards against a regression where enabling multi-threaded decoding
+// caused the H.264 decoder to emit frames with AV_NOPTS_VALUE after the first
+// few frames, producing output with corrupted timestamps.
+func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToAudioCodec(ffmpeg.CodecCopy).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	// Verify frame rate is preserved in the output container metadata.
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var videoStream *ffprobe.StreamInfo
+
+	for i, s := range outputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeVideo {
+			videoStream = &outputInfo.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, videoStream, "output must contain a video stream")
+
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	var inputVideoStream *ffprobe.StreamInfo
+
+	for i, s := range inputInfo.Streams {
+		if s.CodecType == ffprobe.CodecTypeVideo {
+			inputVideoStream = &inputInfo.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, inputVideoStream)
+	assert.InDelta(t, inputVideoStream.FramesPerSecond, videoStream.FramesPerSecond, 0.5,
+		"output frame rate must match input")
+
+	// Open the output file with go-astiav and verify all video packet PTS values.
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(output, nil, nil))
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	videoStreamIndex := -1
+
+	for _, s := range fmtCtx.Streams() {
+		if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			videoStreamIndex = s.Index()
+			break
+		}
+	}
+
+	require.NotEqual(t, -1, videoStreamIndex)
+
+	pkt := astiav.AllocPacket()
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	var packetCount int
+
+	// Collect PTS values to verify they form a valid, monotonic display order.
+	var ptsValues []int64
+
+	for {
+		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			break
+		}
+
+		if pkt.StreamIndex() != videoStreamIndex {
+			pkt.Unref()
+			continue
+		}
+
+		packetCount++
+		pts := pkt.Pts()
+		require.NotEqual(t, astiav.NoPtsValue, pts,
+			"video packet %d must have a valid PTS", packetCount)
+		ptsValues = append(ptsValues, pts)
+		pkt.Unref()
+	}
+
+	assert.Greater(t, packetCount, 0, "output must contain video packets")
+
+	// Sort PTS values into display order and verify monotonic increase.
+	sorted := make([]int64, len(ptsValues))
+	copy(sorted, ptsValues)
+
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	for i := 1; i < len(sorted); i++ {
+		assert.Greater(t, sorted[i], sorted[i-1],
+			"display-order PTS must be strictly increasing: pts[%d]=%d, pts[%d]=%d",
+			i-1, sorted[i-1], i, sorted[i])
+	}
 }
 
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
