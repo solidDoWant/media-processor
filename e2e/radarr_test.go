@@ -45,7 +45,7 @@ func TestRadarrHappyPath(t *testing.T) {
 	// Poll until Radarr has imported the movie (hasFile=true).
 	// The timeout is set generously to accommodate a full H.265 software encode
 	// of the BBB fixture on machines without hardware acceleration.
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Minute)
 	defer cancel()
 
 	err := pollUntil(ctx, 10*time.Second, func() error {
