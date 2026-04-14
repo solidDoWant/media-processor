@@ -184,6 +184,8 @@ func (vss *videoStreamState) allocAndConfigDecoderContext(inStream *astiav.Strea
 	}
 
 	vss.decoder.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
+	vss.decoder.codecContext.SetThreadCount(0)
+	vss.decoder.codecContext.SetThreadType(astiav.ThreadTypeFrame | astiav.ThreadTypeSlice)
 
 	if vss.decoder.hwDevCtx != nil {
 		vss.decoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
@@ -603,6 +605,11 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 	vss.encoder.codecContext.SetColorTransferCharacteristic(vss.decoder.codecContext.ColorTransferCharacteristic())
 	vss.encoder.codecContext.SetColorSpace(vss.decoder.codecContext.ColorSpace())
 	vss.encoder.codecContext.SetColorRange(vss.decoder.codecContext.ColorRange())
+
+	// Auto-detect the number of threads to use
+	vss.encoder.codecContext.SetThreadCount(0)
+	// Support both threading modes
+	vss.encoder.codecContext.SetThreadType(astiav.ThreadTypeFrame | astiav.ThreadTypeSlice)
 
 	if err := vss.configureEncoderPixelFormat(enc, profile, useHW); err != nil {
 		return err
