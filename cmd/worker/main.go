@@ -115,8 +115,11 @@ func run(ctx context.Context) error {
 		MinCropY:              minCropY,
 	}, radarrClient, sonarrClient, webhookClient)
 
+	workerLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "worker")
+
 	worker, err := client.NewWorker(
 		"mediaprocessor-worker",
+		hatchet.WithLogger(&workerLogger),
 		hatchet.WithWorkflows(workflows.NewPlaceholder(client), mediaWorkflow),
 	)
 	if err != nil {

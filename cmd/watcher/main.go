@@ -68,7 +68,10 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("create scan workflow: %w", err)
 	}
 
+	watcherLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "worker")
+
 	worker, err := client.NewWorker("mediaprocessor-watcher",
+		hatchet.WithLogger(&watcherLogger),
 		hatchet.WithWorkflows(scanWorkflow),
 	)
 	if err != nil {

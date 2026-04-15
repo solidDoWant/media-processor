@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/rs/zerolog"
 )
 
 // Setup configures the global slog logger using the provided level string (e.g.
@@ -47,4 +49,16 @@ func ZerologLevel(level string) string {
 	default:
 		return "info"
 	}
+}
+
+// NewZerologLogger returns a zerolog.Logger writing JSON to stderr, configured
+// at the level derived from the given LOG_LEVEL string and tagged with the
+// given service name. Use this to configure Hatchet SDK worker loggers so they
+// respect LOG_LEVEL rather than always defaulting to debug.
+func NewZerologLogger(level, service string) zerolog.Logger {
+	// ZerologLevel always returns a valid zerolog level string, so ParseLevel
+	// cannot fail here.
+	lvl, _ := zerolog.ParseLevel(ZerologLevel(level))
+
+	return zerolog.New(os.Stderr).Level(lvl).With().Timestamp().Str("service", service).Logger()
 }
