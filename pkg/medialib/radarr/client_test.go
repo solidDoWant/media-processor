@@ -34,6 +34,8 @@ type testServerConfig struct {
 	imageType string           // Content-Type for image responses
 	// onCommand is called with the raw command request when /api/v3/command is hit.
 	onCommand func(t *testing.T, r *http.Request)
+	// onParse is called with the raw parse request when /api/v3/parse is hit.
+	onParse func(t *testing.T, r *http.Request)
 }
 
 func newTestServer(t *testing.T, parseResp *parseResponse) *httptest.Server {
@@ -47,6 +49,10 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.onParse != nil {
+			cfg.onParse(t, r)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
 	})
@@ -238,6 +244,29 @@ func TestImportByFilePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetMovieByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
+	var gotTitle, gotPath string
+
+	knownMovie := &radarrlib.Movie{ID: 1, Title: "Big Buck Bunny", Year: 2008}
+
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseResp: &parseResponse{Movie: knownMovie},
+		onParse: func(t *testing.T, r *http.Request) {
+			gotTitle = r.URL.Query().Get("title")
+			gotPath = r.URL.Query().Get("path")
+		},
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	_, err := client.GetMovieByFilePath(t.Context(), "/downloads/Big.Buck.Bunny.2008.1080p.WEB-DL.mp4")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Big.Buck.Bunny.2008.1080p.WEB-DL", gotTitle, "title param should be filename stem")
+	assert.Empty(t, gotPath, "path param must not be sent")
 }
 
 func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {

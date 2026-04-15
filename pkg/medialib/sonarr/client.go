@@ -80,7 +80,11 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 		return medialib.Episode{}, err
 	}
 
-	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Path: path})
+	// Use the title parameter (filename stem) rather than path because Sonarr's
+	// parse endpoint matches path against library paths only, returning 204 No
+	// Content for download paths that haven't been imported yet.
+	base := filepath.Base(path)
+	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Title: strings.TrimSuffix(base, filepath.Ext(base))})
 	if err != nil {
 		return medialib.Episode{}, fmt.Errorf("parse file path: %w", err)
 	}

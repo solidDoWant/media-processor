@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -104,14 +105,6 @@ func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseU
 		return nil, "", nil
 	}
 
-	// Pre-fetch extension check: only accept JPEG and PNG.
-	ext := strings.ToLower(img.Extension)
-	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
-		slog.WarnContext(ctx, "skipping poster candidate: unsupported extension", "extension", img.Extension)
-
-		return nil, "", nil
-	}
-
 	imageURL := img.URL
 	if imageURL == "" {
 		imageURL = img.RemoteURL
@@ -119,6 +112,23 @@ func fetchPosterCandidate(ctx context.Context, img *starr.Image, normalizedBaseU
 
 	if imageURL == "" {
 		slog.WarnContext(ctx, "skipping poster candidate: no URL or RemoteURL set")
+
+		return nil, "", nil
+	}
+
+	// Pre-fetch extension check: only accept JPEG and PNG.
+	// Prefer img.Extension when set; fall back to the URL path extension because
+	// some arr versions (e.g. Radarr's /api/v3/movie/{id}) omit the Extension field.
+	ext := strings.ToLower(img.Extension)
+	if ext == "" {
+		rawU, parseErr := url.Parse(imageURL)
+		if parseErr == nil {
+			ext = strings.ToLower(path.Ext(rawU.Path))
+		}
+	}
+
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+		slog.WarnContext(ctx, "skipping poster candidate: unsupported extension", "extension", ext)
 
 		return nil, "", nil
 	}

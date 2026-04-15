@@ -28,6 +28,8 @@ type sonarrTestServerConfig struct {
 	imageType  string
 	// onCommand is called with the raw command request when /api/v3/command is hit.
 	onCommand func(t *testing.T, r *http.Request)
+	// onParse is called with the raw parse request when /api/v3/parse is hit.
+	onParse func(t *testing.T, r *http.Request)
 }
 
 func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
@@ -41,6 +43,10 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v3/parse", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.onParse != nil {
+			cfg.onParse(t, r)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
 	})
@@ -242,6 +248,39 @@ func TestImportByFilePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetEpisodeByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
+	var gotTitle, gotPath string
+
+	knownParseOutput := &sonarrlib.ParseOutput{
+		Title: "Colonel Bleep",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Colonel Bleep",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 1, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+		parseResp: knownParseOutput,
+		onParse: func(t *testing.T, r *http.Request) {
+			gotTitle = r.URL.Query().Get("title")
+			gotPath = r.URL.Query().Get("path")
+		},
+	})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	_, err := client.GetEpisodeByFilePath(t.Context(), "/downloads/Colonel.Bleep.S01E01.1080p.WEB-DL.mp4")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Colonel.Bleep.S01E01.1080p.WEB-DL", gotTitle, "title param should be filename stem")
+	assert.Empty(t, gotPath, "path param must not be sent")
 }
 
 func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
