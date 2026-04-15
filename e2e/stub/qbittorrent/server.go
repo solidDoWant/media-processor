@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -83,7 +83,7 @@ func New(fixturePath, downloadDir string) (*Server, error) {
 	mux.HandleFunc("POST /api/v2/torrents/delete", s.handleTorrentsDelete)
 	// Catch-all: log unmatched requests and return empty JSON so connection tests pass.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("qbt stub: unmatched request: %s %s (from %s)", r.Method, r.URL.RequestURI(), r.RemoteAddr)
+		slog.Warn("unmatched request", "method", r.Method, "path", r.URL.RequestURI(), "remote", r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, "{}")
 	})
@@ -106,32 +106,32 @@ func (s *Server) Close() {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	log.Printf("qbt stub: login from %s", r.RemoteAddr)
+	slog.Info("login", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "Ok.")
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	log.Printf("qbt stub: version from %s", r.RemoteAddr)
+	slog.Info("version", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "5.0.0")
 }
 
 func (s *Server) handleWebAPIVersion(w http.ResponseWriter, r *http.Request) {
-	log.Printf("qbt stub: webapiVersion from %s", r.RemoteAddr)
+	slog.Info("webapiVersion", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "2.9.3")
 }
 
 func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
-	log.Printf("qbt stub: preferences from %s", r.RemoteAddr)
+	slog.Info("preferences", "remote", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = fmt.Fprint(w, `{"save_path":"/downloads","use_subcategories":false,"use_category_paths_in_manual_mode":true,"dht":true}`)
 }
 
 func (s *Server) handleTorrentsCategories(w http.ResponseWriter, r *http.Request) {
-	log.Printf("qbt stub: torrents/categories from %s", r.RemoteAddr)
+	slog.Info("torrents/categories", "remote", r.RemoteAddr)
 
 	s.mu.Lock()
 	out := make(map[string]*Category, len(s.categories))
@@ -156,7 +156,7 @@ func (s *Server) handleTorrentsCreateCategory(w http.ResponseWriter, r *http.Req
 	name := r.FormValue("category")
 	savePath := r.FormValue("savePath")
 
-	log.Printf("qbt stub: createCategory %q savePath=%q from %s", name, savePath, r.RemoteAddr)
+	slog.Info("createCategory", "name", name, "savePath", savePath, "remote", r.RemoteAddr)
 
 	if name == "" {
 		http.Error(w, "category name required", http.StatusBadRequest)
@@ -185,7 +185,7 @@ func (s *Server) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Unlock()
 
-	log.Printf("qbt stub: torrents/info (query=%s) → %d torrents from %s", r.URL.RawQuery, len(list), r.RemoteAddr)
+	slog.Info("torrents/info", "query", r.URL.RawQuery, "count", len(list), "remote", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(list)
@@ -214,7 +214,7 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 		hash = "0000000000000000000000000000000000000000"
 	}
 
-	log.Printf("qbt stub: torrents/add category=%q releaseName=%q hash=%s from %s", category, releaseName, hash, r.RemoteAddr)
+	slog.Info("torrents/add", "category", category, "releaseName", releaseName, "hash", hash, "remote", r.RemoteAddr)
 
 	destDir := filepath.Join(s.downloadDir, category)
 
