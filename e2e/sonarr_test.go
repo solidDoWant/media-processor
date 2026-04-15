@@ -47,7 +47,11 @@ func TestSonarrHappyPath(t *testing.T) {
 	}, &sonarrPushResp), "push release to Sonarr")
 
 	if len(sonarrPushResp) > 0 {
-		t.Logf("Sonarr push response: %s", sonarrPushResp)
+		if respJSON, marshalErr := json.Marshal(sonarrPushResp); marshalErr != nil {
+			t.Logf("Sonarr push response (failed to marshal as JSON: %v): %+v", marshalErr, sonarrPushResp)
+		} else {
+			t.Logf("Sonarr push response: %s", respJSON)
+		}
 	}
 
 	// Poll until Sonarr has at least one imported episode file.

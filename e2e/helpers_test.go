@@ -77,7 +77,7 @@ type outputFileInfo struct {
 func probeOutputFile(t *testing.T, path string) outputFileInfo {
 	t.Helper()
 
-	cmd := exec.Command("ffprobe",
+	cmd := exec.CommandContext(t.Context(), "ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",

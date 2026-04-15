@@ -324,10 +324,15 @@ func moduleRoot() string {
 // ---- polling helpers ----------------------------------------------------
 
 // pollUntil calls cond repeatedly with interval spacing until it returns nil or
-// ctx is done. It calls cond immediately on the first iteration.
+// ctx is done. It calls cond immediately on the first iteration. When ctx is
+// cancelled or times out, the returned error wraps both ctx.Err() and the last
+// error returned by cond so callers can see what was still failing at deadline.
 func pollUntil(ctx context.Context, interval time.Duration, cond func() error) error {
+	var lastErr error
+
 	for {
-		if err := cond(); err == nil {
+		lastErr = cond()
+		if lastErr == nil {
 			return nil
 		}
 
@@ -335,7 +340,7 @@ func pollUntil(ctx context.Context, interval time.Duration, cond func() error) e
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return fmt.Errorf("%w; last condition error: %w", ctx.Err(), lastErr)
 		case <-timer.C:
 		}
 	}

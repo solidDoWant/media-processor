@@ -39,7 +39,11 @@ func TestRadarrHappyPath(t *testing.T) {
 	}, &pushResp), "push release to Radarr")
 
 	if len(pushResp) > 0 {
-		t.Logf("Radarr push response: %s", pushResp)
+		if respJSON, marshalErr := json.Marshal(pushResp); marshalErr != nil {
+			t.Logf("Radarr push response (failed to marshal as JSON: %v): %+v", marshalErr, pushResp)
+		} else {
+			t.Logf("Radarr push response: %s", respJSON)
+		}
 	}
 
 	// Poll until Radarr has imported the movie (hasFile=true).

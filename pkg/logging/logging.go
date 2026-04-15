@@ -61,7 +61,13 @@ func (b *zerologSlogBridge) Write(p []byte) (int, error) {
 
 	var raw map[string]any
 	if err := json.Unmarshal(bytes.TrimRight(p, "\n"), &raw); err != nil {
-		slog.Warn("zerolog: non-JSON log entry", "service", b.service, "raw", strings.TrimRight(string(p), "\n"))
+		slog.Warn(
+			"zerolog: non-JSON log entry",
+			"service", b.service,
+			"err", err,
+			"raw_len", len(p),
+			"raw", strings.TrimRight(string(p), "\n"),
+		)
 
 		return len(p), nil
 	}
