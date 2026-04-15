@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 
 // ---- BBB fixture --------------------------------------------------------
 
-func ensureBBBFixture() (string, error) {
+func ensureBBBFixture(ctx context.Context) (string, error) {
 	// testdata/cache/ is relative to the e2e package directory.
 	cacheDir := "testdata/cache"
 
@@ -33,7 +34,7 @@ func ensureBBBFixture() (string, error) {
 
 	zipPath := filepath.Join(cacheDir, bbbMP4Name+".zip")
 
-	if err := downloadFile(bbbZipURL, zipPath); err != nil {
+	if err := downloadFile(ctx, bbbZipURL, zipPath); err != nil {
 		return "", fmt.Errorf("download BBB zip: %w", err)
 	}
 
@@ -53,8 +54,13 @@ func ensureBBBFixture() (string, error) {
 	return mp4Path, nil
 }
 
-func downloadFile(rawURL, dest string) error {
-	resp, err := http.Get(rawURL) //nolint:noctx // setup code, no request context needed
+func downloadFile(ctx context.Context, rawURL, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

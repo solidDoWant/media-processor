@@ -119,12 +119,18 @@ func waitForServices(ctx context.Context) error {
 }
 
 func checkHTTP(url string) error {
-	resp, err := http.Get(url) //nolint:noctx // health poll, no caller context
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	resp, err := client.Get(url) //nolint:noctx // health poll, no caller context
 	if err != nil {
 		return err
 	}
 
 	_ = resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("unexpected HTTP status %d", resp.StatusCode)
+	}
 
 	return nil
 }

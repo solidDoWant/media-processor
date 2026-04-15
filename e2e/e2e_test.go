@@ -67,7 +67,12 @@ func run(m *testing.M) error {
 	}
 
 	// 2. Download and cache the Big Buck Bunny fixture.
-	fixturePath, err := ensureBBBFixture()
+	// A 30-minute timeout ensures the suite fails fast on a stalled download
+	// rather than hanging until the global test timeout fires.
+	downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer downloadCancel()
+
+	fixturePath, err := ensureBBBFixture(downloadCtx)
 	if err != nil {
 		return fmt.Errorf("ensureBBBFixture: %w", err)
 	}

@@ -91,7 +91,7 @@ func (b *zerologSlogBridge) Write(p []byte) (int, error) {
 // zerologLevelToSlog maps a zerolog level string to the equivalent slog.Level.
 func zerologLevelToSlog(level string) slog.Level {
 	switch strings.ToLower(level) {
-	case "debug":
+	case "trace", "debug":
 		return slog.LevelDebug
 	case "warn", "warning":
 		return slog.LevelWarn
