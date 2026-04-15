@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,10 +51,22 @@ func composeArgs(subcmd ...string) []string {
 	return append(args, subcmd...)
 }
 
+// composeEnv returns the current process environment with UID and GID set to
+// the running user's values. docker-compose.yml uses ${UID}:${GID} for the
+// container user field; these variables are not exported by bash by default so
+// they must be injected explicitly.
+func composeEnv() []string {
+	return append(os.Environ(),
+		"UID="+strconv.Itoa(os.Getuid()),
+		"GID="+strconv.Itoa(os.Getgid()),
+	)
+}
+
 // composePull pulls all Docker images declared in docker-compose.yml.
 // It uses ctx to enforce a timeout for potentially large image downloads.
 func composePull(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", composeArgs("pull")...)
+	cmd.Env = composeEnv()
 	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
 	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 
@@ -62,6 +75,7 @@ func composePull(ctx context.Context) error {
 
 func composeUp() error {
 	cmd := exec.Command("docker", composeArgs("up", "-d")...)
+	cmd.Env = composeEnv()
 	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
 	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 
@@ -70,6 +84,7 @@ func composeUp() error {
 
 func composeDown() {
 	cmd := exec.Command("docker", composeArgs("down", "-v", "--remove-orphans")...)
+	cmd.Env = composeEnv()
 	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
 	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 	_ = cmd.Run()
@@ -132,6 +147,7 @@ func generateHatchetToken() (string, error) {
 		"psql", "-U", "hatchet", "-d", "hatchet", "-t", "-c",
 		`SELECT id FROM "Tenant" WHERE slug = 'default' LIMIT 1`,
 	)...)
+	tenantCmd.Env = composeEnv()
 
 	tenantOut, err := tenantCmd.Output()
 	if err != nil {
@@ -151,6 +167,7 @@ func generateHatchetToken() (string, error) {
 		"--config", "/hatchet/config",
 		"--tenant-id", tenantID,
 	)...)
+	tokenCmd.Env = composeEnv()
 
 	tokenOut, err := tokenCmd.Output()
 	if err != nil {

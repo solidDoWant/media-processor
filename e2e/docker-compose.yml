@@ -81,7 +81,7 @@ services:
     image: ghcr.io/home-operations/radarr:6.1.2
     # Run as the host user so volume-mounted directories are owned by the
     # current user and can be cleaned up without requiring elevated privileges.
-    user: "1000:1000"
+    user: "${UID}:${GID}"
     environment:
       TZ: UTC
       Radarr__Auth__ApiKey: e2e-radarr-api-key-e2e
@@ -98,7 +98,7 @@ services:
     image: ghcr.io/home-operations/sonarr:4.0.17
     # Run as the host user so volume-mounted directories are owned by the
     # current user and can be cleaned up without requiring elevated privileges.
-    user: "1000:1000"
+    user: "${UID}:${GID}"
     environment:
       TZ: UTC
       Sonarr__Auth__ApiKey: e2e-sonarr-api-key-e2e
