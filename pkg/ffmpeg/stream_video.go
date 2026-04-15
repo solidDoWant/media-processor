@@ -362,6 +362,7 @@ func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HW
 			devCtx, err := astiav.CreateHardwareDeviceContext(profile.deviceType, vss.hardwareDevicePath, nil, 0)
 			if err != nil {
 				slog.Debug("ffmpeg: VAAPI device context unavailable for crop filter, using SW-only crop", "error", err)
+
 				hwAccel = HWAccelNone
 			} else {
 				// Store so the encoder (set up later in buildStreamStates) reuses it.
@@ -604,6 +605,11 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 	vss.encoder.codecContext.SetColorSpace(vss.decoder.codecContext.ColorSpace())
 	vss.encoder.codecContext.SetColorRange(vss.decoder.codecContext.ColorRange())
 
+	// Let the encoder auto-detect thread count. Do NOT set ThreadType here:
+	// libx265 manages threading internally (AV_CODEC_CAP_OTHER_THREADS) and
+	// setting FF_THREAD_FRAME on it breaks PTS propagation.
+	vss.encoder.codecContext.SetThreadCount(0)
+
 	if err := vss.configureEncoderPixelFormat(enc, profile, useHW); err != nil {
 		return err
 	}
@@ -612,7 +618,21 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 		vss.encoder.codecContext.SetFlags(vss.encoder.codecContext.Flags().Add(astiav.CodecContextFlagGlobalHeader))
 	}
 
-	if err := vss.encoder.codecContext.Open(vss.encoder.codec, nil); err != nil {
+	var openDict *astiav.Dictionary
+
+	// libx265 has its own logging that writes directly to stderr, bypassing
+	// FFmpeg's av_log callback. Align its log level with the application logger
+	// so that x265 info-level noise is suppressed unless debug logging is on.
+	if enc.Name() == "libx265" {
+		openDict = astiav.NewDictionary()
+		defer openDict.Free()
+
+		if err := openDict.Set("x265-params", "log-level="+x265LogLevel(), astiav.NewDictionaryFlags()); err != nil {
+			return fmt.Errorf("setting x265-params: %w", err)
+		}
+	}
+
+	if err := vss.encoder.codecContext.Open(vss.encoder.codec, openDict); err != nil {
 		return fmt.Errorf("opening video encoder: %w", err)
 	}
 
@@ -865,6 +885,13 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 			encFrame = vss.encoder.frame
 		}
 	}
+
+	// Clear the decoded picture type so the encoder makes its own I/P/B
+	// decisions. Passing through the decoder's picture type causes x265 to
+	// warn "specified frame type is not compatible with max B-frames" and
+	// may interfere with the encoder's GOP structure. The ffmpeg CLI does
+	// the same via its filter graph, which strips picture type.
+	encFrame.SetPictureType(astiav.PictureTypeNone)
 
 	if err := vss.encoder.codecContext.SendFrame(encFrame); err != nil {
 		return fmt.Errorf("ffmpeg: sending video frame to encoder: %w", err)

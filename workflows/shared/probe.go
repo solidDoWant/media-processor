@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -78,6 +79,8 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return ProbeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
 		}
+
+		slog.WarnContext(ctx, "failed to probe file", "file", filePath, "error", err)
 
 		return ProbeOutput{IsValidMedia: false}, nil
 	}

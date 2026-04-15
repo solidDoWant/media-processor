@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/solidDoWant/media-processor/pkg/logging"
@@ -53,7 +54,11 @@ func run(ctx context.Context, configPath string) error {
 	}
 	defer shutdown()
 
-	client, err := hatchet.NewClient()
+	clientLogger := logging.NewZerologLogger("client")
+
+	client, err := hatchet.NewClient(
+		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
+	)
 	if err != nil {
 		return fmt.Errorf("connect to Hatchet: %w", err)
 	}
@@ -65,7 +70,10 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("create scan workflow: %w", err)
 	}
 
+	watcherLogger := logging.NewZerologLogger("watcher")
+
 	worker, err := client.NewWorker("mediaprocessor-watcher",
+		hatchet.WithLogger(&watcherLogger),
 		hatchet.WithWorkflows(scanWorkflow),
 	)
 	if err != nil {

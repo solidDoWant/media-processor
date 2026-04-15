@@ -43,6 +43,7 @@ media-processor/
 - Test: `make test`
 - Lint: `make lint`
 - Fmt: `make fmt`
+- E2E tests: `make test-e2e` (requires Docker; first run downloads ~700 MB BBB fixture)
 
 ## Dev Tools
 
@@ -69,6 +70,7 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - Separate test cases that require fundamentally different setup into their own test functions.
 - Integration tests that require external services (e.g. a running Hatchet server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
 - Always use `t.Context()` (not `context.Background()`) when a test needs a context. It is automatically cancelled when the test finishes, preventing resource leaks.
+- Loop iteration variable names must be the full singular form of the collection name. For example, use `service` when ranging over `services`, `entry` when ranging over `entries`, `category` when ranging over `categories`. Single-letter names (`s`, `v`, `f`, `k`) and shortened names (`cat` for `category`, `svc` for `service`) are not allowed unless the collection itself uses that short name (e.g. `cat` is fine when ranging over `cats`).
 
 ## Quality Rules
 

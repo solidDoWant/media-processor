@@ -2,6 +2,7 @@ package ffmpeg_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -628,10 +629,10 @@ func TestWithCrop_NarrowsOutputDimensions(t *testing.T) {
 		ToContainer(ffmpeg.ContainerMKV).
 		WithCrop(crop).
 		Build().
-		Run(context.Background())
+		Run(t.Context())
 	require.NoError(t, err)
 
-	info, err := ffprobe.Probe(context.Background(), output)
+	info, err := ffprobe.Probe(t.Context(), output)
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
@@ -657,10 +658,10 @@ func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
 		ToVideoCodec(ffmpeg.CodecH265).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().
-		Run(context.Background())
+		Run(t.Context())
 	require.NoError(t, err)
 
-	info, err := ffprobe.Probe(context.Background(), output)
+	info, err := ffprobe.Probe(t.Context(), output)
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
@@ -675,6 +676,121 @@ func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
 	require.NotNil(t, videoStream, "output file should contain a video stream")
 	assert.Equal(t, 320, videoStream.WidthPixels, "width should be unchanged without crop")
 	assert.Equal(t, 220, videoStream.HeightPixels, "height should be unchanged without crop")
+}
+
+// TestTranscode_H265_VideoTimestampsValid verifies that transcoding to H.265
+// produces output with correct video timestamps: every video packet must have a
+// valid PTS (not AV_NOPTS_VALUE), packet PTS values must not be duplicated,
+// and the output frame rate must match the input.
+//
+// This test guards against a regression where enabling multi-threaded decoding
+// caused the H.264 decoder to emit frames with AV_NOPTS_VALUE after the first
+// few frames, producing output with corrupted timestamps.
+func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToAudioCodec(ffmpeg.CodecCopy).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	// Verify frame rate is preserved in the output container metadata.
+	outputInfo, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var videoStream *ffprobe.StreamInfo
+
+	for i, stream := range outputInfo.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
+			videoStream = &outputInfo.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, videoStream, "output must contain a video stream")
+
+	inputInfo, err := ffprobe.Probe(t.Context(), testVideoPath)
+	require.NoError(t, err)
+
+	var inputVideoStream *ffprobe.StreamInfo
+
+	for i, stream := range inputInfo.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
+			inputVideoStream = &inputInfo.Streams[i]
+			break
+		}
+	}
+
+	require.NotNil(t, inputVideoStream)
+	assert.InDelta(t, inputVideoStream.FramesPerSecond, videoStream.FramesPerSecond, 0.5,
+		"output frame rate must match input")
+
+	// Open the output file with go-astiav and verify all video packet PTS values.
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(output, nil, nil))
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	videoStreamIndex := -1
+
+	for _, stream := range fmtCtx.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			videoStreamIndex = stream.Index()
+			break
+		}
+	}
+
+	require.NotEqual(t, -1, videoStreamIndex)
+
+	pkt := astiav.AllocPacket()
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	var packetCount int
+
+	// Collect PTS values to verify they form a valid, monotonic display order.
+	var ptsValues []int64
+
+	for {
+		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			require.True(t, errors.Is(err, astiav.ErrEof), "unexpected ReadFrame error: %v", err)
+
+			break
+		}
+
+		if pkt.StreamIndex() != videoStreamIndex {
+			pkt.Unref()
+			continue
+		}
+
+		packetCount++
+		pts := pkt.Pts()
+		require.NotEqual(t, astiav.NoPtsValue, pts,
+			"video packet %d must have a valid PTS", packetCount)
+		ptsValues = append(ptsValues, pts)
+
+		pkt.Unref()
+	}
+
+	assert.Greater(t, packetCount, 0, "output must contain video packets")
+
+	// Verify that no two video packets share a PTS value.
+	seen := make(map[int64]bool, len(ptsValues))
+
+	for i, pts := range ptsValues {
+		assert.False(t, seen[pts],
+			"duplicate PTS value %d at packet %d", pts, i)
+		seen[pts] = true
+	}
 }
 
 // TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
+	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/solidDoWant/media-processor/pkg/logging"
@@ -86,7 +87,11 @@ func run(ctx context.Context) error {
 		URL: os.Getenv("WEBHOOK_URL"),
 	}
 
-	client, err := hatchet.NewClient()
+	clientLogger := logging.NewZerologLogger("client")
+
+	client, err := hatchet.NewClient(
+		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
+	)
 	if err != nil {
 		return fmt.Errorf("create Hatchet client: %w", err)
 	}
@@ -112,8 +117,11 @@ func run(ctx context.Context) error {
 		MinCropY:              minCropY,
 	}, radarrClient, sonarrClient, webhookClient)
 
+	workerLogger := logging.NewZerologLogger("worker")
+
 	worker, err := client.NewWorker(
 		"mediaprocessor-worker",
+		hatchet.WithLogger(&workerLogger),
 		hatchet.WithWorkflows(workflows.NewPlaceholder(client), mediaWorkflow),
 	)
 	if err != nil {

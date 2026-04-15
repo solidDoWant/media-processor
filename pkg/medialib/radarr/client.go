@@ -99,13 +99,19 @@ func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.
 
 // parseFilePath calls Radarr's /api/v3/parse endpoint to identify a movie
 // from a file path. Returns nil if Radarr cannot identify the movie.
+//
+// The title parameter (filename stem without extension) is used instead of the
+// path parameter because Radarr's parse endpoint matches path against library
+// paths only, returning 204 No Content for download paths that haven't been
+// imported yet.
 func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Movie, error) {
 	var output struct {
 		Movie *radarrlib.Movie `json:"movie"`
 	}
 
+	base := filepath.Base(path)
 	q := make(url.Values)
-	q.Set("path", path)
+	q.Set("title", strings.TrimSuffix(base, filepath.Ext(base)))
 
 	req := starr.Request{URI: radarrlib.APIver + "/parse", Query: q}
 	if err := c.radarr.GetInto(ctx, req, &output); err != nil {

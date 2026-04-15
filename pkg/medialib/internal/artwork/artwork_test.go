@@ -76,7 +76,17 @@ func TestFetchPosterImage(t *testing.T) {
 			wantMime:  "",
 		},
 		{
-			name: "empty extension returns nil",
+			name: "empty Extension field falls back to URL path extension",
+			images: func(baseURL string) []*starr.Image {
+				// Radarr's /api/v3/movie/{id} omits the Extension field but includes
+				// a URL with a query string: /MediaCover/1/poster.jpg?lastWrite=...
+				return []*starr.Image{{CoverType: "poster", Extension: "", URL: "/MediaCover/1/poster.jpg?lastWrite=12345"}}
+			},
+			wantBytes: jpegBytes,
+			wantMime:  "image/jpeg",
+		},
+		{
+			name: "empty Extension field with extensionless URL returns nil",
 			images: func(baseURL string) []*starr.Image {
 				return []*starr.Image{{CoverType: "poster", Extension: "", URL: "/MediaCover/1/poster"}}
 			},
