@@ -45,21 +45,23 @@ func Setup(level string) {
 // zerolog is configured at TraceLevel so all entries pass through; slog applies
 // the active level filter inside the bridge.
 func NewZerologLogger(service string) zerolog.Logger {
-	return zerolog.New(&zerologSlogBridge{}).Level(zerolog.TraceLevel).With().Str("service", service).Logger()
+	return zerolog.New(&zerologSlogBridge{service: service}).Level(zerolog.TraceLevel).With().Str("service", service).Logger()
 }
 
 // zerologSlogBridge is an io.Writer for zerolog that re-emits each log entry
 // through the default slog handler. zerolog guarantees that Write is called
 // exactly once per complete log entry, so the bridge can parse and forward
 // without buffering.
-type zerologSlogBridge struct{}
+type zerologSlogBridge struct {
+	service string
+}
 
 func (b *zerologSlogBridge) Write(p []byte) (int, error) {
 	ctx := context.TODO()
 
 	var raw map[string]any
 	if err := json.Unmarshal(bytes.TrimRight(p, "\n"), &raw); err != nil {
-		slog.Warn("hatchet: non-JSON log entry", "raw", strings.TrimRight(string(p), "\n"))
+		slog.Warn("zerolog: non-JSON log entry", "service", b.service, "raw", strings.TrimRight(string(p), "\n"))
 
 		return len(p), nil
 	}

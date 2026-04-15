@@ -80,13 +80,4 @@ func TestRadarrHappyPath(t *testing.T) {
 	assert.Contains(t, info.formatName, "matroska", "output container should be Matroska")
 	assert.Equal(t, "hevc", info.videoCodec, "output video codec should be H.265")
 	assert.Greater(t, info.durationSec, 300.0, "output duration should be at least 5 minutes")
-
-	// debugging: copy the output file to /workspace/media-processor for manual inspection after the test completes
-	debugDest := filepath.Join("/workspace/media-processor", "radarr_happy_path_output.mkv")
-	if err := copyFile(mkvPath, debugDest); err != nil {
-		t.Logf("failed to copy output file for debugging: %v", err)
-		return
-	}
-
-	t.Logf("copied output file to %s for debugging", debugDest)
 }

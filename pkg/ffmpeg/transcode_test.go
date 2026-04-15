@@ -680,8 +680,8 @@ func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
 
 // TestTranscode_H265_VideoTimestampsValid verifies that transcoding to H.265
 // produces output with correct video timestamps: every video packet must have a
-// valid PTS (not AV_NOPTS_VALUE), display-order PTS values must increase
-// monotonically, and the output frame rate must match the input.
+// valid PTS (not AV_NOPTS_VALUE), packet PTS values must not be duplicated,
+// and the output frame rate must match the input.
 //
 // This test guards against a regression where enabling multi-threaded decoding
 // caused the H.264 decoder to emit frames with AV_NOPTS_VALUE after the first
