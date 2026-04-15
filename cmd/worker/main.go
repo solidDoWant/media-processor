@@ -87,7 +87,7 @@ func run(ctx context.Context) error {
 		URL: os.Getenv("WEBHOOK_URL"),
 	}
 
-	clientLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "client")
+	clientLogger := logging.NewZerologLogger("client")
 
 	client, err := hatchet.NewClient(
 		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
@@ -117,7 +117,7 @@ func run(ctx context.Context) error {
 		MinCropY:              minCropY,
 	}, radarrClient, sonarrClient, webhookClient)
 
-	workerLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "worker")
+	workerLogger := logging.NewZerologLogger("worker")
 
 	worker, err := client.NewWorker(
 		"mediaprocessor-worker",

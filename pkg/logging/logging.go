@@ -38,32 +38,14 @@ func Setup(level string) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
 }
 
-// ZerologLevel returns a zerolog-compatible level string for the given
-// LOG_LEVEL value. This is useful for configuring third-party libraries (like
-// the Hatchet SDK) that use zerolog internally.
-func ZerologLevel(level string) string {
-	switch strings.ToLower(level) {
-	case "debug":
-		return "debug"
-	case "warn", "warning":
-		return "warn"
-	case "error":
-		return "error"
-	default:
-		return "info"
-	}
-}
-
 // NewZerologLogger returns a zerolog.Logger that routes every entry through the
 // default slog handler via zerologSlogBridge. Output is therefore formatted and
 // levelled consistently with the rest of the application. The service name is
 // attached as a "service" attribute on every entry.
-func NewZerologLogger(level, service string) zerolog.Logger {
-	// ZerologLevel always returns a valid zerolog level string, so ParseLevel
-	// cannot fail here.
-	lvl, _ := zerolog.ParseLevel(ZerologLevel(level))
-
-	return zerolog.New(&zerologSlogBridge{}).Level(lvl).With().Str("service", service).Logger()
+// zerolog is configured at TraceLevel so all entries pass through; slog applies
+// the active level filter inside the bridge.
+func NewZerologLogger(service string) zerolog.Logger {
+	return zerolog.New(&zerologSlogBridge{}).Level(zerolog.TraceLevel).With().Str("service", service).Logger()
 }
 
 // zerologSlogBridge is an io.Writer for zerolog that re-emits each log entry

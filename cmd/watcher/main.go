@@ -54,7 +54,7 @@ func run(ctx context.Context, configPath string) error {
 	}
 	defer shutdown()
 
-	clientLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "client")
+	clientLogger := logging.NewZerologLogger("client")
 
 	client, err := hatchet.NewClient(
 		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
@@ -70,7 +70,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("create scan workflow: %w", err)
 	}
 
-	watcherLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "worker")
+	watcherLogger := logging.NewZerologLogger("worker")
 
 	worker, err := client.NewWorker("mediaprocessor-watcher",
 		hatchet.WithLogger(&watcherLogger),

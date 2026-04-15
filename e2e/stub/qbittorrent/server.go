@@ -87,7 +87,7 @@ func New(fixturePath, downloadDir string) (*Server, error) {
 	mux.HandleFunc("POST /api/v2/torrents/delete", s.handleTorrentsDelete)
 	// Catch-all: log unmatched requests and return empty JSON so connection tests pass.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		logger.Warn("unmatched request", "method", r.Method, "path", r.URL.RequestURI(), "remote", r.RemoteAddr)
+		logger.Debug("unmatched request", "method", r.Method, "path", r.URL.RequestURI(), "remote", r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, "{}")
 	})
@@ -110,32 +110,32 @@ func (s *Server) Close() {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	logger.Info("login", "remote", r.RemoteAddr)
+	logger.Debug("login", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "Ok.")
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	logger.Info("version", "remote", r.RemoteAddr)
+	logger.Debug("version", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "5.0.0")
 }
 
 func (s *Server) handleWebAPIVersion(w http.ResponseWriter, r *http.Request) {
-	logger.Info("webapiVersion", "remote", r.RemoteAddr)
+	logger.Debug("webapiVersion", "remote", r.RemoteAddr)
 
 	_, _ = fmt.Fprint(w, "2.9.3")
 }
 
 func (s *Server) handlePreferences(w http.ResponseWriter, r *http.Request) {
-	logger.Info("preferences", "remote", r.RemoteAddr)
+	logger.Debug("preferences", "remote", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = fmt.Fprint(w, `{"save_path":"/downloads","use_subcategories":false,"use_category_paths_in_manual_mode":true,"dht":true}`)
 }
 
 func (s *Server) handleTorrentsCategories(w http.ResponseWriter, r *http.Request) {
-	logger.Info("torrents/categories", "remote", r.RemoteAddr)
+	logger.Debug("torrents/categories", "remote", r.RemoteAddr)
 
 	s.mu.Lock()
 	out := make(map[string]*Category, len(s.categories))
@@ -160,7 +160,7 @@ func (s *Server) handleTorrentsCreateCategory(w http.ResponseWriter, r *http.Req
 	name := r.FormValue("category")
 	savePath := r.FormValue("savePath")
 
-	logger.Info("createCategory", "name", name, "savePath", savePath, "remote", r.RemoteAddr)
+	logger.Debug("createCategory", "name", name, "savePath", savePath, "remote", r.RemoteAddr)
 
 	if name == "" {
 		http.Error(w, "category name required", http.StatusBadRequest)
@@ -189,7 +189,7 @@ func (s *Server) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Unlock()
 
-	logger.Info("torrents/info", "query", r.URL.RawQuery, "count", len(list), "remote", r.RemoteAddr)
+	logger.Debug("torrents/info", "query", r.URL.RawQuery, "count", len(list), "remote", r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(list)
@@ -218,7 +218,7 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 		hash = "0000000000000000000000000000000000000000"
 	}
 
-	logger.Info("torrents/add", "category", category, "releaseName", releaseName, "hash", hash, "remote", r.RemoteAddr)
+	logger.Debug("torrents/add", "category", category, "releaseName", releaseName, "hash", hash, "remote", r.RemoteAddr)
 
 	destDir := filepath.Join(s.downloadDir, category)
 
