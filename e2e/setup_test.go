@@ -205,8 +205,9 @@ func startProcesses() error {
 	// Start watcher subprocess.
 	watcherCmd = exec.Command(watcherBin, "--config", watcherCfg)
 	watcherCmd.Env = baseEnv
-	watcherCmd.Stdout = newSlogWriter(slog.LevelInfo, "watcher")
-	watcherCmd.Stderr = newSlogWriter(slog.LevelWarn, "watcher")
+	// These already use slog so write directly to stdout/stderr to avoid double encapsulation
+	watcherCmd.Stdout = os.Stdout
+	watcherCmd.Stderr = os.Stderr
 
 	if err := watcherCmd.Start(); err != nil {
 		return fmt.Errorf("start watcher: %w", err)
@@ -230,8 +231,8 @@ func startProcesses() error {
 
 	workerCmd = exec.Command(workerBin)
 	workerCmd.Env = workerEnv
-	workerCmd.Stdout = newSlogWriter(slog.LevelInfo, "worker")
-	workerCmd.Stderr = newSlogWriter(slog.LevelWarn, "worker")
+	workerCmd.Stdout = os.Stdout
+	workerCmd.Stderr = os.Stderr
 
 	if err := workerCmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)

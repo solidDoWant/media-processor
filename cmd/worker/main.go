@@ -87,8 +87,10 @@ func run(ctx context.Context) error {
 		URL: os.Getenv("WEBHOOK_URL"),
 	}
 
+	clientLogger := logging.NewZerologLogger(os.Getenv("LOG_LEVEL"), "client")
+
 	client, err := hatchet.NewClient(
-		v0Client.WithLogLevel(logging.ZerologLevel(os.Getenv("LOG_LEVEL"))), //nolint:staticcheck // no non-deprecated API for client log level in SDK v0.83
+		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
 	)
 	if err != nil {
 		return fmt.Errorf("create Hatchet client: %w", err)

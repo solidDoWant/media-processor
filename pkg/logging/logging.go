@@ -2,6 +2,9 @@
 package logging
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -51,14 +54,68 @@ func ZerologLevel(level string) string {
 	}
 }
 
-// NewZerologLogger returns a zerolog.Logger writing JSON to stderr, configured
-// at the level derived from the given LOG_LEVEL string and tagged with the
-// given service name. Use this to configure Hatchet SDK worker loggers so they
-// respect LOG_LEVEL rather than always defaulting to debug.
+// NewZerologLogger returns a zerolog.Logger that routes every entry through the
+// default slog handler via zerologSlogBridge. Output is therefore formatted and
+// levelled consistently with the rest of the application. The service name is
+// attached as a "service" attribute on every entry.
 func NewZerologLogger(level, service string) zerolog.Logger {
 	// ZerologLevel always returns a valid zerolog level string, so ParseLevel
 	// cannot fail here.
 	lvl, _ := zerolog.ParseLevel(ZerologLevel(level))
 
-	return zerolog.New(os.Stderr).Level(lvl).With().Timestamp().Str("service", service).Logger()
+	return zerolog.New(&zerologSlogBridge{}).Level(lvl).With().Str("service", service).Logger()
+}
+
+// zerologSlogBridge is an io.Writer for zerolog that re-emits each log entry
+// through the default slog handler. zerolog guarantees that Write is called
+// exactly once per complete log entry, so the bridge can parse and forward
+// without buffering.
+type zerologSlogBridge struct{}
+
+func (b *zerologSlogBridge) Write(p []byte) (int, error) {
+	ctx := context.TODO()
+
+	var raw map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(p, "\n"), &raw); err != nil {
+		slog.Warn("hatchet: non-JSON log entry", "raw", strings.TrimRight(string(p), "\n"))
+
+		return len(p), nil
+	}
+
+	lvlStr, _ := raw["level"].(string)
+	lvl := zerologLevelToSlog(lvlStr)
+
+	if !slog.Default().Enabled(ctx, lvl) {
+		return len(p), nil
+	}
+
+	msg, _ := raw["message"].(string)
+
+	attrs := make([]any, 0, len(raw)*2)
+
+	for k, v := range raw {
+		if k == "level" || k == "message" || k == "time" {
+			continue
+		}
+
+		attrs = append(attrs, k, v)
+	}
+
+	slog.Log(ctx, lvl, msg, attrs...)
+
+	return len(p), nil
+}
+
+// zerologLevelToSlog maps a zerolog level string to the equivalent slog.Level.
+func zerologLevelToSlog(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error", "fatal", "panic":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
