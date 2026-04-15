@@ -28,7 +28,7 @@ func TestRadarrHappyPath(t *testing.T) {
 
 	var pushResp []json.RawMessage
 
-	require.NoError(t, radarr.post("/api/v3/release/push", map[string]any{
+	require.NoError(t, radarr.post(t.Context(), "/api/v3/release/push", map[string]any{
 		"title":       releaseTitle,
 		"downloadUrl": magnet,
 		"protocol":    "Torrent",
@@ -53,7 +53,7 @@ func TestRadarrHappyPath(t *testing.T) {
 			HasFile bool `json:"hasFile"`
 		}
 
-		if err := radarr.get(fmt.Sprintf("/api/v3/movie/%d", radarrMovieID), &movie); err != nil {
+		if err := radarr.get(ctx, fmt.Sprintf("/api/v3/movie/%d", radarrMovieID), &movie); err != nil {
 			return err
 		}
 
@@ -69,7 +69,7 @@ func TestRadarrHappyPath(t *testing.T) {
 	sourceMp4 := filepath.Join(downloadsDir, "radarr", releaseTitle+".mp4")
 	_, statErr := os.Stat(sourceMp4)
 
-	assert.True(t, os.IsNotExist(statErr), "source .mp4 should have been deleted after import")
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "source .mp4 should have been deleted after import")
 
 	// .mkv must exist somewhere under the Radarr library directory.
 	mkvPath := findMKV(t, filepath.Join(processedDir, "radarr-library"))

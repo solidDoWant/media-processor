@@ -331,10 +331,12 @@ func pollUntil(ctx context.Context, interval time.Duration, cond func() error) e
 			return nil
 		}
 
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(interval):
+		case <-timer.C:
 		}
 	}
 }

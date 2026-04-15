@@ -274,16 +274,16 @@ func (s *Server) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.Lock()
 	for _, hash := range strings.Split(r.FormValue("hashes"), "|") {
 		hash = strings.TrimSpace(hash)
 		if hash == "" {
 			continue
 		}
 
-		s.mu.Lock()
 		delete(s.torrents, hash)
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
 }

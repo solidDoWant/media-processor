@@ -34,7 +34,7 @@ func TestSonarrHappyPath(t *testing.T) {
 
 	var sonarrPushResp []json.RawMessage
 
-	require.NoError(t, sonarr.post("/api/v3/release/push", map[string]any{
+	require.NoError(t, sonarr.post(t.Context(), "/api/v3/release/push", map[string]any{
 		"title":              releaseTitle,
 		"downloadUrl":        magnet,
 		"protocol":           "Torrent",
@@ -61,7 +61,7 @@ func TestSonarrHappyPath(t *testing.T) {
 			ID int `json:"id"`
 		}
 
-		if err := sonarr.get(fmt.Sprintf("/api/v3/episodefile?seriesId=%d", sonarrSeriesID), &files); err != nil {
+		if err := sonarr.get(ctx, fmt.Sprintf("/api/v3/episodefile?seriesId=%d", sonarrSeriesID), &files); err != nil {
 			return err
 		}
 
@@ -77,7 +77,7 @@ func TestSonarrHappyPath(t *testing.T) {
 	sourceMp4 := filepath.Join(downloadsDir, "sonarr", releaseTitle+".mp4")
 	_, statErr := os.Stat(sourceMp4)
 
-	assert.True(t, os.IsNotExist(statErr), "source .mp4 should have been deleted after import")
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "source .mp4 should have been deleted after import")
 
 	// .mkv must exist somewhere under the Sonarr library directory.
 	mkvPath := findMKV(t, filepath.Join(processedDir, "sonarr-library"))

@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,8 +25,8 @@ func newArrClient(base, apiKey string) *arrClient {
 	return &arrClient{base: base, apiKey: apiKey, httpClient: &http.Client{Timeout: 30 * time.Second}}
 }
 
-func (c *arrClient) get(path string, out any) error {
-	req, err := http.NewRequest(http.MethodGet, c.base+path, nil)
+func (c *arrClient) get(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return err
 	}
@@ -52,13 +53,13 @@ func (c *arrClient) get(path string, out any) error {
 	return nil
 }
 
-func (c *arrClient) post(path string, body any, out any) error {
+func (c *arrClient) post(ctx context.Context, path string, body any, out any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.base+path, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -88,11 +89,11 @@ func (c *arrClient) post(path string, body any, out any) error {
 
 // configureRadarr adds the root folder, download client, and Big Buck Bunny (TMDB 10378).
 // Returns the Radarr movie ID.
-func configureRadarr(qbtPort int) (int, error) {
+func configureRadarr(ctx context.Context, qbtPort int) (int, error) {
 	c := newArrClient(radarrBase, radarrAPIKey)
 
 	// Root folder.
-	if err := c.post("/api/v3/rootfolder", map[string]any{"path": "/movies"}, nil); err != nil {
+	if err := c.post(ctx, "/api/v3/rootfolder", map[string]any{"path": "/movies"}, nil); err != nil {
 		return 0, fmt.Errorf("add root folder: %w", err)
 	}
 
@@ -102,7 +103,7 @@ func configureRadarr(qbtPort int) (int, error) {
 		Name string `json:"name"`
 	}
 
-	if err := c.get("/api/v3/qualityprofile", &profiles); err != nil {
+	if err := c.get(ctx, "/api/v3/qualityprofile", &profiles); err != nil {
 		return 0, fmt.Errorf("get quality profiles: %w", err)
 	}
 
@@ -115,14 +116,14 @@ func configureRadarr(qbtPort int) (int, error) {
 	// Download client (qBittorrent stub).
 	dcBody := qbtDownloadClientBody("e2e-radarr-qbt", qbtPort, "radarr", "category")
 
-	if err := c.post("/api/v3/downloadclient", dcBody, nil); err != nil {
+	if err := c.post(ctx, "/api/v3/downloadclient", dcBody, nil); err != nil {
 		return 0, fmt.Errorf("add download client: %w", err)
 	}
 
 	// Look up Big Buck Bunny by TMDB ID.
 	var lookupResults []json.RawMessage
 
-	if err := c.get("/api/v3/movie/lookup?term=tmdb:10378", &lookupResults); err != nil {
+	if err := c.get(ctx, "/api/v3/movie/lookup?term=tmdb:10378", &lookupResults); err != nil {
 		return 0, fmt.Errorf("lookup movie tmdb:10378: %w", err)
 	}
 
@@ -146,7 +147,7 @@ func configureRadarr(qbtPort int) (int, error) {
 		ID int `json:"id"`
 	}
 
-	if err := c.post("/api/v3/movie", lookupMovie, &addedMovie); err != nil {
+	if err := c.post(ctx, "/api/v3/movie", lookupMovie, &addedMovie); err != nil {
 		return 0, fmt.Errorf("add movie: %w", err)
 	}
 
@@ -162,11 +163,11 @@ func configureRadarr(qbtPort int) (int, error) {
 // and has 6-minute episodes — short enough that the BBB fixture (9:56) passes Sonarr's
 // EpisodeFileIsNotSampleSpecification (50% of episode runtime = 3 min).
 // Returns the Sonarr series ID.
-func configureSonarr(qbtPort int) (int, error) {
+func configureSonarr(ctx context.Context, qbtPort int) (int, error) {
 	c := newArrClient(sonarrBase, sonarrAPIKey)
 
 	// Root folder.
-	if err := c.post("/api/v3/rootfolder", map[string]any{"path": "/tv"}, nil); err != nil {
+	if err := c.post(ctx, "/api/v3/rootfolder", map[string]any{"path": "/tv"}, nil); err != nil {
 		return 0, fmt.Errorf("add root folder: %w", err)
 	}
 
@@ -176,7 +177,7 @@ func configureSonarr(qbtPort int) (int, error) {
 		Name string `json:"name"`
 	}
 
-	if err := c.get("/api/v3/qualityprofile", &profiles); err != nil {
+	if err := c.get(ctx, "/api/v3/qualityprofile", &profiles); err != nil {
 		return 0, fmt.Errorf("get quality profiles: %w", err)
 	}
 
@@ -191,14 +192,14 @@ func configureSonarr(qbtPort int) (int, error) {
 	// field name for the TV download category.
 	dcBody := qbtDownloadClientBody("e2e-sonarr-qbt", qbtPort, "sonarr", "tvCategory")
 
-	if err := c.post("/api/v3/downloadclient", dcBody, nil); err != nil {
+	if err := c.post(ctx, "/api/v3/downloadclient", dcBody, nil); err != nil {
 		return 0, fmt.Errorf("add download client: %w", err)
 	}
 
 	// Look up Colonel Bleep by TVDB ID.
 	var lookupResults []json.RawMessage
 
-	if err := c.get("/api/v3/series/lookup?term=tvdb:254376", &lookupResults); err != nil {
+	if err := c.get(ctx, "/api/v3/series/lookup?term=tvdb:254376", &lookupResults); err != nil {
 		return 0, fmt.Errorf("lookup series tvdb:254376: %w", err)
 	}
 
@@ -228,7 +229,7 @@ func configureSonarr(qbtPort int) (int, error) {
 		Title string `json:"title"`
 	}
 
-	if err := c.post("/api/v3/series", lookupSeries, &addedSeries); err != nil {
+	if err := c.post(ctx, "/api/v3/series", lookupSeries, &addedSeries); err != nil {
 		return 0, fmt.Errorf("add series: %w", err)
 	}
 
@@ -242,7 +243,7 @@ func configureSonarr(qbtPort int) (int, error) {
 }
 
 // fetchSonarrS01E01 returns the Sonarr episode ID for Season 1, Episode 1 of the given series.
-func fetchSonarrS01E01(seriesID int) (int, error) {
+func fetchSonarrS01E01(ctx context.Context, seriesID int) (int, error) {
 	c := newArrClient(sonarrBase, sonarrAPIKey)
 
 	var episodes []struct {
@@ -251,7 +252,7 @@ func fetchSonarrS01E01(seriesID int) (int, error) {
 		EpisodeNumber int `json:"episodeNumber"`
 	}
 
-	if err := c.get(fmt.Sprintf("/api/v3/episode?seriesId=%d&seasonNumber=1", seriesID), &episodes); err != nil {
+	if err := c.get(ctx, fmt.Sprintf("/api/v3/episode?seriesId=%d&seasonNumber=1", seriesID), &episodes); err != nil {
 		return 0, fmt.Errorf("fetch episodes for series %d: %w", seriesID, err)
 	}
 

@@ -123,7 +123,7 @@ func run(m *testing.M) error {
 	}
 
 	// 8. Configure Radarr (root folder, quality profile, download client, movie).
-	radarrMovieID, err = configureRadarr(qbtStub.Port())
+	radarrMovieID, err = configureRadarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureRadarr: %w", err)
 	}
@@ -131,7 +131,7 @@ func run(m *testing.M) error {
 	log.Info("Radarr configured", "movieID", radarrMovieID)
 
 	// 9. Configure Sonarr (root folder, quality profile, download client, series).
-	sonarrSeriesID, err = configureSonarr(qbtStub.Port())
+	sonarrSeriesID, err = configureSonarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureSonarr: %w", err)
 	}
@@ -139,7 +139,7 @@ func run(m *testing.M) error {
 	log.Info("Sonarr configured", "seriesID", sonarrSeriesID)
 
 	// Fetch S01E01 episode ID for use in the Sonarr release push.
-	sonarrEpisodeID, err = fetchSonarrS01E01(sonarrSeriesID)
+	sonarrEpisodeID, err = fetchSonarrS01E01(context.Background(), sonarrSeriesID)
 	if err != nil {
 		return fmt.Errorf("fetchSonarrS01E01: %w", err)
 	}

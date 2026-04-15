@@ -629,10 +629,10 @@ func TestWithCrop_NarrowsOutputDimensions(t *testing.T) {
 		ToContainer(ffmpeg.ContainerMKV).
 		WithCrop(crop).
 		Build().
-		Run(context.Background())
+		Run(t.Context())
 	require.NoError(t, err)
 
-	info, err := ffprobe.Probe(context.Background(), output)
+	info, err := ffprobe.Probe(t.Context(), output)
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
@@ -658,10 +658,10 @@ func TestWithoutCrop_DimensionsUnchanged(t *testing.T) {
 		ToVideoCodec(ffmpeg.CodecH265).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().
-		Run(context.Background())
+		Run(t.Context())
 	require.NoError(t, err)
 
-	info, err := ffprobe.Probe(context.Background(), output)
+	info, err := ffprobe.Probe(t.Context(), output)
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
