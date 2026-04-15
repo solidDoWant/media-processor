@@ -2,6 +2,7 @@ package ffmpeg_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -703,8 +704,8 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	var videoStream *ffprobe.StreamInfo
 
-	for i, s := range outputInfo.Streams {
-		if s.CodecType == ffprobe.CodecTypeVideo {
+	for i, stream := range outputInfo.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
 			videoStream = &outputInfo.Streams[i]
 			break
 		}
@@ -717,8 +718,8 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	var inputVideoStream *ffprobe.StreamInfo
 
-	for i, s := range inputInfo.Streams {
-		if s.CodecType == ffprobe.CodecTypeVideo {
+	for i, stream := range inputInfo.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
 			inputVideoStream = &inputInfo.Streams[i]
 			break
 		}
@@ -741,9 +742,9 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	videoStreamIndex := -1
 
-	for _, s := range fmtCtx.Streams() {
-		if s.CodecParameters().MediaType() == astiav.MediaTypeVideo {
-			videoStreamIndex = s.Index()
+	for _, stream := range fmtCtx.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			videoStreamIndex = stream.Index()
 			break
 		}
 	}
@@ -762,6 +763,8 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	for {
 		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			require.True(t, errors.Is(err, astiav.ErrEof), "unexpected ReadFrame error: %v", err)
+
 			break
 		}
 

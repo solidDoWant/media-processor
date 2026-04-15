@@ -70,7 +70,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("create scan workflow: %w", err)
 	}
 
-	watcherLogger := logging.NewZerologLogger("worker")
+	watcherLogger := logging.NewZerologLogger("watcher")
 
 	worker, err := client.NewWorker("mediaprocessor-watcher",
 		hatchet.WithLogger(&watcherLogger),

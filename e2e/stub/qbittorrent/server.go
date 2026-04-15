@@ -181,9 +181,9 @@ func (s *Server) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 
 	list := make([]*Torrent, 0, len(s.torrents))
-	for _, t := range s.torrents {
-		if categoryFilter == "" || t.Category == categoryFilter {
-			list = append(list, t)
+	for _, torrent := range s.torrents {
+		if categoryFilter == "" || torrent.Category == categoryFilter {
+			list = append(list, torrent)
 		}
 	}
 
