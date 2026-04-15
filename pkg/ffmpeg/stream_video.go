@@ -184,8 +184,6 @@ func (vss *videoStreamState) allocAndConfigDecoderContext(inStream *astiav.Strea
 	}
 
 	vss.decoder.codecContext.SetFramerate(inputFmt.GuessFrameRate(inStream, nil))
-	vss.decoder.codecContext.SetThreadCount(0)
-	vss.decoder.codecContext.SetThreadType(astiav.ThreadTypeFrame | astiav.ThreadTypeSlice)
 
 	if vss.decoder.hwDevCtx != nil {
 		vss.decoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
@@ -606,10 +604,10 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 	vss.encoder.codecContext.SetColorSpace(vss.decoder.codecContext.ColorSpace())
 	vss.encoder.codecContext.SetColorRange(vss.decoder.codecContext.ColorRange())
 
-	// Auto-detect the number of threads to use
+	// Let the encoder auto-detect thread count. Do NOT set ThreadType here:
+	// libx265 manages threading internally (AV_CODEC_CAP_OTHER_THREADS) and
+	// setting FF_THREAD_FRAME on it breaks PTS propagation.
 	vss.encoder.codecContext.SetThreadCount(0)
-	// Support both threading modes
-	vss.encoder.codecContext.SetThreadType(astiav.ThreadTypeFrame | astiav.ThreadTypeSlice)
 
 	if err := vss.configureEncoderPixelFormat(enc, profile, useHW); err != nil {
 		return err

@@ -61,8 +61,6 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 	}
 
 	codecCtx.SetTimeBase(videoStream.TimeBase())
-	codecCtx.SetThreadCount(0)
-	codecCtx.SetThreadType(astiav.ThreadTypeFrame | astiav.ThreadTypeSlice)
 
 	if err := codecCtx.Open(codec, nil); err != nil {
 		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: opening codec: %w", err)
