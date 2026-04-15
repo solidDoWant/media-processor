@@ -775,6 +775,7 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 		require.NotEqual(t, astiav.NoPtsValue, pts,
 			"video packet %d must have a valid PTS", packetCount)
 		ptsValues = append(ptsValues, pts)
+
 		pkt.Unref()
 	}
 

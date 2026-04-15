@@ -81,6 +81,7 @@ func RunProbe(ctx context.Context, filePath string) (ProbeOutput, error) {
 		}
 
 		slog.WarnContext(ctx, "failed to probe file", "file", filePath, "error", err)
+
 		return ProbeOutput{IsValidMedia: false}, nil
 	}
 
