@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +54,7 @@ func TestSonarrHappyPath(t *testing.T) {
 	// Poll until Sonarr has at least one imported episode file.
 	// The timeout is set generously to accommodate a full H.265 software encode
 	// of the BBB fixture on machines without hardware acceleration.
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Minute)
 	defer cancel()
 
 	err := pollUntil(ctx, 10*time.Second, func() error {
@@ -88,4 +89,35 @@ func TestSonarrHappyPath(t *testing.T) {
 	assert.Contains(t, info.formatName, "matroska", "output container should be Matroska")
 	assert.Equal(t, "hevc", info.videoCodec, "output video codec should be H.265")
 	assert.Greater(t, info.durationSec, 300.0, "output duration should be at least 5 minutes")
+
+	// debugging: copy the output file to /workspace/media-processor for manual inspection after the test completes
+	debugDest := filepath.Join("/workspace/media-processor", "sonarr_happy_path_output.mkv")
+	if err := copyFile(mkvPath, debugDest); err != nil {
+		t.Logf("failed to copy output file for debugging: %v", err)
+		return
+	}
+
+	t.Logf("copied output file to %s for debugging", debugDest)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+
+	defer func() { _ = in.Close() }()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+
+	if _, err = io.Copy(out, in); err != nil {
+		_ = out.Close()
+
+		return fmt.Errorf("copy: %w", err)
+	}
+
+	return out.Close()
 }
