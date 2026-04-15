@@ -567,34 +567,50 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 			outStream.SetTimeBase(inStream.TimeBase())
 		}
 
-		// Apply per-stream title override for audio streams.
-		if inStream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
-			if title, ok := t.audioStreamTitles[inStream.Index()]; ok {
-				titleDict := astiav.NewDictionary()
-				if err := titleDict.Set("title", title, astiav.NewDictionaryFlags()); err != nil {
-					titleDict.Free()
-					outputFmt.Free()
+		// Copy input stream metadata (language, title, etc.) to the output
+		// stream so that tags are preserved for both copy and re-encoded
+		// streams. FromCodecContext (used for re-encoded streams) only copies
+		// codec parameters, not AVStream-level metadata.
+		var outMeta *astiav.Dictionary
+		if inMeta := inStream.Metadata(); inMeta != nil {
+			outMeta = astiav.NewDictionary()
+			if err := inMeta.Copy(outMeta, astiav.NewDictionaryFlags()); err != nil {
+				outMeta.Free()
+				outputFmt.Free()
 
-					return nil, noopClose, fmt.Errorf("ffmpeg: setting title metadata for stream %d: %w", inStream.Index(), err)
-				}
-
-				outStream.SetMetadata(titleDict)
+				return nil, noopClose, fmt.Errorf("ffmpeg: copying metadata for stream %d: %w", inStream.Index(), err)
 			}
 		}
 
-		// Apply per-stream title override for subtitle streams.
-		if inStream.CodecParameters().MediaType() == astiav.MediaTypeSubtitle {
-			if title, ok := t.subtitleStreamTitles[inStream.Index()]; ok {
-				titleDict := astiav.NewDictionary()
-				if err := titleDict.Set("title", title, astiav.NewDictionaryFlags()); err != nil {
-					titleDict.Free()
-					outputFmt.Free()
+		// Apply per-stream title overrides, writing into the already-copied
+		// metadata dict so other tags (e.g. language) are preserved alongside
+		// the new title.
+		var titleOverride string
 
-					return nil, noopClose, fmt.Errorf("ffmpeg: setting title metadata for stream %d: %w", inStream.Index(), err)
-				}
+		switch inStream.CodecParameters().MediaType() {
+		case astiav.MediaTypeAudio:
+			titleOverride = t.audioStreamTitles[inStream.Index()]
+		case astiav.MediaTypeSubtitle:
+			titleOverride = t.subtitleStreamTitles[inStream.Index()]
+		}
 
-				outStream.SetMetadata(titleDict)
+		if titleOverride != "" {
+			if outMeta == nil {
+				outMeta = astiav.NewDictionary()
 			}
+
+			if err := outMeta.Set("title", titleOverride, astiav.NewDictionaryFlags()); err != nil {
+				outMeta.Free()
+				outputFmt.Free()
+
+				return nil, noopClose, fmt.Errorf("ffmpeg: setting title for stream %d: %w", inStream.Index(), err)
+			}
+		}
+
+		// Assign the final metadata to the output stream. Ownership of outMeta
+		// transfers to the stream's AVStream.metadata; do not free it.
+		if outMeta != nil {
+			outStream.SetMetadata(outMeta)
 		}
 	}
 
