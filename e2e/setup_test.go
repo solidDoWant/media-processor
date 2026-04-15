@@ -91,13 +91,13 @@ func waitForServices(ctx context.Context) error {
 	}
 
 	for _, service := range services {
-		slog.Info("waiting for service", "name", service.name)
+		log.Info("waiting for service", "name", service.name)
 
 		if err := pollUntil(ctx, 5*time.Second, service.fn); err != nil {
 			return fmt.Errorf("%s not ready: %w", service.name, err)
 		}
 
-		slog.Info("service ready", "name", service.name)
+		log.Info("service ready", "name", service.name)
 	}
 
 	return nil
@@ -212,7 +212,7 @@ func startProcesses() error {
 		return fmt.Errorf("start watcher: %w", err)
 	}
 
-	slog.Info("watcher started", "pid", watcherCmd.Process.Pid)
+	log.Info("watcher started", "pid", watcherCmd.Process.Pid)
 
 	// Start worker subprocess with path-translation env vars.
 	workerEnv := append(baseEnv,
@@ -237,7 +237,7 @@ func startProcesses() error {
 		return fmt.Errorf("start worker: %w", err)
 	}
 
-	slog.Info("worker started", "pid", workerCmd.Process.Pid)
+	log.Info("worker started", "pid", workerCmd.Process.Pid)
 
 	return nil
 }

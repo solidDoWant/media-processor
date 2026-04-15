@@ -6,7 +6,6 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,12 +24,12 @@ func ensureBBBFixture() (string, error) {
 	mp4Path := filepath.Join(cacheDir, bbbMP4Name)
 
 	if _, err := os.Stat(mp4Path); err == nil {
-		slog.Info("BBB fixture already cached", "path", mp4Path)
+		log.Info("BBB fixture already cached", "path", mp4Path)
 
 		return mp4Path, nil
 	}
 
-	slog.Info("downloading BBB fixture", "url", bbbZipURL)
+	log.Info("downloading BBB fixture", "url", bbbZipURL)
 
 	zipPath := filepath.Join(cacheDir, bbbMP4Name+".zip")
 
@@ -38,7 +37,7 @@ func ensureBBBFixture() (string, error) {
 		return "", fmt.Errorf("download BBB zip: %w", err)
 	}
 
-	slog.Info("extracting BBB mp4 from zip")
+	log.Info("extracting BBB mp4 from zip")
 
 	if err := extractFromZip(zipPath, bbbMP4Name, mp4Path); err != nil {
 		_ = os.Remove(zipPath)
@@ -49,7 +48,7 @@ func ensureBBBFixture() (string, error) {
 	// Remove the zip; only the mp4 needs to be cached.
 	_ = os.Remove(zipPath)
 
-	slog.Info("BBB fixture cached", "path", mp4Path)
+	log.Info("BBB fixture cached", "path", mp4Path)
 
 	return mp4Path, nil
 }

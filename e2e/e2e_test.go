@@ -36,6 +36,10 @@ const (
 	bbbMP4Name = "bbb_sunflower_1080p_30fps_normal.mp4"
 )
 
+// log is a package-level slog.Logger tagged with source="e2e" so test-harness
+// messages are distinguishable from subprocess output in interleaved logs.
+var log = slog.Default().With("source", "e2e") //nolint:gochecknoglobals
+
 // Package-level state set during TestMain and shared across test functions.
 var (
 	hatchetToken    string
@@ -46,7 +50,7 @@ var (
 
 func TestMain(m *testing.M) {
 	if err := run(m); err != nil {
-		slog.Error("e2e run failed", "error", err)
+		log.Error("e2e run failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -77,7 +81,7 @@ func run(m *testing.M) error {
 
 	defer qbtStub.Close()
 
-	slog.Info("qBittorrent stub listening", "port", qbtStub.Port())
+	log.Info("qBittorrent stub listening", "port", qbtStub.Port())
 
 	// 4. Pull Docker images (may download several hundred MB on first run).
 	pullCtx, pullCancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -119,7 +123,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("configureRadarr: %w", err)
 	}
 
-	slog.Info("Radarr configured", "movieID", radarrMovieID)
+	log.Info("Radarr configured", "movieID", radarrMovieID)
 
 	// 9. Configure Sonarr (root folder, quality profile, download client, series).
 	sonarrSeriesID, err = configureSonarr(qbtStub.Port())
@@ -127,7 +131,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("configureSonarr: %w", err)
 	}
 
-	slog.Info("Sonarr configured", "seriesID", sonarrSeriesID)
+	log.Info("Sonarr configured", "seriesID", sonarrSeriesID)
 
 	// Fetch S01E01 episode ID for use in the Sonarr release push.
 	sonarrEpisodeID, err = fetchSonarrS01E01(sonarrSeriesID)
@@ -135,7 +139,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("fetchSonarrS01E01: %w", err)
 	}
 
-	slog.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
+	log.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
 	// 10. Build watcher and worker binaries, write watcher config, start both.
 	if err = startProcesses(); err != nil {
