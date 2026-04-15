@@ -11,7 +11,7 @@ package e2e_test
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -26,8 +26,8 @@ const (
 	processedDir = "/tmp/e2e-media-processor/processed-output"
 	configDir    = "/tmp/e2e-media-processor/config"
 
-	radarrAPIKey = "e2e-radarr-api-key"
-	sonarrAPIKey = "e2e-sonarr-api-key"
+	radarrAPIKey = "e2e-radarr-api-key-e2e"
+	sonarrAPIKey = "e2e-sonarr-api-key-e2e"
 
 	radarrBase = "http://localhost:7878"
 	sonarrBase = "http://localhost:8989"
@@ -46,7 +46,7 @@ var (
 
 func TestMain(m *testing.M) {
 	if err := run(m); err != nil {
-		log.Printf("e2e: %v", err)
+		slog.Error("e2e run failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -77,7 +77,7 @@ func run(m *testing.M) error {
 
 	defer qbtStub.Close()
 
-	log.Printf("e2e: qBittorrent stub listening on port %d", qbtStub.Port())
+	slog.Info("qBittorrent stub listening", "port", qbtStub.Port())
 
 	// 4. Pull Docker images (may download several hundred MB on first run).
 	pullCtx, pullCancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -119,7 +119,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("configureRadarr: %w", err)
 	}
 
-	log.Printf("e2e: Radarr movie ID %d", radarrMovieID)
+	slog.Info("Radarr configured", "movieID", radarrMovieID)
 
 	// 9. Configure Sonarr (root folder, quality profile, download client, series).
 	sonarrSeriesID, err = configureSonarr(qbtStub.Port())
@@ -127,7 +127,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("configureSonarr: %w", err)
 	}
 
-	log.Printf("e2e: Sonarr series ID %d", sonarrSeriesID)
+	slog.Info("Sonarr configured", "seriesID", sonarrSeriesID)
 
 	// Fetch S01E01 episode ID for use in the Sonarr release push.
 	sonarrEpisodeID, err = fetchSonarrS01E01(sonarrSeriesID)
@@ -135,7 +135,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("fetchSonarrS01E01: %w", err)
 	}
 
-	log.Printf("e2e: Sonarr S01E01 episode ID %d", sonarrEpisodeID)
+	slog.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
 	// 10. Build watcher and worker binaries, write watcher config, start both.
 	if err = startProcesses(); err != nil {

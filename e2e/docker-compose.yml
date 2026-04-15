@@ -84,7 +84,7 @@ services:
     user: "1000:1000"
     environment:
       TZ: UTC
-      Radarr__Auth__ApiKey: e2e-radarr-api-key
+      Radarr__Auth__ApiKey: e2e-radarr-api-key-e2e
     ports:
       - "7878:7878"
     volumes:
@@ -101,7 +101,7 @@ services:
     user: "1000:1000"
     environment:
       TZ: UTC
-      Sonarr__Auth__ApiKey: e2e-sonarr-api-key
+      Sonarr__Auth__ApiKey: e2e-sonarr-api-key-e2e
     ports:
       - "8989:8989"
     volumes:

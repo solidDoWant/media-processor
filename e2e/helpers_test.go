@@ -3,8 +3,12 @@
 package e2e_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -13,6 +17,40 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// slogWriter is an io.Writer that forwards each line of subprocess output to
+// slog at the given level, tagged with the source label (e.g. "docker", "make").
+type slogWriter struct {
+	level  slog.Level
+	source string
+	buf    []byte
+}
+
+func (w *slogWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			break
+		}
+
+		line := string(bytes.TrimRight(w.buf[:idx], "\r"))
+		if line != "" {
+			slog.Log(context.Background(), w.level, line, "source", w.source)
+		}
+
+		w.buf = w.buf[idx+1:]
+	}
+
+	return len(p), nil
+}
+
+// newSlogWriter returns an io.Writer that routes subprocess output to slog.
+// Use LevelInfo for stdout and LevelWarn for stderr.
+func newSlogWriter(level slog.Level, source string) io.Writer {
+	return &slogWriter{level: level, source: source}
+}
 
 // outputFileInfo holds the key media properties of a transcoded output file,
 // as reported by ffprobe.
@@ -94,4 +132,3 @@ func findMKV(t *testing.T, dir string) string {
 
 	return found
 }
-

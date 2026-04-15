@@ -5,7 +5,7 @@ package e2e_test
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -54,24 +54,24 @@ func composeArgs(subcmd ...string) []string {
 // It uses ctx to enforce a timeout for potentially large image downloads.
 func composePull(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", composeArgs("pull")...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
+	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 
 	return cmd.Run()
 }
 
 func composeUp() error {
 	cmd := exec.Command("docker", composeArgs("up", "-d")...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
+	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 
 	return cmd.Run()
 }
 
 func composeDown() {
 	cmd := exec.Command("docker", composeArgs("down", "-v", "--remove-orphans")...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
+	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
 	_ = cmd.Run()
 
 	_ = os.RemoveAll(baseDir)
@@ -91,13 +91,13 @@ func waitForServices(ctx context.Context) error {
 	}
 
 	for _, service := range services {
-		log.Printf("e2e: waiting for %s...", service.name)
+		slog.Info("waiting for service", "name", service.name)
 
 		if err := pollUntil(ctx, 5*time.Second, service.fn); err != nil {
 			return fmt.Errorf("%s not ready: %w", service.name, err)
 		}
 
-		log.Printf("e2e: %s ready", service.name)
+		slog.Info("service ready", "name", service.name)
 	}
 
 	return nil
@@ -174,8 +174,8 @@ func startProcesses() error {
 	// Build watcher and worker using the Makefile target.
 	buildCmd := exec.Command("make", "build")
 	buildCmd.Dir = root
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
+	buildCmd.Stdout = newSlogWriter(slog.LevelInfo, "make")
+	buildCmd.Stderr = newSlogWriter(slog.LevelWarn, "make")
 
 	if err := buildCmd.Run(); err != nil {
 		return fmt.Errorf("make build: %w", err)
@@ -205,14 +205,14 @@ func startProcesses() error {
 	// Start watcher subprocess.
 	watcherCmd = exec.Command(watcherBin, "--config", watcherCfg)
 	watcherCmd.Env = baseEnv
-	watcherCmd.Stdout = os.Stdout
-	watcherCmd.Stderr = os.Stderr
+	watcherCmd.Stdout = newSlogWriter(slog.LevelInfo, "watcher")
+	watcherCmd.Stderr = newSlogWriter(slog.LevelWarn, "watcher")
 
 	if err := watcherCmd.Start(); err != nil {
 		return fmt.Errorf("start watcher: %w", err)
 	}
 
-	log.Printf("e2e: watcher started (PID %d)", watcherCmd.Process.Pid)
+	slog.Info("watcher started", "pid", watcherCmd.Process.Pid)
 
 	// Start worker subprocess with path-translation env vars.
 	workerEnv := append(baseEnv,
@@ -230,14 +230,14 @@ func startProcesses() error {
 
 	workerCmd = exec.Command(workerBin)
 	workerCmd.Env = workerEnv
-	workerCmd.Stdout = os.Stdout
-	workerCmd.Stderr = os.Stderr
+	workerCmd.Stdout = newSlogWriter(slog.LevelInfo, "worker")
+	workerCmd.Stderr = newSlogWriter(slog.LevelWarn, "worker")
 
 	if err := workerCmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
 
-	log.Printf("e2e: worker started (PID %d)", workerCmd.Process.Pid)
+	slog.Info("worker started", "pid", workerCmd.Process.Pid)
 
 	return nil
 }

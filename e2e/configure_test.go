@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -237,7 +237,7 @@ func configureSonarr(qbtPort int) (int, error) {
 		return 0, fmt.Errorf("Sonarr returned series ID 0")
 	}
 
-	log.Printf("e2e: added Sonarr series %q (ID %d)", addedSeries.Title, addedSeries.ID)
+	slog.Info("Sonarr series added", "title", addedSeries.Title, "id", addedSeries.ID)
 
 	return addedSeries.ID, nil
 }

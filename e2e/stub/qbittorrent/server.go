@@ -235,6 +235,7 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
+
 		http.Error(w, fmt.Sprintf("rename fixture: %v", err), http.StatusInternalServerError)
 
 		return
