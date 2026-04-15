@@ -885,6 +885,13 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 		}
 	}
 
+	// Clear the decoded picture type so the encoder makes its own I/P/B
+	// decisions. Passing through the decoder's picture type causes x265 to
+	// warn "specified frame type is not compatible with max B-frames" and
+	// may interfere with the encoder's GOP structure. The ffmpeg CLI does
+	// the same via its filter graph, which strips picture type.
+	encFrame.SetPictureType(astiav.PictureTypeNone)
+
 	if err := vss.encoder.codecContext.SendFrame(encFrame); err != nil {
 		return fmt.Errorf("ffmpeg: sending video frame to encoder: %w", err)
 	}
