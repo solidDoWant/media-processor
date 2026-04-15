@@ -151,7 +151,7 @@ func NewMediaWorkflow(
 		}
 
 		return shared.DetectCropOutput{Crop: crop}, nil
-	}, hatchet.WithParents(probeTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithExecutionTimeout(30*time.Minute))
 
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
@@ -179,7 +179,7 @@ func NewMediaWorkflow(
 		}
 
 		return out, err
-	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid)
+	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(4*time.Hour))
 
 	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
 	// for the processed output file, triggering import into the library. The import path is
