@@ -546,6 +546,14 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 			}
 
 			outStream.SetTimeBase(encCtx.TimeBase())
+
+			// Propagate the frame rate to the output stream so the container
+			// (e.g. MKV's DefaultDuration) records it. Without this, players
+			// derive frame rate from packet timestamps, which can be slightly
+			// inaccurate due to timebase rounding.
+			// This is required for VLC to correctly show the progress bar.
+			outStream.SetAvgFrameRate(encCtx.Framerate())
+			outStream.SetRFrameRate(encCtx.Framerate())
 		} else {
 			// Copy stream: copy parameters from the input stream.
 			if err := inStream.CodecParameters().Copy(outStream.CodecParameters()); err != nil {
