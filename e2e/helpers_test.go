@@ -108,6 +108,7 @@ func probeOutputFile(t *testing.T, path string) outputFileInfo {
 	for _, stream := range result.Streams {
 		if stream.CodecType == "video" {
 			info.videoCodec = stream.CodecName
+			break
 		}
 	}
 
