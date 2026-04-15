@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os/exec"
@@ -46,9 +45,21 @@ func (w *slogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// newSlogWriter returns an io.Writer that routes subprocess output to slog.
+// Flush emits any buffered output that did not end with a newline.
+// Call this after the subprocess exits to avoid losing the final partial line.
+func (w *slogWriter) Flush() {
+	line := string(bytes.TrimRight(w.buf, "\r"))
+	if line != "" {
+		slog.Log(context.Background(), w.level, line, "source", w.source)
+	}
+
+	w.buf = nil
+}
+
+// newSlogWriter returns a *slogWriter that routes subprocess output to slog.
 // Use LevelInfo for stdout and LevelWarn for stderr.
-func newSlogWriter(level slog.Level, source string) io.Writer {
+// Call Flush after the subprocess exits to emit any final partial line.
+func newSlogWriter(level slog.Level, source string) *slogWriter {
 	return &slogWriter{level: level, source: source}
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
@@ -784,16 +783,13 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	assert.Greater(t, packetCount, 0, "output must contain video packets")
 
-	// Sort PTS values into display order and verify monotonic increase.
-	sorted := make([]int64, len(ptsValues))
-	copy(sorted, ptsValues)
+	// Verify that no two video packets share a PTS value.
+	seen := make(map[int64]bool, len(ptsValues))
 
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	for i := 1; i < len(sorted); i++ {
-		assert.Greater(t, sorted[i], sorted[i-1],
-			"display-order PTS must be strictly increasing: pts[%d]=%d, pts[%d]=%d",
-			i-1, sorted[i-1], i, sorted[i])
+	for i, pts := range ptsValues {
+		assert.False(t, seen[pts],
+			"duplicate PTS value %d at packet %d", pts, i)
+		seen[pts] = true
 	}
 }
 

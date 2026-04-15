@@ -67,27 +67,49 @@ func composeEnv() []string {
 func composePull(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", composeArgs("pull")...)
 	cmd.Env = composeEnv()
-	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
-	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
+	stdout := newSlogWriter(slog.LevelInfo, "docker")
+	stderr := newSlogWriter(slog.LevelWarn, "docker")
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
-	return cmd.Run()
+	err := cmd.Run()
+
+	stdout.Flush()
+	stderr.Flush()
+
+	return err
 }
 
 func composeUp() error {
-	cmd := exec.Command("docker", composeArgs("up", "-d")...)
-	cmd.Env = composeEnv()
-	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
-	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
-	return cmd.Run()
+	cmd := exec.CommandContext(ctx, "docker", composeArgs("up", "-d")...)
+	cmd.Env = composeEnv()
+	stdout := newSlogWriter(slog.LevelInfo, "docker")
+	stderr := newSlogWriter(slog.LevelWarn, "docker")
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	err := cmd.Run()
+
+	stdout.Flush()
+	stderr.Flush()
+
+	return err
 }
 
 func composeDown() {
 	cmd := exec.Command("docker", composeArgs("down", "-v", "--remove-orphans")...)
 	cmd.Env = composeEnv()
-	cmd.Stdout = newSlogWriter(slog.LevelInfo, "docker")
-	cmd.Stderr = newSlogWriter(slog.LevelWarn, "docker")
+	stdout := newSlogWriter(slog.LevelInfo, "docker")
+	stderr := newSlogWriter(slog.LevelWarn, "docker")
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	_ = cmd.Run()
+
+	stdout.Flush()
+	stderr.Flush()
 
 	_ = os.RemoveAll(baseDir)
 }
@@ -197,11 +219,18 @@ func startProcesses() error {
 	// Build watcher and worker using the Makefile target.
 	buildCmd := exec.Command("make", "build")
 	buildCmd.Dir = root
-	buildCmd.Stdout = newSlogWriter(slog.LevelInfo, "make")
-	buildCmd.Stderr = newSlogWriter(slog.LevelWarn, "make")
+	buildStdout := newSlogWriter(slog.LevelInfo, "make")
+	buildStderr := newSlogWriter(slog.LevelWarn, "make")
+	buildCmd.Stdout = buildStdout
+	buildCmd.Stderr = buildStderr
 
-	if err := buildCmd.Run(); err != nil {
-		return fmt.Errorf("make build: %w", err)
+	buildErr := buildCmd.Run()
+
+	buildStdout.Flush()
+	buildStderr.Flush()
+
+	if buildErr != nil {
+		return fmt.Errorf("make build: %w", buildErr)
 	}
 
 	watcherBin := filepath.Join(root, "bin", "watcher")

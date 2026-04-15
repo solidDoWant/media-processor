@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
-	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogLevel; no new-SDK equivalent
+	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"github.com/solidDoWant/media-processor/pkg/logging"
