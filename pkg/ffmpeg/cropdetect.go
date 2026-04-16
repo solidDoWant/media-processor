@@ -9,6 +9,46 @@ import (
 	"github.com/asticode/go-astiav"
 )
 
+// errCropConverged is a sentinel returned by drainFilter when the cropdetect
+// result has been stable for stabilityThreshold consecutive frames, signalling
+// that the decode loop can exit early.
+var errCropConverged = errors.New("ffmpeg: DetectCrop: crop parameters converged")
+
+const (
+	// Phase 1 — decode all packets until keyframeSwitchCount frames have been
+	// decoded. This covers short test fixtures and fade-in content. Phase 2 —
+	// prefer keyframe (I-frame) packets but fall back to sampleInterval-based
+	// non-keyframe sampling when no keyframe has been seen within that window.
+	// This ensures sufficient coverage for videos with a very low keyframe rate
+	// (e.g. live streams, large-GOP encodes).
+	//
+	// 200 frames covers ~6-8 s at common frame rates, which is enough to capture
+	// any opening non-keyframe content. It must exceed the frame count of any
+	// short test fixture to ensure the keyframe-only fast path is not activated
+	// prematurely for those files.
+	keyframeSwitchCount = 200
+
+	// The first alwaysIncludeCount frames are unconditionally forwarded to the
+	// filter. cropdetect silently discards its first 2 filter inputs (the default
+	// skip=2 setting), so at least 3 inputs are required before any metadata is
+	// emitted. This guarantees that very short videos — those with fewer frames
+	// than sampleInterval — still produce at least one valid crop measurement.
+	alwaysIncludeCount = 3
+
+	// 1 in sampleInterval decoded frames is sent to the filter during phase 1
+	// (after the alwaysIncludeCount window). Sparse sampling spreads the
+	// stabilityThreshold check across the whole initial window instead of
+	// converging after just a few frames, which keeps correctness for content
+	// where the crop changes during the opening sequence. The same interval is
+	// used as the non-keyframe fallback in phase 2.
+	sampleInterval = 20
+
+	// Exit once the crop result is unchanged for this many consecutive filter
+	// inputs. Letterboxing is static so a short run of identical results is a
+	// reliable convergence signal.
+	stabilityThreshold = 5
+)
+
 // DetectCrop runs a cropdetect filter pass over the video at inputPath and
 // returns the detected crop region. The returned CropParams reflect the most
 // conservative (widest) non-black region across all decoded frames.
@@ -61,6 +101,12 @@ func DetectCrop(ctx context.Context, inputPath string) (CropParams, error) {
 	}
 
 	codecCtx.SetTimeBase(videoStream.TimeBase())
+
+	// Enable slice-parallel decoding. With keyframe-only decoding there is no
+	// multi-frame pipeline, so FF_THREAD_SLICE (intra-frame parallelism) is more
+	// effective than FF_THREAD_FRAME. 0 lets FFmpeg choose the thread count.
+	codecCtx.SetThreadCount(0)
+	codecCtx.SetThreadType(astiav.ThreadTypeSlice)
 
 	if err := codecCtx.Open(codec, nil); err != nil {
 		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: opening codec: %w", err)
@@ -237,8 +283,23 @@ func buildCropdetectFilterGraph(
 }
 
 // runCropdetectLoop decodes frames from inputFmt, pushes them through the
-// cropdetect filter graph (with frame sampling), and returns the last detected
-// crop region. It returns an error if no crop metadata was produced.
+// cropdetect filter graph, and returns the detected crop region.
+//
+// The demux loop operates in two phases. For the first keyframeSwitchCount
+// decoded frames every packet is forwarded to the decoder; this ensures
+// correctness for short videos and content that begins with non-keyframe
+// frames (fade-ins, B-frame-heavy encodings with a single keyframe). Once
+// that window has passed, only keyframe (I-frame) packets are forwarded,
+// avoiding the CPU cost of decoding P- and B-frames which contribute nothing
+// to cropdetect. All decoded keyframes are forwarded to the filter. During the
+// initial window, only 1 in sampleInterval frames is sent to the filter to
+// spread convergence checks across the window rather than firing immediately
+// on the first handful of decoded frames.
+//
+// cropdetect accumulates the widest non-black region seen so far, so its
+// output can only widen over time. Once the result has been identical for
+// stabilityThreshold consecutive filter inputs the crop has converged and the
+// loop exits early.
 func runCropdetectLoop(
 	ctx context.Context,
 	inputFmt *astiav.FormatContext,
@@ -260,14 +321,8 @@ func runCropdetectLoop(
 
 	haveCrop := false
 	frameCounter := 0
-
-	// Sample 1 in 20 frames (5% sampling rate) to balance accuracy and performance.
-	// For a 2-hour movie at 24fps (~173K frames), this processes ~8,640 frames.
-	// Always include the first 50 frames to ensure sufficient coverage for short
-	// videos and to capture header/trailer content.
-	const sampleInterval = 20
-
-	const alwaysIncludeCount = 50
+	consecutiveStable := 0
+	phase2SkippedPackets := 0
 
 	drainFilter := func() error {
 		for {
@@ -287,6 +342,16 @@ func runCropdetectLoop(
 			// frame's metadata already reflects the widest non-black region
 			// seen so far, so the last value is the fully-converged result.
 			if cropParameters, ok := parseCropMetadata(filterFrame); ok {
+				if haveCrop && cropParameters == result {
+					consecutiveStable++
+					if consecutiveStable >= stabilityThreshold {
+						filterFrame.Unref()
+						return errCropConverged
+					}
+				} else {
+					consecutiveStable = 0
+				}
+
 				result = cropParameters
 				haveCrop = true
 			}
@@ -309,10 +374,14 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: receiving frame: %w", err)
 			}
 
-			// Implement frame sampling:
-			// - Always include the first 50 frames
-			// - Sample every 20th frame in the middle
-			if frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0 {
+			// Phase 1: always forward the first alwaysIncludeCount frames,
+			// then sample 1 in sampleInterval. Phase 2 (keyframes only):
+			// always forward since every decoded frame is worth analysing.
+			sendToFilter := frameCounter >= keyframeSwitchCount || frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0
+
+			frameCounter++
+
+			if sendToFilter {
 				if err := srcCtx.AddFrame(decFrame, astiav.NewBuffersrcFlags(astiav.BuffersrcFlagKeepRef)); err != nil {
 					decFrame.Unref()
 
@@ -325,11 +394,9 @@ func runCropdetectLoop(
 
 				if err := drainFilter(); err != nil {
 					decFrame.Unref()
-					return err
+					return err // propagates errCropConverged
 				}
 			}
-
-			frameCounter++
 
 			decFrame.Unref()
 		}
@@ -354,6 +421,27 @@ func runCropdetectLoop(
 			continue
 		}
 
+		// After the initial window, prefer keyframe packets. Non-keyframe
+		// packets are skipped unless sampleInterval consecutive non-keyframe
+		// packets have been skipped since the last decoded packet, in which
+		// case one is allowed through. This preserves the speed benefit for
+		// well-encoded videos while ensuring at least 1-in-sampleInterval
+		// coverage for videos with a very low or zero keyframe rate.
+		if frameCounter >= keyframeSwitchCount {
+			if pkt.Flags().Has(astiav.PacketFlagKey) {
+				phase2SkippedPackets = 0
+			} else {
+				phase2SkippedPackets++
+				if phase2SkippedPackets < sampleInterval {
+					pkt.Unref()
+
+					continue
+				}
+
+				phase2SkippedPackets = 0
+			}
+		}
+
 		if err := codecCtx.SendPacket(pkt); err != nil {
 			pkt.Unref()
 
@@ -367,11 +455,16 @@ func runCropdetectLoop(
 		pkt.Unref()
 
 		if err := drainDecoder(); err != nil {
+			if errors.Is(err, errCropConverged) {
+				break // crop parameters have stabilized, no need to continue
+			}
+
 			return CropParams{}, err
 		}
 	}
 
-	// Flush the decoder.
+	// Flush the decoder. errCropConverged during flush is not an error: the
+	// result is already fully converged.
 	if err := codecCtx.SendPacket(nil); err != nil && !errors.Is(err, astiav.ErrEof) {
 		if ctx.Err() != nil {
 			return CropParams{}, ctx.Err()
@@ -380,7 +473,7 @@ func runCropdetectLoop(
 		return CropParams{}, fmt.Errorf("ffmpeg: DetectCrop: flushing decoder: %w", err)
 	}
 
-	if err := drainDecoder(); err != nil {
+	if err := drainDecoder(); err != nil && !errors.Is(err, errCropConverged) {
 		return CropParams{}, err
 	}
 
@@ -389,7 +482,7 @@ func runCropdetectLoop(
 	// been processed, and drainFilter below collects any remaining output.
 	_ = srcCtx.AddFrame(nil, astiav.NewBuffersrcFlags())
 
-	if err := drainFilter(); err != nil {
+	if err := drainFilter(); err != nil && !errors.Is(err, errCropConverged) {
 		return CropParams{}, err
 	}
 
@@ -442,6 +535,15 @@ func parseCropMetadata(frame *astiav.Frame) (CropParams, bool) {
 
 	y, ok := get("lavfi.cropdetect.y")
 	if !ok {
+		return CropParams{}, false
+	}
+
+	// cropdetect initialises its running bounds to the inverted extent of the
+	// frame (x1=width-1, x2=0, etc.) and only updates them when it finds
+	// non-black pixels. When no content has been found yet the resulting w and
+	// h are negative. Reject those frames so they are not treated as valid
+	// crop measurements.
+	if w <= 0 || h <= 0 {
 		return CropParams{}, false
 	}
 
