@@ -23,7 +23,7 @@ services:
       start_period: 10s
 
   migration:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.83.1
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.83.25
     command: /hatchet/hatchet-migrate
     environment:
       DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
@@ -32,7 +32,7 @@ services:
         condition: service_healthy
 
   setup-config:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.83.1
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.83.25
     command: >
       /hatchet/hatchet-admin quickstart
       --skip certs
@@ -58,7 +58,7 @@ services:
         condition: service_healthy
 
   hatchet-engine:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.83.1
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.83.25
     command: /hatchet/hatchet-engine --config /hatchet/config
     restart: on-failure
     ports:
