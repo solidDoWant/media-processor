@@ -24,6 +24,15 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: update-dependencies
+update-dependencies: ## Update Go module dependencies and sync Hatchet Docker image versions.
+	go get -u ./...
+	go mod tidy
+	@HATCHET_VERSION=$$(go list -m github.com/hatchet-dev/hatchet | awk '{print $$2}'); \
+	sed -i "s|ghcr\.io/hatchet-dev/hatchet/\([^:]*\):v[0-9][0-9.]*|ghcr.io/hatchet-dev/hatchet/\1:$${HATCHET_VERSION}|g" \
+		docker-compose.yml \
+		e2e/docker-compose.yml
+
 # Detect hardware encoders via ffmpeg CLI — independent of our DetectHardwareEncoders() logic.
 # This ensures hardware-specific build tags are set even if our detection has bugs, allowing
 # tests to catch those bugs.
