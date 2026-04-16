@@ -68,6 +68,10 @@ test-integration: hatchet-up ## Run integration tests against a local Hatchet se
 test-e2e: ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
 	go test -v -timeout 2h -tags=e2e -count=1 ./e2e/
 
+.PHONY: benchmark
+benchmark: ## Run benchmarks.
+	go test -run='^$' -bench=. -benchtime=3x ./... | grep -i grep -i -e bench -e ns/op
+
 .PHONY: lint
 lint: ## Run golangci-lint.
 	golangci-lint run ./...
