@@ -14,6 +14,7 @@ import (
 const (
 	blackBarsVideoPath = "testdata/video_black_bars.mp4"
 	shortBarsVideoPath = "testdata/video_short_bars.mp4"
+	allBlackVideoPath  = "testdata/video_all_black.mp4"
 )
 
 // TestDetectCrop_WithBlackBars verifies that a video padded with 20px black bars
@@ -114,4 +115,15 @@ func TestDetectCrop_SparseKeyframes(t *testing.T) {
 func TestDetectCrop_NonExistentFile(t *testing.T) {
 	_, err := ffmpeg.DetectCrop(t.Context(), "testdata/nonexistent_file.mp4")
 	require.Error(t, err)
+}
+
+// TestDetectCrop_AllBlackVideo verifies that DetectCrop returns an error for a
+// video where every frame is entirely black. The cropdetect filter emits
+// inverted sentinel values (w<0, h<0) when no non-black pixels have been
+// found; parseCropMetadata rejects those values so haveCrop never becomes true
+// and the function returns "no crop metadata produced".
+func TestDetectCrop_AllBlackVideo(t *testing.T) {
+	_, err := ffmpeg.DetectCrop(t.Context(), allBlackVideoPath)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no crop metadata produced")
 }

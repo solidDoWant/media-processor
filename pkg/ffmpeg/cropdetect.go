@@ -36,16 +36,16 @@ const (
 	alwaysIncludeCount = 3
 
 	// 1 in sampleInterval decoded frames is sent to the filter during phase 1
-	// (after the alwaysIncludeCount window). Sparse sampling spreads the
-	// stabilityThreshold check across the whole initial window instead of
-	// converging after just a few frames, which keeps correctness for content
-	// where the crop changes during the opening sequence. The same interval is
-	// used as the non-keyframe fallback in phase 2.
+	// (after the alwaysIncludeCount window). Sparse sampling spreads the phase-1
+	// window instead of sending every frame to the filter during the initial
+	// all-packet decode pass.
 	sampleInterval = 20
 
-	// Exit once the crop result is unchanged for this many consecutive filter
-	// inputs. Letterboxing is static so a short run of identical results is a
-	// reliable convergence signal.
+	// Exit once the crop result is unchanged for this many consecutive phase-2
+	// filter inputs. Convergence is only checked in phase 2 (keyframe-only
+	// decode) so that the full phase-1 window always runs regardless of how
+	// stable the opening content appears. Letterboxing is static so a short run
+	// of identical keyframe results is a reliable convergence signal.
 	stabilityThreshold = 5
 )
 
@@ -284,22 +284,8 @@ func buildCropdetectFilterGraph(
 
 // runCropdetectLoop decodes frames from inputFmt, pushes them through the
 // cropdetect filter graph, and returns the detected crop region.
-//
-// The demux loop operates in two phases. For the first keyframeSwitchCount
-// decoded frames every packet is forwarded to the decoder; this ensures
-// correctness for short videos and content that begins with non-keyframe
-// frames (fade-ins, B-frame-heavy encodings with a single keyframe). Once
-// that window has passed, only keyframe (I-frame) packets are forwarded,
-// avoiding the CPU cost of decoding P- and B-frames which contribute nothing
-// to cropdetect. All decoded keyframes are forwarded to the filter. During the
-// initial window, only 1 in sampleInterval frames is sent to the filter to
-// spread convergence checks across the window rather than firing immediately
-// on the first handful of decoded frames.
-//
-// cropdetect accumulates the widest non-black region seen so far, so its
-// output can only widen over time. Once the result has been identical for
-// stabilityThreshold consecutive filter inputs the crop has converged and the
-// loop exits early.
+// See the package-level constants for the two-phase decoding strategy and
+// convergence parameters.
 func runCropdetectLoop(
 	ctx context.Context,
 	inputFmt *astiav.FormatContext,
@@ -322,7 +308,7 @@ func runCropdetectLoop(
 	haveCrop := false
 	frameCounter := 0
 	consecutiveStable := 0
-	phase2SkippedPackets := 0
+	inPhase2 := false
 
 	drainFilter := func() error {
 		for {
@@ -342,14 +328,23 @@ func runCropdetectLoop(
 			// frame's metadata already reflects the widest non-black region
 			// seen so far, so the last value is the fully-converged result.
 			if cropParameters, ok := parseCropMetadata(filterFrame); ok {
-				if haveCrop && cropParameters == result {
-					consecutiveStable++
-					if consecutiveStable >= stabilityThreshold {
-						filterFrame.Unref()
-						return errCropConverged
+				// Only track stability in phase 2. This guarantees the full
+				// phase-1 window always runs, preventing a narrow intro (title
+				// cards, logos) from triggering early convergence before the
+				// main content is seen.
+				if inPhase2 {
+					if haveCrop && cropParameters == result {
+						consecutiveStable++
+						if consecutiveStable >= stabilityThreshold {
+							filterFrame.Unref()
+							return errCropConverged
+						}
+					} else {
+						// First phase-2 result, or crop just widened: start the
+						// stability counter at 1 (this reading counts toward the
+						// threshold).
+						consecutiveStable = 1
 					}
-				} else {
-					consecutiveStable = 0
 				}
 
 				result = cropParameters
@@ -374,11 +369,19 @@ func runCropdetectLoop(
 				return fmt.Errorf("ffmpeg: DetectCrop: receiving frame: %w", err)
 			}
 
-			// Phase 1: always forward the first alwaysIncludeCount frames,
-			// then sample 1 in sampleInterval. Phase 2 (keyframes only):
-			// always forward since every decoded frame is worth analysing.
-			sendToFilter := frameCounter >= keyframeSwitchCount || frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0
+			// Phase 2 forwards every decoded frame (all are keyframes).
+			// Phase 1 forwards the first alwaysIncludeCount frames plus 1 in
+			// sampleInterval of the remainder.
+			var sendToFilter bool
+			if frameCounter >= keyframeSwitchCount {
+				sendToFilter = true
+			} else {
+				sendToFilter = frameCounter < alwaysIncludeCount || frameCounter%sampleInterval == 0
+			}
 
+			// Record phase before incrementing so drainFilter sees the correct
+			// phase for this frame.
+			inPhase2 = frameCounter >= keyframeSwitchCount
 			frameCounter++
 
 			if sendToFilter {
@@ -421,25 +424,15 @@ func runCropdetectLoop(
 			continue
 		}
 
-		// After the initial window, prefer keyframe packets. Non-keyframe
-		// packets are skipped unless sampleInterval consecutive non-keyframe
-		// packets have been skipped since the last decoded packet, in which
-		// case one is allowed through. This preserves the speed benefit for
-		// well-encoded videos while ensuring at least 1-in-sampleInterval
-		// coverage for videos with a very low or zero keyframe rate.
-		if frameCounter >= keyframeSwitchCount {
-			if pkt.Flags().Has(astiav.PacketFlagKey) {
-				phase2SkippedPackets = 0
-			} else {
-				phase2SkippedPackets++
-				if phase2SkippedPackets < sampleInterval {
-					pkt.Unref()
+		// Phase 2: skip non-keyframe packets entirely. Sending orphan P/B
+		// packets whose reference frames were already discarded would cause
+		// the decoder to produce corrupted output; cropdetect could then
+		// misread that noise as visible content and widen the crop region
+		// incorrectly.
+		if frameCounter >= keyframeSwitchCount && !pkt.Flags().Has(astiav.PacketFlagKey) {
+			pkt.Unref()
 
-					continue
-				}
-
-				phase2SkippedPackets = 0
-			}
+			continue
 		}
 
 		if err := codecCtx.SendPacket(pkt); err != nil {

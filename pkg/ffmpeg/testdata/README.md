@@ -26,3 +26,15 @@ ffmpeg -f lavfi -i "color=c=blue:size=320x180:rate=24:duration=0.5" -vf "pad=iw:
 ```
 
 Expected `cropdetect` output: `crop=320:176:0:22` (round=16 reduces 180 → 176; y=22 centers the window).
+
+## video_all_black.mp4
+
+A synthetic 12-frame (0.5 s at 24 fps) lossless H.264 clip used to verify that `DetectCrop` returns an error when no visible content is present. The video is 320x180 solid black (CRF 0, so decoded pixels are exactly zero).
+
+When `cropdetect` processes an all-black frame it emits inverted sentinel values (w &lt; 0, h &lt; 0). `parseCropMetadata` rejects those values, `haveCrop` stays false, and `DetectCrop` returns "no crop metadata produced".
+
+Generation command:
+
+```
+ffmpeg -f lavfi -i "color=black:size=320x180:rate=24:duration=0.5" -c:v libx264 -crf 0 -y pkg/ffmpeg/testdata/video_all_black.mp4
+```
