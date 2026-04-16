@@ -30,6 +30,7 @@
             pkgs.vpl-gpu-rt            # oneVPL GPU runtime (libmfx-gen); required by libvpl dispatcher
             pkgs.direnv
             pkgs.nix-direnv
+            pkgs.gh
           ];
           buildInputs = [
             pkgs.ffmpeg-full.dev
