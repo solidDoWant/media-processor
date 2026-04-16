@@ -664,7 +664,27 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// decoder itself (plan.cuvidCropApplied=true, plan.cropFilter=nil).
 	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.plan.cropFilter == nil {
 		vss.plan.encoderReceivesHWFrames = true
+		// Allocate an encoder-owned hw_frames_ctx with initial_pool_size=0.
+		//
+		// encode_preinit_video (encode.c) derives sw_pix_fmt from hw_frames_ctx.
+		// Without hw_frames_ctx, sw_pix_fmt stays AV_PIX_FMT_NONE and the QSV
+		// encoder's init_video_param returns AVERROR_BUG. Hardware decoders
+		// allocate hw_frames_ctx lazily during the first decode call, so we
+		// cannot borrow the decoder's context at encoder-open time.
+		//
+		// Using initial_pool_size=0 (dynamic pool) means nb_surfaces=0 after
+		// initialization, which causes ff_qsv_init_session_frames to leave
+		// q->frames_ctx.mids=NULL. submit_frame then skips ff_qsv_find_surface_idx
+		// entirely, avoiding the AVERROR_BUG that occurs when it tries to look up
+		// a decoded frame whose QSVMid pointer belongs to the decoder's own pool.
+		// VAAPI and NVENC do not perform a pool surface lookup, so pool size 0 is
+		// equally safe for those accelerators.
+		if err := vss.setupHWFramesContext(profile, 0); err != nil {
+			return err
+		}
+
 		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
+		vss.encoder.codecContext.SetHardwareFramesContext(vss.encoder.hardwareFrameContext)
 
 		return nil
 	}
@@ -674,18 +694,26 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	// frames arrive at the encoder ready for zero-copy encoding.
 	if vss.plan.effectiveDecodedPixFmt != astiav.PixelFormatNone && vss.plan.effectiveDecodedPixFmt == profile.hwPixFmt {
 		vss.plan.encoderReceivesHWFrames = true
-		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
-		// Provide the hardware device context so the encoder can initialise its
-		// hardware-specific state (e.g. create hw_frames_ctx from hw_device_ctx).
+		// Same rationale as condition 1: allocate an encoder-owned hw_frames_ctx
+		// with initial_pool_size=0 so encode_preinit_video can set sw_pix_fmt
+		// without triggering ff_qsv_find_surface_idx.
 		if vss.decoder.hwDevCtx != nil {
-			vss.encoder.codecContext.SetHardwareDeviceContext(vss.decoder.hwDevCtx)
+			if err := vss.setupHWFramesContext(profile, 0); err != nil {
+				return err
+			}
+
+			vss.encoder.codecContext.SetHardwareFramesContext(vss.encoder.hardwareFrameContext)
 		}
+
+		vss.encoder.codecContext.SetPixelFormat(profile.hwPixFmt)
 
 		return nil
 	}
 
-	// HW encode with SW decode: allocate a frames pool for CPU→GPU upload.
-	if err := vss.setupHWFramesContext(profile); err != nil {
+	// HW encode with SW decode: allocate a fixed frames pool for CPU→GPU upload.
+	// A non-zero pool size is required here because frames are explicitly
+	// allocated from this pool via AllocHardwareBuffer before being uploaded.
+	if err := vss.setupHWFramesContext(profile, 20); err != nil {
 		return err
 	}
 
@@ -696,8 +724,13 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 }
 
 // setupHWFramesContext allocates and initialises the hardware frames context
-// used to upload decoded software frames into GPU memory before encoding.
-func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
+// for the encoder. initialPoolSize controls the surface pool size:
+//   - 0: dynamic pool (no pre-allocated surfaces). Use for HW decode paths where
+//     decoded frames already reside in GPU memory. With nb_surfaces=0 the QSV
+//     encoder's ff_qsv_find_surface_idx lookup is bypassed entirely.
+//   - >0: fixed pool. Use for SW decode + HW encode paths where frames must be
+//     explicitly allocated from the pool before CPU→GPU upload.
+func (vss *videoStreamState) setupHWFramesContext(profile hwProfile, initialPoolSize int) error {
 	vss.encoder.hardwareFrameContext = astiav.AllocHardwareFramesContext(vss.decoder.hwDevCtx)
 	if vss.encoder.hardwareFrameContext == nil {
 		return errors.New("failed to allocate hardware frames context")
@@ -715,7 +748,7 @@ func (vss *videoStreamState) setupHWFramesContext(profile hwProfile) error {
 	vss.encoder.hardwareFrameContext.SetSoftwarePixelFormat(profile.swPixFmt)
 	vss.encoder.hardwareFrameContext.SetWidth(hwFCW)
 	vss.encoder.hardwareFrameContext.SetHeight(hwFCH)
-	vss.encoder.hardwareFrameContext.SetInitialPoolSize(20)
+	vss.encoder.hardwareFrameContext.SetInitialPoolSize(initialPoolSize)
 
 	if err := vss.encoder.hardwareFrameContext.Initialize(); err != nil {
 		return fmt.Errorf("initializing hardware frames context: %w", err)
