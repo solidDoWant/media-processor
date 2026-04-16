@@ -16,11 +16,11 @@ var errCropConverged = errors.New("ffmpeg: DetectCrop: crop parameters converged
 
 const (
 	// Phase 1 — decode all packets until keyframeSwitchCount frames have been
-	// decoded. This covers short test fixtures and fade-in content. Phase 2 —
-	// prefer keyframe (I-frame) packets but fall back to sampleInterval-based
-	// non-keyframe sampling when no keyframe has been seen within that window.
-	// This ensures sufficient coverage for videos with a very low keyframe rate
-	// (e.g. live streams, large-GOP encodes).
+	// decoded. This covers short clips and fade-in / B-frame-heavy content where
+	// all visual information is in non-keyframe packets. Phase 2 — forward only
+	// keyframe (I-frame) packets and skip non-keyframe packets entirely. Coverage
+	// for videos with a very low keyframe rate comes from the phase-1 full-decode
+	// window, not from a phase-2 fallback path.
 	//
 	// 200 frames covers ~6-8 s at common frame rates, which is enough to capture
 	// any opening non-keyframe content. It must exceed the frame count of any
