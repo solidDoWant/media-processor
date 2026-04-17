@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // RunCleanup deletes the original source file after successful processing and,
@@ -34,30 +33,35 @@ func pruneEmptyParents(filePath, watchRoot string) {
 		return
 	}
 
-	cleanRoot := filepath.Clean(watchRoot)
+	root, err := os.OpenRoot(watchRoot)
+	if err != nil {
+		slog.Warn("prune empty parent: failed to open watch root", "watchRoot", watchRoot, "error", err)
+		return
+	}
+	defer root.Close()
+
 	dir := filepath.Dir(filePath)
 
 	for {
-		cleanDir := filepath.Clean(dir)
-
-		if cleanDir == cleanRoot {
+		rel, err := filepath.Rel(watchRoot, dir)
+		// rel == "." means dir IS the watch root; !filepath.IsLocal catches paths that
+		// escape the root (e.g. "..") — both are stopping conditions.
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
 			return
 		}
 
-		// Stop if dir is not a descendant of watchRoot — protects against misconfiguration
-		// where filePath is outside the watch tree.
-		if !strings.HasPrefix(cleanDir+string(filepath.Separator), cleanRoot+string(filepath.Separator)) {
+		d, err := root.Open(rel)
+		if err != nil {
 			return
 		}
-
-		entries, err := os.ReadDir(cleanDir)
+		entries, err := d.ReadDir(-1)
+		_ = d.Close()
 		if err != nil || len(entries) > 0 {
 			return
 		}
 
-		if removeErr := os.Remove(cleanDir); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			slog.Warn("prune empty parent: failed to remove directory", "dir", cleanDir, "error", removeErr)
-
+		if removeErr := root.Remove(rel); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			slog.Warn("prune empty parent: failed to remove directory", "dir", filepath.Join(watchRoot, rel), "error", removeErr)
 			return
 		}
 
