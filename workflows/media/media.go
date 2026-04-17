@@ -64,7 +64,7 @@ type MediaWorkflowConfig struct {
 	MinCropY int
 	// DetectCropTimeout is the Hatchet execution timeout for the detectcrop step.
 	// When zero, NewMediaWorkflow applies a default of 30 minutes. Set by the caller
-	// (e.g. cmd/worker via parseTimeout from MEDIA_DETECTCROP_TIMEOUT).
+	// (e.g. cmd/worker via parseTimeout from MEDIA_DETECT_CROP_TIMEOUT).
 	DetectCropTimeout time.Duration
 	// TranscodeTimeout is the Hatchet execution timeout for the transcode step.
 	// When zero, NewMediaWorkflow applies a default of 4 hours. Set by the caller

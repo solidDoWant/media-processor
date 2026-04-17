@@ -270,7 +270,7 @@ func startProcesses() error {
 	// Start worker subprocess with path-translation env vars.
 	workerEnv := append(baseEnv,
 		"MEDIA_OUTPUT_DIR="+processedDir,
-		"MEDIA_WATCHER_ROOT="+downloadsDir,
+		"MEDIA_INPUT_ROOT="+downloadsDir,
 		"RADARR_URL="+radarrBase,
 		"RADARR_API_KEY="+radarrAPIKey,
 		"SONARR_URL="+sonarrBase,

@@ -85,7 +85,7 @@ func run(ctx context.Context) error {
 	})
 
 	webhookClient := &webhook.Client{
-		URL: os.Getenv("WEBHOOK_URL"),
+		URL: os.Getenv("MEDIA_WEBHOOK_URL"),
 	}
 
 	clientLogger := logging.NewZerologLogger("client")
@@ -107,7 +107,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	detectCropTimeout, err := parseTimeout("MEDIA_DETECTCROP_TIMEOUT", media.DefaultDetectCropTimeout)
+	detectCropTimeout, err := parseTimeout("MEDIA_DETECT_CROP_TIMEOUT", media.DefaultDetectCropTimeout)
 	if err != nil {
 		return err
 	}
@@ -119,9 +119,9 @@ func run(ctx context.Context) error {
 
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
-		WatcherRoot:           os.Getenv("MEDIA_WATCHER_ROOT"),
+		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
 		WebhookURL:            webhookClient.URL,
-		HardwareDevicePath:    os.Getenv("HARDWARE_DEVICE_PATH"),
+		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 		MinCropX:              minCropX,
