@@ -106,17 +106,21 @@ No config file merging is performed. Exactly one YAML config file path is accept
 ### Watcher config example
 
 ```yaml
-cron_schedule: "*/5 * * * * *"
+cronSchedule: "*/5 * * * * *"
 watches:
   - name: movies
     path: /media/incoming/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - \.!qB$
       - (^|/)_unpack(/|$)
   - name: shows
     path: /media/incoming/tv
-    media_type: show
+    mediaType: show
+  - name: archive
+    path: /media/incoming/archive
+    mediaType: movie
+    preserveSource: true
 ```
 
-`cron_schedule` and `ignorePatterns` are both optional. A minimal entry only needs `name`, `path`, and `media_type`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree.
+`cronSchedule`, `ignorePatterns`, and `preserveSource` are all optional. A minimal entry only needs `name`, `path`, and `mediaType`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file.

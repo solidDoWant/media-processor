@@ -186,7 +186,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	var calls []call
 
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string, _ bool) error {
 		calls = append(calls, call{fp, mt, mn})
 		return nil
 	}
@@ -217,7 +217,7 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -244,7 +244,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	var count int
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -271,7 +271,7 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil })
+	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil })
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -293,7 +293,7 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 	}
 
 	dispatched := make(map[string]medialib.MediaType) // path → media type
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string, _ bool) error {
 		dispatched[fp] = mt
 		return nil
 	}
@@ -320,7 +320,7 @@ func TestScan_MetricsPresenceAfterScan(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 
@@ -348,7 +348,7 @@ func TestScan_SuccessCounterIncrements(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 	m := findMetric(rm, "watcher_scans_total")
@@ -377,7 +377,7 @@ func TestScan_ErrorCounterIncrements(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error {
 		return errors.New("simulated dispatch failure")
 	})
 
@@ -409,7 +409,7 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 	m := findMetric(rm, "watcher_scan_duration_seconds")
@@ -448,7 +448,7 @@ func TestScan_LastSuccessfulScanSetOnSuccess(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 	m := findMetric(rm, "watcher_last_successful_scan_unix_seconds")
@@ -476,7 +476,7 @@ func TestScan_FilesDiscoveredCounter(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 	m := findMetric(rm, "watcher_files_discovered_total")
@@ -508,7 +508,7 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error { return nil }))
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error { return nil }))
 
 	rm := collectMetrics(t, reader)
 	m := findMetric(rm, "watcher_dispatches_total")
@@ -542,7 +542,7 @@ func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -571,7 +571,7 @@ func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -598,7 +598,7 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -623,7 +623,7 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 	}
 
 	instruments, reader := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool) error {
 		return errors.New("hatchet unavailable")
 	})
 
@@ -640,4 +640,48 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 	})
 	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
 	assert.EqualValues(t, 1, dp.Value)
+}
+
+// TestScan_PreserveSourceForwardedToDispatch verifies that the preserveSource value from a
+// WatchEntry is forwarded verbatim to the dispatch callback for each discovered file.
+func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		preserveSource bool
+	}{
+		{name: "preserveSource true is forwarded", preserveSource: true},
+		{name: "preserveSource false is forwarded", preserveSource: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+
+			cfg := &Config{
+				Watches: []WatchEntry{
+					{Name: "movies", Path: dir, MediaType: medialib.MovieType, PreserveSource: tt.preserveSource},
+				},
+			}
+
+			var gotPreserveSource bool
+
+			var dispatched bool
+
+			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, ps bool) error {
+				gotPreserveSource = ps
+				dispatched = true
+
+				return nil
+			}
+
+			require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+			require.True(t, dispatched, "expected dispatch to be called")
+			assert.Equal(t, tt.preserveSource, gotPreserveSource)
+		})
+	}
 }

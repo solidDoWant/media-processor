@@ -152,6 +152,22 @@ watches: []
 			},
 		},
 		{
+			name: "preserveSource true is parsed and set on watch entry",
+			content: `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    preserveSource: true
+`,
+			expected: Config{
+				CronSchedule: watcherconfig.DefaultCronSchedule,
+				Watches: []WatchEntry{
+					{Name: "movies", Path: "/watch/movies", MediaType: medialib.MovieType, PreserveSource: true},
+				},
+			},
+		},
+		{
 			name: "invalid regex in ignorePatterns returns error",
 			content: `
 watches:
