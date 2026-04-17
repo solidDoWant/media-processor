@@ -136,6 +136,8 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 |----------|------|---------|----------|-------------|
 | `LOG_LEVEL` | string | `info` | Optional | Log verbosity: `debug`, `info`, `warn`, or `error`. An unrecognised value falls back to `info`. |
 | `HATCHET_CLIENT_TOKEN` | string | — | **Required** | Hatchet API token used by the client SDK. |
+| `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | string (URL) | `""` | Optional | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty. Follows the standard OpenTelemetry convention. |
 
 #### `cmd/worker`
 
@@ -157,6 +159,4 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Hatchet execution timeout for the crop-detection step (e.g. `45m`, `1h`). |
 | `MEDIA_TRANSCODE_TIMEOUT` | Go duration | `4h` | Optional | Hatchet execution timeout for the transcode step (e.g. `2h`, `8h`). |
-| `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
 | `METRICS_HIGH_CARDINALITY_LABELS` | `true` / `false` | `false` | Optional | When `true`, per-item labels (id, title, year, etc.) are attached to metric observations. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | string (URL) | `""` | Optional | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty. Follows the standard OpenTelemetry convention. |
