@@ -10,9 +10,10 @@ import (
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 )
 
-// Type aliases so package-level tests and code continue to reference Config/WatchEntry directly.
+// Type aliases so package-level tests and code continue to reference Config/WatchEntry/CompiledRegexp directly.
 type Config = watcherconfig.Config
 type WatchEntry = watcherconfig.WatchEntry
+type CompiledRegexp = watcherconfig.CompiledRegexp
 
 // loadConfig reads and parses the watcher YAML config file at path.
 func loadConfig(path string) (*Config, error) {

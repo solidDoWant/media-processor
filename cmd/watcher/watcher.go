@@ -207,13 +207,23 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
-			if d.IsDir() {
-				return nil
-			}
-
 			absPath, err := filepath.Abs(path)
 			if err != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
+				return nil
+			}
+
+			for _, pattern := range w.IgnorePatterns {
+				if pattern.MatchString(absPath) {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+
+					return nil
+				}
+			}
+
+			if d.IsDir() {
 				return nil
 			}
 

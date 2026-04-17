@@ -106,9 +106,17 @@ No config file merging is performed. Exactly one YAML config file path is accept
 ### Watcher config example
 
 ```yaml
-mappings:
-  - path: /media/incoming/movies
-    workflow: transcode-movie
-  - path: /media/incoming/tv
-    workflow: transcode-tv-episode
+cron_schedule: "*/5 * * * * *"
+watches:
+  - name: movies
+    path: /media/incoming/movies
+    media_type: movie
+    ignorePatterns:
+      - \.!qB$
+      - (^|/)_unpack(/|$)
+  - name: shows
+    path: /media/incoming/tv
+    media_type: show
 ```
+
+`cron_schedule` and `ignorePatterns` are both optional. A minimal entry only needs `name`, `path`, and `media_type`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree.

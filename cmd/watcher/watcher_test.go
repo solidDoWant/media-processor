@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -522,6 +523,89 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 	})
 	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
 	assert.EqualValues(t, 1, dp.Value)
+}
+
+// TestScan_IgnorePatternSkipsMatchingFile verifies that a file whose absolute path matches
+// an ignorePatterns entry is not dispatched and no dispatch error is recorded.
+func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "video.mkv.!qB"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "video.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+		},
+	}
+
+	var dispatched []string
+
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+		dispatched = append(dispatched, fp)
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, filepath.Join(dir, "video.mkv"), dispatched[0])
+}
+
+// TestScan_IgnorePatternPrunesMatchingDirectory verifies that when a directory's absolute
+// path matches an ignorePatterns entry, the directory and its entire subtree are skipped.
+func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	unpackDir := filepath.Join(dir, "_unpack")
+	require.NoError(t, os.MkdirAll(unpackDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unpackDir, "video.mkv"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}},
+		},
+	}
+
+	var dispatched []string
+
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+		dispatched = append(dispatched, fp)
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, filepath.Join(dir, "movie.mkv"), dispatched[0])
+}
+
+// TestScan_NonMatchingFileDispatchedWithIgnorePatterns verifies that a file whose absolute
+// path does not match any ignorePatterns entry is dispatched normally alongside ignored files.
+func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "partial.mkv.!qB"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+		},
+	}
+
+	var dispatched []string
+
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string) error {
+		dispatched = append(dispatched, fp)
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	require.Len(t, dispatched, 1)
+	assert.Equal(t, filepath.Join(dir, "movie.mkv"), dispatched[0])
 }
 
 // TestScan_DispatchErrorsCounter verifies that watcher_dispatch_errors_total increments

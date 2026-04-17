@@ -3,6 +3,10 @@
   "$id": "https://github.com/solidDoWant/media-processor/internal/watcherconfig/config",
   "$ref": "#/$defs/Config",
   "$defs": {
+    "CompiledRegexp": {
+      "type": "string",
+      "format": "regex"
+    },
     "Config": {
       "properties": {
         "cron_schedule": {
@@ -41,6 +45,12 @@
         },
         "media_type": {
           "$ref": "#/$defs/MediaType"
+        },
+        "ignorePatterns": {
+          "items": {
+            "$ref": "#/$defs/CompiledRegexp"
+          },
+          "type": "array"
         }
       },
       "additionalProperties": false,
