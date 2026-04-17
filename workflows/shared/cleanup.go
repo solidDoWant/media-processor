@@ -43,14 +43,25 @@ func pruneEmptyParents(filePath, watchRoot string) {
 	dir := filepath.Dir(filePath)
 
 	for {
-		rel, err := filepath.Rel(watchRoot, dir)
-		// rel == "." means dir IS the watch root; !filepath.IsLocal catches paths that
-		// escape the root (e.g. "..") — both are stopping conditions.
-		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		relDir, err := filepath.Rel(watchRoot, dir)
+		if err != nil {
+			slog.Warn("prune empty parent: could not compute relative path", "dir", dir, "watchRoot", watchRoot, "error", err)
 			return
 		}
 
-		d, err := root.Open(rel)
+		// Reached the watch root — stop without removing it.
+		if relDir == "." {
+			return
+		}
+
+		// relDir escapes watchRoot (e.g. filePath was outside the watch tree). This
+		// indicates a misconfiguration or security issue; log and stop.
+		if !filepath.IsLocal(relDir) {
+			slog.Warn("prune empty parent: directory is outside watch root", "dir", dir, "watchRoot", watchRoot)
+			return
+		}
+
+		d, err := root.Open(relDir)
 		if err != nil {
 			return
 		}
@@ -60,8 +71,8 @@ func pruneEmptyParents(filePath, watchRoot string) {
 			return
 		}
 
-		if removeErr := root.Remove(rel); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			slog.Warn("prune empty parent: failed to remove directory", "dir", filepath.Join(watchRoot, rel), "error", removeErr)
+		if removeErr := root.Remove(relDir); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			slog.Warn("prune empty parent: failed to remove directory", "dir", filepath.Join(watchRoot, relDir), "error", removeErr)
 			return
 		}
 
