@@ -3,6 +3,7 @@ package shared
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -65,9 +66,11 @@ func pruneEmptyParents(filePath, watchRoot string) {
 		if err != nil {
 			return
 		}
-		entries, err := d.ReadDir(-1)
+		// ReadDir(1) reads at most one entry — enough to determine whether the
+		// directory is empty without loading the full listing.
+		entries, err := d.ReadDir(1)
 		_ = d.Close()
-		if err != nil || len(entries) > 0 {
+		if len(entries) > 0 || (err != nil && !errors.Is(err, io.EOF)) {
 			return
 		}
 

@@ -200,9 +200,18 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 		var mappingErrs []error
 
+		// Normalise the watch path to an absolute path once per entry so that watchRoot
+		// is always comparable to the absolute file paths produced inside the walk callback.
+		absWatchRoot, err := filepath.Abs(w.Path)
+		if err != nil {
+			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for watch directory %q: %w", w.Path, err))
+			errs = append(errs, mappingErrs...)
+			continue
+		}
+
 		start := time.Now()
 
-		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
+		if err := filepath.WalkDir(absWatchRoot, func(path string, d fs.DirEntry, err error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
@@ -234,7 +243,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource, w.Path, w.RetainEmptyDirectories); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
