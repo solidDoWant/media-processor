@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -193,6 +194,13 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		successOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusSuccess))
 		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
 
+		// Compile ignore patterns once per watch entry. These are guaranteed valid by config
+		// validation, so MustCompile is safe here.
+		ignoreRegexes := make([]*regexp.Regexp, len(w.IgnorePatterns))
+		for i, pattern := range w.IgnorePatterns {
+			ignoreRegexes[i] = regexp.MustCompile(pattern)
+		}
+
 		var mappingErrs []error
 
 		start := time.Now()
@@ -207,13 +215,23 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
-			if d.IsDir() {
-				return nil
-			}
-
 			absPath, err := filepath.Abs(path)
 			if err != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
+				return nil
+			}
+
+			for _, re := range ignoreRegexes {
+				if re.MatchString(absPath) {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+
+					return nil
+				}
+			}
+
+			if d.IsDir() {
 				return nil
 			}
 

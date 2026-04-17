@@ -151,6 +151,41 @@ watches: []
 				Watches:      []WatchEntry{},
 			},
 		},
+		{
+			name: "valid ignorePatterns are parsed into watch entry",
+			content: `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - \.!qB$
+      - (^|/)_unpack(/|$)
+`,
+			expected: Config{
+				CronSchedule: watcherconfig.DefaultCronSchedule,
+				Watches: []WatchEntry{
+					{
+						Name:           "movies",
+						Path:           "/watch/movies",
+						MediaType:      medialib.MovieType,
+						IgnorePatterns: []string{`\.!qB$`, `(^|/)_unpack(/|$)`},
+					},
+				},
+			},
+		},
+		{
+			name: "invalid regex in ignorePatterns returns error",
+			content: `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - "[unclosed"
+`,
+			errFunc: require.Error,
+		},
 	}
 
 	for _, tt := range tests {

@@ -31,6 +31,11 @@ type WatchEntry struct {
 	// MediaType must be one of the values in validMediaTypes; validated by the mediatype tag.
 	// The validate tag is required for runtime enforcement; medialib.MediaType.JSONSchema handles schema generation.
 	MediaType medialib.MediaType `yaml:"media_type" validate:"mediatype"`
+	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
+	// path of each file and directory encountered during a scan. A matching file is silently
+	// skipped; a matching directory causes its entire subtree to be pruned. Patterns are
+	// validated at config load; an invalid expression causes loadConfig to return an error.
+	IgnorePatterns []string `yaml:"ignorePatterns,omitempty" validate:"omitempty,dive,validregex"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
