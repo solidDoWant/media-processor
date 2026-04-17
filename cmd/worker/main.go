@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -106,6 +107,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	detectCropTimeout, err := parseTimeout("MEDIA_DETECTCROP_TIMEOUT", media.DefaultDetectCropTimeout)
+	if err != nil {
+		return err
+	}
+
+	transcodeTimeout, err := parseTimeout("MEDIA_TRANSCODE_TIMEOUT", media.DefaultTranscodeTimeout)
+	if err != nil {
+		return err
+	}
+
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_WATCHER_ROOT"),
@@ -115,6 +126,8 @@ func run(ctx context.Context) error {
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 		MinCropX:              minCropX,
 		MinCropY:              minCropY,
+		DetectCropTimeout:     detectCropTimeout,
+		TranscodeTimeout:      transcodeTimeout,
 	}, radarrClient, sonarrClient, webhookClient)
 
 	workerLogger := logging.NewZerologLogger("worker")
@@ -152,4 +165,21 @@ func parseCropThreshold(envVar string, defaultVal int) (int, error) {
 	}
 
 	return v, nil
+}
+
+// parseTimeout reads a Go duration string from the named environment variable.
+// If the variable is unset or empty, defaultVal is returned. Any non-duration
+// value is a fatal error.
+func parseTimeout(envVar string, defaultVal time.Duration) (time.Duration, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration (got %q): %w", envVar, raw, err)
+	}
+
+	return d, nil
 }
