@@ -72,6 +72,32 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by cleanup step")
 }
 
+func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.T) {
+	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
+		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
+	}
+
+	client, err := hatchet.NewClient()
+	require.NoError(t, err)
+
+	inputPath := copyTestVideo(t)
+	outputDir := t.TempDir()
+
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, client, wf)
+
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true})
+	require.NoError(t, err)
+
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	_, statErr := os.Stat(filepath.Join(outputDir, mkvBase))
+	assert.NoError(t, statErr, "transcoded output file should exist in outputDir")
+
+	_, statErr = os.Stat(inputPath)
+	assert.NoError(t, statErr, "source file should be preserved when PreserveSource is true")
+}
+
 func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
