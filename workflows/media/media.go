@@ -55,6 +55,14 @@ type MediaWorkflowConfig struct {
 	// 0 means no minimum (any detected crop is applied). Defaults are applied by
 	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropY int
+	// DetectCropTimeout is the Hatchet execution timeout for the detectcrop step.
+	// Defaults to 30 minutes when zero. Set by the caller (e.g. cmd/worker via
+	// parseTimeout from MEDIA_DETECTCROP_TIMEOUT).
+	DetectCropTimeout time.Duration
+	// TranscodeTimeout is the Hatchet execution timeout for the transcode step.
+	// Defaults to 4 hours when zero. Set by the caller (e.g. cmd/worker via
+	// parseTimeout from MEDIA_TRANSCODE_TIMEOUT).
+	TranscodeTimeout time.Duration
 }
 
 // MediaInput is the workflow's trigger payload.
@@ -151,7 +159,7 @@ func NewMediaWorkflow(
 		}
 
 		return shared.DetectCropOutput{Crop: crop}, nil
-	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithExecutionTimeout(30*time.Minute))
+	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.DetectCropTimeout))
 
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
@@ -179,7 +187,7 @@ func NewMediaWorkflow(
 		}
 
 		return out, err
-	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(4*time.Hour))
+	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.TranscodeTimeout))
 
 	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
 	// for the processed output file, triggering import into the library. The import path is
