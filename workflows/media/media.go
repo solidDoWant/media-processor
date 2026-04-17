@@ -74,10 +74,12 @@ type MediaWorkflowConfig struct {
 
 // MediaInput is the workflow's trigger payload.
 type MediaInput struct {
-	FilePath       string             `json:"file_path"`
-	MediaType      medialib.MediaType `json:"media_type"`
-	MappingName    string             `json:"mapping_name"`
-	PreserveSource bool               `json:"preserve_source,omitempty"`
+	FilePath               string             `json:"file_path"`
+	MediaType              medialib.MediaType `json:"media_type"`
+	MappingName            string             `json:"mapping_name"`
+	PreserveSource         bool               `json:"preserve_source,omitempty"`
+	WatchRoot              string             `json:"watch_root,omitempty"`
+	RetainEmptyDirectories bool               `json:"retain_empty_directories,omitempty"`
 }
 
 // NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV
@@ -143,7 +145,7 @@ func NewMediaWorkflow(
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (shared.ProbeOutput, error) {
 		start := time.Now()
 
-		out, err := shared.RunProbe(ctx, input.FilePath)
+		out, err := shared.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 		if err != nil {
 			return out, err
 		}
@@ -242,7 +244,7 @@ func NewMediaWorkflow(
 			return struct{}{}, nil
 		}
 
-		return struct{}{}, shared.RunCleanup(input.FilePath)
+		return struct{}{}, shared.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// record_metrics: record per-run OTel observations for valid-media completions.

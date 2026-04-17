@@ -79,6 +79,11 @@ type WatchEntry struct {
 	// When true, the source file is kept; when false or omitted, the source file is deleted
 	// (default behaviour).
 	PreserveSource bool `yaml:"preserveSource,omitempty"`
+	// RetainEmptyDirectories controls whether empty parent directories are removed after the
+	// source file is deleted. When false or omitted (the default), parent directories that
+	// become empty as a result of source-file deletion are pruned bottom-up, stopping at the
+	// watch root. When true, no directory removal is performed (current behaviour).
+	RetainEmptyDirectories bool `yaml:"retainEmptyDirectories,omitempty"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.

@@ -54,6 +54,9 @@
         },
         "preserveSource": {
           "type": "boolean"
+        },
+        "retainEmptyDirectories": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
