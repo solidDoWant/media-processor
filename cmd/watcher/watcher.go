@@ -194,64 +194,73 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		successOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusSuccess))
 		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
 
-		// Compile ignore patterns once per watch entry. These are guaranteed valid by config
-		// validation, so MustCompile is safe here.
-		ignoreRegexes := make([]*regexp.Regexp, len(w.IgnorePatterns))
-		for i, pattern := range w.IgnorePatterns {
-			ignoreRegexes[i] = regexp.MustCompile(pattern)
-		}
-
 		var mappingErrs []error
 
 		start := time.Now()
 
-		if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+		// Compile ignore patterns once per watch entry. Patterns are validated at config load so
+		// compilation should never fail, but we handle errors defensively: a failed compile is
+		// recorded as a scan error and the walk for this entry is skipped to avoid processing
+		// files that should have been filtered.
+		ignoreRegexes := make([]*regexp.Regexp, 0, len(w.IgnorePatterns))
+		for _, pattern := range w.IgnorePatterns {
+			re, compileErr := regexp.Compile(pattern)
+			if compileErr != nil {
+				mappingErrs = append(mappingErrs, fmt.Errorf("compile ignore pattern %q: %w", pattern, compileErr))
+			} else {
+				ignoreRegexes = append(ignoreRegexes, re)
 			}
+		}
 
-			if err != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("scan error at %q: %w", path, err))
-				return nil
-			}
+		if len(mappingErrs) == 0 {
+			if err := filepath.WalkDir(w.Path, func(path string, d fs.DirEntry, err error) error {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 
-			absPath, err := filepath.Abs(path)
-			if err != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
-				return nil
-			}
-
-			for _, re := range ignoreRegexes {
-				if re.MatchString(absPath) {
-					if d.IsDir() {
-						return filepath.SkipDir
-					}
-
+				if err != nil {
+					mappingErrs = append(mappingErrs, fmt.Errorf("scan error at %q: %w", path, err))
 					return nil
 				}
-			}
 
-			if d.IsDir() {
+				absPath, err := filepath.Abs(path)
+				if err != nil {
+					mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
+					return nil
+				}
+
+				for _, re := range ignoreRegexes {
+					if re.MatchString(absPath) {
+						if d.IsDir() {
+							return filepath.SkipDir
+						}
+
+						return nil
+					}
+				}
+
+				if d.IsDir() {
+					return nil
+				}
+
+				instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
+
+				if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
+					mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
+
+					instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
+				} else {
+					instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
+				}
+
 				return nil
+			}); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+
+				mappingErrs = append(mappingErrs, fmt.Errorf("walk directory %q: %w", w.Path, err))
 			}
-
-			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
-
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
-
-				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
-			} else {
-				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
-			}
-
-			return nil
-		}); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return err
-			}
-
-			mappingErrs = append(mappingErrs, fmt.Errorf("walk directory %q: %w", w.Path, err))
 		}
 
 		duration := time.Since(start).Seconds()
