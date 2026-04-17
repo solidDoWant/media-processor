@@ -221,14 +221,8 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
-			absPath, err := filepath.Abs(path)
-			if err != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for %q: %w", path, err))
-				return nil
-			}
-
 			for _, pattern := range w.IgnorePatterns {
-				if pattern.MatchString(absPath) {
+				if pattern.MatchString(path) {
 					if d.IsDir() {
 						return filepath.SkipDir
 					}
@@ -243,8 +237,8 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
+			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
+				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			} else {
