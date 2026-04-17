@@ -16,7 +16,7 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	"github.com/solidDoWant/media-processor/workflows/shared"
+	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 const (
@@ -142,10 +142,10 @@ func NewMediaWorkflow(
 	// (without error) when the file is not a recognisable media file or has no video stream,
 	// which causes all downstream steps to be skipped via WithSkipIf.
 	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
-	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (shared.ProbeOutput, error) {
+	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (steps.ProbeOutput, error) {
 		start := time.Now()
 
-		out, err := shared.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 		if err != nil {
 			return out, err
 		}
@@ -165,41 +165,41 @@ func NewMediaWorkflow(
 	// Crop pointer when no crop is warranted (both axes disabled or trim below threshold).
 	// cfg.MinCropX and cfg.MinCropY are passed directly; defaults are applied by the
 	// caller (cmd/worker) via parseCropThreshold before constructing MediaWorkflowConfig.
-	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (shared.DetectCropOutput, error) {
-		var probe shared.ProbeOutput
+	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (steps.DetectCropOutput, error) {
+		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return shared.DetectCropOutput{}, fmt.Errorf("get probe output: %w", err)
+			return steps.DetectCropOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		crop, err := shared.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
+		crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
 		if err != nil {
-			return shared.DetectCropOutput{}, err
+			return steps.DetectCropOutput{}, err
 		}
 
-		return shared.DetectCropOutput{Crop: crop}, nil
+		return steps.DetectCropOutput{Crop: crop}, nil
 	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.DetectCropTimeout))
 
 	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
 	// temp name, then atomically rename it to the final path. Writing to the output
 	// directory (rather than the system temp dir) means the rename is always within the
 	// same filesystem, so it is guaranteed to be atomic on Linux.
-	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (shared.TranscodeOutput, error) {
-		var probe shared.ProbeOutput
+	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (steps.TranscodeOutput, error) {
+		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return shared.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
+			return steps.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
 		}
 
-		var detectcrop shared.DetectCropOutput
+		var detectcrop steps.DetectCropOutput
 		if err := ctx.ParentOutput(detectcropTask, &detectcrop); err != nil {
-			return shared.TranscodeOutput{}, fmt.Errorf("get detectcrop output: %w", err)
+			return steps.TranscodeOutput{}, fmt.Errorf("get detectcrop output: %w", err)
 		}
 
 		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
-			return shared.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
+			return steps.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
 		}
 
-		out, err := shared.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
+		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
@@ -213,7 +213,7 @@ func NewMediaWorkflow(
 	// by .mkv, so that the path points to the actual transcoded file as seen by the arr
 	// service (via the LocalPathPrefix/RemotePathPrefix translation in ImportByFilePath).
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		var transcode shared.TranscodeOutput
+		var transcode steps.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
 			return struct{}{}, fmt.Errorf("get transcode output: %w", err)
 		}
@@ -244,18 +244,18 @@ func NewMediaWorkflow(
 			return struct{}{}, nil
 		}
 
-		return struct{}{}, shared.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		return struct{}{}, steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// record_metrics: record per-run OTel observations for valid-media completions.
 	// Runs after cleanup so total_duration_seconds covers the full probe→cleanup span.
 	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		var probe shared.ProbeOutput
+		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			return struct{}{}, fmt.Errorf("get probe output for metrics: %w", err)
 		}
 
-		var transcode shared.TranscodeOutput
+		var transcode steps.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
 			return struct{}{}, fmt.Errorf("get transcode output for metrics: %w", err)
 		}
@@ -294,7 +294,7 @@ func NewMediaWorkflow(
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		return struct{}{}, shared.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
+		return struct{}{}, steps.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
 	})
 
 	return wf

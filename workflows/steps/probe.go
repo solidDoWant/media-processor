@@ -1,5 +1,5 @@
-// Package shared provides workflow step implementations shared across workflow types.
-package shared
+// Package steps provides workflow step implementations for the media processing workflows.
+package steps
 
 import (
 	"context"
