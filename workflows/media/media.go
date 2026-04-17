@@ -56,12 +56,12 @@ type MediaWorkflowConfig struct {
 	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropY int
 	// DetectCropTimeout is the Hatchet execution timeout for the detectcrop step.
-	// Defaults to 30 minutes when zero. Set by the caller (e.g. cmd/worker via
-	// parseTimeout from MEDIA_DETECTCROP_TIMEOUT).
+	// When zero, NewMediaWorkflow applies a default of 30 minutes. Set by the caller
+	// (e.g. cmd/worker via parseTimeout from MEDIA_DETECTCROP_TIMEOUT).
 	DetectCropTimeout time.Duration
 	// TranscodeTimeout is the Hatchet execution timeout for the transcode step.
-	// Defaults to 4 hours when zero. Set by the caller (e.g. cmd/worker via
-	// parseTimeout from MEDIA_TRANSCODE_TIMEOUT).
+	// When zero, NewMediaWorkflow applies a default of 4 hours. Set by the caller
+	// (e.g. cmd/worker via parseTimeout from MEDIA_TRANSCODE_TIMEOUT).
 	TranscodeTimeout time.Duration
 }
 
@@ -87,6 +87,14 @@ func NewMediaWorkflow(
 	sonarrClient medialib.ArrLibrary,
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
+	if cfg.DetectCropTimeout == 0 {
+		cfg.DetectCropTimeout = 30 * time.Minute
+	}
+
+	if cfg.TranscodeTimeout == 0 {
+		cfg.TranscodeTimeout = 4 * time.Hour
+	}
+
 	meterProvider := cfg.MeterProvider
 	if meterProvider == nil {
 		meterProvider = noop.NewMeterProvider()
