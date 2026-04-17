@@ -51,6 +51,9 @@
             "$ref": "#/$defs/CompiledRegexp"
           },
           "type": "array"
+        },
+        "preserveSource": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

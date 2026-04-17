@@ -157,7 +157,7 @@ watches: []
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     preserveSource: true
 `,
 			expected: Config{
