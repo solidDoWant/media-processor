@@ -9,7 +9,7 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
-	"github.com/solidDoWant/media-processor/workflows/shared"
+	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // Recorder holds OTel instruments for the media workflow and records per-run observations.
@@ -123,8 +123,8 @@ func NewRecorder(mp otelmetric.MeterProvider, highCardinality bool) (*Recorder, 
 func (r *Recorder) RecordRun(
 	ctx context.Context,
 	input MediaInput,
-	probe shared.ProbeOutput,
-	transcode shared.TranscodeOutput,
+	probe steps.ProbeOutput,
+	transcode steps.TranscodeOutput,
 	mediaInfo medialib.MediaInfo,
 	hardwareAccelerated bool,
 	totalElapsed time.Duration,

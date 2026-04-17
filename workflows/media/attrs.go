@@ -6,7 +6,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
-	"github.com/solidDoWant/media-processor/workflows/shared"
+	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 func mediaTypeAttr(mt medialib.MediaType) attribute.KeyValue {
@@ -18,7 +18,7 @@ func mappingNameAttr(name string) attribute.KeyValue {
 }
 
 // buildStandardAttrs returns the full standard label set for processing metrics.
-func buildStandardAttrs(input MediaInput, probe shared.ProbeOutput, transcode shared.TranscodeOutput, hardwareAccelerated bool) []attribute.KeyValue {
+func buildStandardAttrs(input MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput, hardwareAccelerated bool) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String("source_codec", probe.VideoCodec),
 		attribute.String("destination_codec", transcode.DestCodec),

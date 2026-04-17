@@ -11,7 +11,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
-	"github.com/solidDoWant/media-processor/workflows/shared"
+	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // attributeKey converts a label name to an OTel attribute.Key for use in test assertions.
@@ -75,17 +75,17 @@ func sampleInput(mt medialib.MediaType) MediaInput {
 }
 
 // sampleProbe returns a ProbeOutput suitable for testing.
-func sampleProbe() shared.ProbeOutput {
-	return shared.ProbeOutput{
+func sampleProbe() steps.ProbeOutput {
+	return steps.ProbeOutput{
 		IsValidMedia:    true,
 		VideoCodec:      "h264",
 		Format:          "mov,mp4,m4a,3gp,3g2,mj2",
 		DurationSeconds: 120.5,
-		AudioStreams: []shared.AudioStreamInfo{
-			{StreamInfo: shared.StreamInfo{Index: 1, Language: "eng"}, ReportedChannelCount: 2, EffectiveChannelCount: 2},
-			{StreamInfo: shared.StreamInfo{Index: 2, Language: "eng"}, ReportedChannelCount: 6, EffectiveChannelCount: 6},
+		AudioStreams: []steps.AudioStreamInfo{
+			{StreamInfo: steps.StreamInfo{Index: 1, Language: "eng"}, ReportedChannelCount: 2, EffectiveChannelCount: 2},
+			{StreamInfo: steps.StreamInfo{Index: 2, Language: "eng"}, ReportedChannelCount: 6, EffectiveChannelCount: 6},
 		},
-		SubtitleStreams: []shared.StreamInfo{
+		SubtitleStreams: []steps.StreamInfo{
 			{Index: 3, Language: "eng"},
 		},
 		StartedAt: time.Now().Add(-5 * time.Second),
@@ -93,8 +93,8 @@ func sampleProbe() shared.ProbeOutput {
 }
 
 // sampleTranscode returns a TranscodeOutput suitable for testing.
-func sampleTranscode() shared.TranscodeOutput {
-	return shared.TranscodeOutput{
+func sampleTranscode() steps.TranscodeOutput {
+	return steps.TranscodeOutput{
 		DestCodec:                "hevc",
 		DestContainer:            "mkv",
 		DestFilePath:             "/output/test.mkv",
