@@ -163,6 +163,30 @@ watches:
 `,
 			errFunc: require.Error,
 		},
+		{
+			name: "integer ignorePatterns entry returns error",
+			content: `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - 123
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "empty string ignorePatterns entry returns error",
+			content: `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - ""
+`,
+			errFunc: require.Error,
+		},
 	}
 
 	for _, tt := range tests {
@@ -190,6 +214,26 @@ watches:
 func TestLoadConfig_MissingFile(t *testing.T) {
 	_, err := loadConfig("/nonexistent/path/config.yaml")
 	require.Error(t, err)
+}
+
+// TestLoadConfig_NullIgnorePatternEntryDropped verifies that yaml.v3 silently drops a null
+// entry in ignorePatterns rather than treating it as an empty pattern that matches everything.
+func TestLoadConfig_NullIgnorePatternEntryDropped(t *testing.T) {
+	t.Parallel()
+
+	content := `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - null
+`
+	path := writeTempConfig(t, content)
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Watches, 1)
+	assert.Empty(t, cfg.Watches[0].IgnorePatterns, "null entry should be silently dropped by yaml.v3")
 }
 
 // TestLoadConfig_IgnorePatternsParsedAndCompiled verifies that valid ignorePatterns entries

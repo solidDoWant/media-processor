@@ -38,10 +38,14 @@ func (CompiledRegexp) JSONSchema() *jsonschema.Schema {
 }
 
 // UnmarshalYAML compiles the scalar YAML string as a Go regular expression. It returns an error
-// if the node is not a scalar string or if the expression is invalid.
+// if the node is not a scalar string, if the string is empty, or if the expression is invalid.
 func (c *CompiledRegexp) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind != yaml.ScalarNode {
-		return fmt.Errorf("ignorePatterns entry must be a string, got YAML node kind %v", value.Kind)
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+		return fmt.Errorf("ignorePatterns entry must be a string, got YAML node kind %v (tag %s)", value.Kind, value.Tag)
+	}
+
+	if value.Value == "" {
+		return fmt.Errorf("ignorePatterns entry must not be empty")
 	}
 
 	re, err := regexp.Compile(value.Value)
