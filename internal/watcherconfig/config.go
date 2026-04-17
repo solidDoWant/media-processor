@@ -1,7 +1,11 @@
 package watcherconfig
 
 import (
+	"fmt"
+	"regexp"
+
 	"github.com/invopop/jsonschema"
+	"gopkg.in/yaml.v3"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
@@ -19,6 +23,30 @@ func (CronExpression) JSONSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "string", Pattern: sixFieldCronPattern}
 }
 
+// CompiledRegexp is a Go regular expression that is compiled at YAML parse time. An invalid
+// expression causes YAML unmarshaling (and therefore config loading) to fail with a descriptive
+// error, so no separate validation step is required.
+type CompiledRegexp struct {
+	*regexp.Regexp
+}
+
+// UnmarshalYAML compiles the scalar YAML string as a Go regular expression. It returns an error
+// if the node is not a scalar string or if the expression is invalid.
+func (c *CompiledRegexp) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return fmt.Errorf("ignorePatterns entry must be a string, got YAML node kind %v", value.Kind)
+	}
+
+	re, err := regexp.Compile(value.Value)
+	if err != nil {
+		return fmt.Errorf("invalid regular expression %q: %w", value.Value, err)
+	}
+
+	c.Regexp = re
+
+	return nil
+}
+
 // validMediaTypes is the authoritative list of medialib.MediaType values accepted in config.
 // It drives runtime validation; JSON Schema enum generation is handled by medialib.MediaType.JSONSchema.
 var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType}
@@ -34,8 +62,8 @@ type WatchEntry struct {
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
 	// path of each file and directory encountered during a scan. A matching file is silently
 	// skipped; a matching directory causes its entire subtree to be pruned. Patterns are
-	// validated at config load; an invalid expression causes loadConfig to return an error.
-	IgnorePatterns []string `yaml:"ignorePatterns,omitempty" validate:"omitempty,dive,validregex"`
+	// compiled at config load; an invalid expression causes loadConfig to return an error.
+	IgnorePatterns []CompiledRegexp `yaml:"ignorePatterns,omitempty" validate:"omitempty"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.

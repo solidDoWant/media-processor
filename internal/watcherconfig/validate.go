@@ -1,8 +1,6 @@
 package watcherconfig
 
 import (
-	"regexp"
-
 	"github.com/go-playground/validator/v10"
 	"github.com/robfig/cron/v3"
 
@@ -34,10 +32,6 @@ func NewValidator() *validator.Validate {
 		panic("failed to register validation \"hatchetcron\": " + err.Error())
 	}
 
-	if err := v.RegisterValidation("validregex", validateRegex); err != nil {
-		panic("failed to register validation \"validregex\": " + err.Error())
-	}
-
 	return v
 }
 
@@ -57,11 +51,5 @@ func validateMediaType(fl validator.FieldLevel) bool {
 // using robfig/cron — the same library Hatchet uses internally.
 func validateHatchetCron(fl validator.FieldLevel) bool {
 	_, err := cronParser.Parse(fl.Field().String())
-	return err == nil
-}
-
-// validateRegex checks that the field value is a valid Go regular expression.
-func validateRegex(fl validator.FieldLevel) bool {
-	_, err := regexp.Compile(fl.Field().String())
 	return err == nil
 }

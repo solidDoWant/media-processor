@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -535,7 +536,7 @@ func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []string{`\.!qB$`}},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
 		},
 	}
 
@@ -564,7 +565,7 @@ func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []string{`(^|/)_unpack(/|$)`}},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}},
 		},
 	}
 
@@ -591,7 +592,7 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []string{`\.!qB$`}},
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
 		},
 	}
 

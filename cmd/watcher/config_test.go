@@ -152,29 +152,6 @@ watches: []
 			},
 		},
 		{
-			name: "valid ignorePatterns are parsed into watch entry",
-			content: `
-watches:
-  - name: movies
-    path: /watch/movies
-    media_type: movie
-    ignorePatterns:
-      - \.!qB$
-      - (^|/)_unpack(/|$)
-`,
-			expected: Config{
-				CronSchedule: watcherconfig.DefaultCronSchedule,
-				Watches: []WatchEntry{
-					{
-						Name:           "movies",
-						Path:           "/watch/movies",
-						MediaType:      medialib.MovieType,
-						IgnorePatterns: []string{`\.!qB$`, `(^|/)_unpack(/|$)`},
-					},
-				},
-			},
-		},
-		{
 			name: "invalid regex in ignorePatterns returns error",
 			content: `
 watches:
@@ -213,6 +190,33 @@ watches:
 func TestLoadConfig_MissingFile(t *testing.T) {
 	_, err := loadConfig("/nonexistent/path/config.yaml")
 	require.Error(t, err)
+}
+
+// TestLoadConfig_IgnorePatternsParsedAndCompiled verifies that valid ignorePatterns entries
+// are compiled from YAML strings and produce working regular expressions.
+func TestLoadConfig_IgnorePatternsParsedAndCompiled(t *testing.T) {
+	t.Parallel()
+
+	content := `
+watches:
+  - name: movies
+    path: /watch/movies
+    media_type: movie
+    ignorePatterns:
+      - \.!qB$
+      - (^|/)_unpack(/|$)
+`
+	path := writeTempConfig(t, content)
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Watches, 1)
+	require.Len(t, cfg.Watches[0].IgnorePatterns, 2)
+	assert.Equal(t, `\.!qB$`, cfg.Watches[0].IgnorePatterns[0].String())
+	assert.Equal(t, `(^|/)_unpack(/|$)`, cfg.Watches[0].IgnorePatterns[1].String())
+	assert.True(t, cfg.Watches[0].IgnorePatterns[0].MatchString("/media/video.mkv.!qB"), "should match .!qB suffix")
+	assert.False(t, cfg.Watches[0].IgnorePatterns[0].MatchString("/media/video.mkv"), "should not match clean path")
+	assert.True(t, cfg.Watches[0].IgnorePatterns[1].MatchString("/media/_unpack/video.mkv"), "should match _unpack subtree")
+	assert.False(t, cfg.Watches[0].IgnorePatterns[1].MatchString("/media/video.mkv"), "should not match clean path")
 }
 
 func writeTempConfig(t *testing.T, content string) string {
