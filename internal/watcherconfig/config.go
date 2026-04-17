@@ -69,7 +69,7 @@ type WatchEntry struct {
 	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
 	// MediaType must be one of the values in validMediaTypes; validated by the mediatype tag.
 	// The validate tag is required for runtime enforcement; medialib.MediaType.JSONSchema handles schema generation.
-	MediaType medialib.MediaType `yaml:"media_type" validate:"mediatype"`
+	MediaType medialib.MediaType `yaml:"mediaType" validate:"mediatype"`
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
 	// path of each file and directory encountered during a scan. A matching file is silently
 	// skipped; a matching directory causes its entire subtree to be pruned. Patterns are
@@ -83,7 +83,7 @@ type Config struct {
 	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
 	// with a leading seconds field, e.g. "*/5 * * * * *".
 	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
-	CronSchedule CronExpression `yaml:"cron_schedule,omitempty" validate:"omitempty,hatchetcron"`
+	CronSchedule CronExpression `yaml:"cronSchedule,omitempty" validate:"omitempty,hatchetcron"`
 	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
 	Watches []WatchEntry `yaml:"watches,omitempty" validate:"dive"`
 }

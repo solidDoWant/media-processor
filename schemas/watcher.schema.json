@@ -9,7 +9,7 @@
     },
     "Config": {
       "properties": {
-        "cron_schedule": {
+        "cronSchedule": {
           "$ref": "#/$defs/CronExpression"
         },
         "watches": {
@@ -43,7 +43,7 @@
           "type": "string",
           "minLength": 1
         },
-        "media_type": {
+        "mediaType": {
           "$ref": "#/$defs/MediaType"
         },
         "ignorePatterns": {
@@ -58,7 +58,7 @@
       "required": [
         "name",
         "path",
-        "media_type"
+        "mediaType"
       ]
     }
   }

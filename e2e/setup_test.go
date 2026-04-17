@@ -239,8 +239,8 @@ func startProcesses() error {
 	// Write watcher YAML config.
 	watcherCfg := filepath.Join(root, "bin", "e2e-watcher.yaml")
 	cfgContent := fmt.Sprintf("watches:\n"+
-		"  - name: radarr\n    path: %s\n    media_type: movie\n    ignorePatterns:\n      - \\.tmp$\n"+
-		"  - name: sonarr\n    path: %s\n    media_type: show\n    ignorePatterns:\n      - \\.tmp$\n",
+		"  - name: radarr\n    path: %s\n    mediaType: movie\n    ignorePatterns:\n      - \\.tmp$\n"+
+		"  - name: sonarr\n    path: %s\n    mediaType: show\n    ignorePatterns:\n      - \\.tmp$\n",
 		filepath.Join(downloadsDir, "radarr"),
 		filepath.Join(downloadsDir, "sonarr"),
 	)

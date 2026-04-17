@@ -30,10 +30,10 @@ func TestLoadConfig(t *testing.T) {
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
   - name: shows
     path: /watch/shows
-    media_type: show
+    mediaType: show
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
@@ -44,9 +44,9 @@ watches:
 			},
 		},
 		{
-			name: "custom cron_schedule is parsed",
+			name: "custom cronSchedule is parsed",
 			content: `
-cron_schedule: "*/10 * * * * *"
+cronSchedule: "*/10 * * * * *"
 watches: []
 `,
 			expected: Config{
@@ -55,7 +55,7 @@ watches: []
 			},
 		},
 		{
-			name:    "cron_schedule defaults to every 5 seconds when omitted",
+			name:    "cronSchedule defaults to every 5 seconds when omitted",
 			content: "watches: []",
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
@@ -72,7 +72,7 @@ watches: []
 			content: `
 watches:
   - path: /watch/movies
-    media_type: movie
+    mediaType: movie
 `,
 			errFunc: require.Error,
 		},
@@ -82,7 +82,7 @@ watches:
 watches:
   - name: ""
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
 `,
 			errFunc: require.Error,
 		},
@@ -92,34 +92,34 @@ watches:
 watches:
   - name: movies
     path: ""
-    media_type: movie
+    mediaType: movie
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "empty media_type in watch entry returns error",
+			name: "empty mediaType in watch entry returns error",
 			content: `
 watches:
   - name: movies
     path: /watch/movies
-    media_type: ""
+    mediaType: ""
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "unrecognized media_type returns error",
+			name: "unrecognized mediaType returns error",
 			content: `
 watches:
   - name: movies
     path: /watch/movies
-    media_type: UnknownType
+    mediaType: UnknownType
 `,
 			errFunc: require.Error,
 		},
 		{
 			name: "invalid cron expression returns error",
 			content: `
-cron_schedule: "* * * *"
+cronSchedule: "* * * *"
 watches: []
 `,
 			errFunc: require.Error,
@@ -127,7 +127,7 @@ watches: []
 		{
 			name: "five-field cron expression returns error",
 			content: `
-cron_schedule: "* * * * *"
+cronSchedule: "* * * * *"
 watches: []
 `,
 			errFunc: require.Error,
@@ -135,7 +135,7 @@ watches: []
 		{
 			name: "seven-field cron expression returns error",
 			content: `
-cron_schedule: "* * * * * * *"
+cronSchedule: "* * * * * * *"
 watches: []
 `,
 			errFunc: require.Error,
@@ -143,7 +143,7 @@ watches: []
 		{
 			name: "valid 6-field cron expression is accepted",
 			content: `
-cron_schedule: "0 30 9 * * *"
+cronSchedule: "0 30 9 * * *"
 watches: []
 `,
 			expected: Config{
@@ -157,7 +157,7 @@ watches: []
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - "[unclosed"
 `,
@@ -169,7 +169,7 @@ watches:
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - 123
 `,
@@ -181,7 +181,7 @@ watches:
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - ""
 `,
@@ -225,7 +225,7 @@ func TestLoadConfig_NullIgnorePatternEntryDropped(t *testing.T) {
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - null
 `
@@ -245,7 +245,7 @@ func TestLoadConfig_IgnorePatternsParsedAndCompiled(t *testing.T) {
 watches:
   - name: movies
     path: /watch/movies
-    media_type: movie
+    mediaType: movie
     ignorePatterns:
       - \.!qB$
       - (^|/)_unpack(/|$)
