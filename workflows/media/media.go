@@ -74,9 +74,10 @@ type MediaWorkflowConfig struct {
 
 // MediaInput is the workflow's trigger payload.
 type MediaInput struct {
-	FilePath    string             `json:"file_path"`
-	MediaType   medialib.MediaType `json:"media_type"`
-	MappingName string             `json:"mapping_name"`
+	FilePath       string             `json:"file_path"`
+	MediaType      medialib.MediaType `json:"media_type"`
+	MappingName    string             `json:"mapping_name"`
+	PreserveSource bool               `json:"preserve_source,omitempty"`
 }
 
 // NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV
@@ -234,8 +235,13 @@ func NewMediaWorkflow(
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
-	// cleanup: delete the original source file after successful processing.
+	// cleanup: delete the original source file after successful processing, unless
+	// PreserveSource is set on the originating watch entry.
 	cleanupTask := wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		if input.PreserveSource {
+			return struct{}{}, nil
+		}
+
 		return struct{}{}, shared.RunCleanup(input.FilePath)
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 

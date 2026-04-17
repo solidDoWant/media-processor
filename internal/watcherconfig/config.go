@@ -75,6 +75,10 @@ type WatchEntry struct {
 	// skipped; a matching directory causes its entire subtree to be pruned. Patterns are
 	// compiled at config load; an invalid expression causes loadConfig to return an error.
 	IgnorePatterns []CompiledRegexp `yaml:"ignorePatterns,omitempty" validate:"omitempty"`
+	// PreserveSource controls whether the source file is deleted after successful processing.
+	// When true, the source file is kept; when false or omitted, the source file is deleted
+	// (default behaviour).
+	PreserveSource bool `yaml:"preserveSource,omitempty"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.

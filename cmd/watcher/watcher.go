@@ -30,8 +30,9 @@ func statusAttr(status string) attribute.KeyValue {
 	return attribute.String("status", status)
 }
 
-// dispatchFunc submits a workflow run for the given absolute file path, media type, and mapping name.
-type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string) error
+// dispatchFunc submits a workflow run for the given absolute file path, media type, mapping name,
+// and whether to preserve the source file after processing.
+type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool) error
 
 // scanInstruments holds all OTel instruments used during scan. Instruments are registered
 // once at startup and reused across every scan invocation.
@@ -123,14 +124,15 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 	task := client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
 					media.MediaWorkflowName,
-					map[string]string{
-						"file_path":    filePath,
-						"media_type":   string(mediaType),
-						"mapping_name": mappingName,
+					media.MediaInput{
+						FilePath:       filePath,
+						MediaType:      mediaType,
+						MappingName:    mappingName,
+						PreserveSource: preserveSource,
 					},
 					hatchet.WithRunKey(filePath),
 				)
@@ -229,7 +231,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
