@@ -77,11 +77,18 @@ func TestSonarrHappyPath(t *testing.T) {
 	})
 	require.NoError(t, err, "Sonarr did not import any episode file within the timeout")
 
-	// Source .mp4 must be deleted by the worker's cleanup step.
-	sourceMp4 := filepath.Join(downloadsDir, "sonarr", releaseTitle+".mp4")
+	// preserveSource=false (default): source .mp4 must be deleted by the worker's cleanup step.
+	sourceMp4 := filepath.Join(downloadsDir, "sonarr", releaseTitle, releaseTitle+".mp4")
 	_, statErr := os.Stat(sourceMp4)
 
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "source .mp4 should have been deleted after import")
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "source .mp4 should have been deleted after import (preserveSource=false)")
+
+	// retainEmptyDirectories=false (default): the release subdirectory must be pruned once
+	// it becomes empty after source-file deletion.
+	releaseDir := filepath.Join(downloadsDir, "sonarr", releaseTitle)
+	_, dirStatErr := os.Stat(releaseDir)
+
+	assert.ErrorIs(t, dirStatErr, os.ErrNotExist, "release subdirectory should have been pruned after source deletion (retainEmptyDirectories=false)")
 
 	// .mkv must exist somewhere under the Sonarr library directory.
 	mkvPath := findMKV(t, filepath.Join(processedDir, "sonarr-library"))

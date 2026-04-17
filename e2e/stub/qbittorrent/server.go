@@ -220,7 +220,7 @@ func (s *Server) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("torrents/add", "category", category, "releaseName", releaseName, "hash", hash, "remote", r.RemoteAddr)
 
-	destDir := filepath.Join(s.downloadDir, category)
+	destDir := filepath.Join(s.downloadDir, category, releaseName)
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		http.Error(w, fmt.Sprintf("mkdir %s: %v", destDir, err), http.StatusInternalServerError)
