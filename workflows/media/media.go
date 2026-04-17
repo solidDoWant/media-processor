@@ -23,6 +23,13 @@ const (
 	MediaWorkflowName = "Media"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
+
+	// DefaultDetectCropTimeout is the default Hatchet execution timeout for the
+	// detectcrop step, used when MediaWorkflowConfig.DetectCropTimeout is zero.
+	DefaultDetectCropTimeout = 30 * time.Minute
+	// DefaultTranscodeTimeout is the default Hatchet execution timeout for the
+	// transcode step, used when MediaWorkflowConfig.TranscodeTimeout is zero.
+	DefaultTranscodeTimeout = 4 * time.Hour
 )
 
 // MediaWorkflowConfig holds the configuration for the media processing workflow.
@@ -88,11 +95,11 @@ func NewMediaWorkflow(
 	webhookClient *webhook.Client,
 ) *hatchet.Workflow {
 	if cfg.DetectCropTimeout == 0 {
-		cfg.DetectCropTimeout = 30 * time.Minute
+		cfg.DetectCropTimeout = DefaultDetectCropTimeout
 	}
 
 	if cfg.TranscodeTimeout == 0 {
-		cfg.TranscodeTimeout = 4 * time.Hour
+		cfg.TranscodeTimeout = DefaultTranscodeTimeout
 	}
 
 	meterProvider := cfg.MeterProvider

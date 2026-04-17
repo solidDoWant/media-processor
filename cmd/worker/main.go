@@ -107,12 +107,12 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	detectCropTimeout, err := parseTimeout("MEDIA_DETECTCROP_TIMEOUT", 30*time.Minute)
+	detectCropTimeout, err := parseTimeout("MEDIA_DETECTCROP_TIMEOUT", media.DefaultDetectCropTimeout)
 	if err != nil {
 		return err
 	}
 
-	transcodeTimeout, err := parseTimeout("MEDIA_TRANSCODE_TIMEOUT", 4*time.Hour)
+	transcodeTimeout, err := parseTimeout("MEDIA_TRANSCODE_TIMEOUT", media.DefaultTranscodeTimeout)
 	if err != nil {
 		return err
 	}
