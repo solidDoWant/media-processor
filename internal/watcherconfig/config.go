@@ -30,6 +30,13 @@ type CompiledRegexp struct {
 	*regexp.Regexp
 }
 
+// JSONSchema returns a JSON Schema for CompiledRegexp. The type serialises as a scalar string
+// (the regex pattern) at YAML parse time; reflecting the Go struct would produce an empty object
+// schema, so this method overrides that to describe the on-disk shape accurately.
+func (CompiledRegexp) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{Type: "string", Format: "regex"}
+}
+
 // UnmarshalYAML compiles the scalar YAML string as a Go regular expression. It returns an error
 // if the node is not a scalar string or if the expression is invalid.
 func (c *CompiledRegexp) UnmarshalYAML(value *yaml.Node) error {
