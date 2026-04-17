@@ -121,6 +121,7 @@ watches:
     path: /media/incoming/archive
     mediaType: movie
     preserveSource: true
+    retainEmptyDirectories: true
 ```
 
-`cronSchedule`, `ignorePatterns`, and `preserveSource` are all optional. A minimal entry only needs `name`, `path`, and `mediaType`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file.
+`cronSchedule`, `ignorePatterns`, `preserveSource`, and `retainEmptyDirectories` are all optional. A minimal entry only needs `name`, `path`, and `mediaType`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file. By default, after a source file is deleted (either because it is invalid media or after successful processing), any parent directories that become empty are removed bottom-up, stopping at the watch root. Set `retainEmptyDirectories: true` to disable this behaviour and leave empty directories in place.

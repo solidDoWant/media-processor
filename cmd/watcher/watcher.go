@@ -31,8 +31,9 @@ func statusAttr(status string) attribute.KeyValue {
 }
 
 // dispatchFunc submits a workflow run for the given absolute file path, media type, mapping name,
-// and whether to preserve the source file after processing.
-type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool) error
+// whether to preserve the source file after processing, the watch root directory, and whether to
+// retain empty parent directories after source-file deletion.
+type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool) error
 
 // scanInstruments holds all OTel instruments used during scan. Instruments are registered
 // once at startup and reused across every scan invocation.
@@ -124,15 +125,17 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 	task := client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
 					media.MediaWorkflowName,
 					media.MediaInput{
-						FilePath:       filePath,
-						MediaType:      mediaType,
-						MappingName:    mappingName,
-						PreserveSource: preserveSource,
+						FilePath:               filePath,
+						MediaType:              mediaType,
+						MappingName:            mappingName,
+						PreserveSource:         preserveSource,
+						WatchRoot:              watchRoot,
+						RetainEmptyDirectories: retainEmptyDirs,
 					},
 					hatchet.WithRunKey(filePath),
 				)
@@ -231,7 +234,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
-			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, absPath, w.MediaType, w.Name, w.PreserveSource, w.Path, w.RetainEmptyDirectories); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", absPath, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)

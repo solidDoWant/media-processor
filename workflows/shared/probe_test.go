@@ -45,7 +45,7 @@ func TestRunProbe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := tt.setupPath(t)
 
-			got, err := RunProbe(t.Context(), path)
+			got, err := RunProbe(t.Context(), path, "", false)
 
 			tt.errFunc(t, err)
 			assert.Equal(t, tt.expected, got)
@@ -61,7 +61,7 @@ func TestRunProbe(t *testing.T) {
 func TestRunProbe_ValidMediaFile(t *testing.T) {
 	path := copyTestVideo(t)
 
-	got, err := RunProbe(t.Context(), path)
+	got, err := RunProbe(t.Context(), path, "", false)
 
 	require.NoError(t, err)
 	// Check all non-float fields via struct equality (DurationSeconds zeroed out).
@@ -90,9 +90,81 @@ func TestRunProbe_CancelledContextPropagatesError(t *testing.T) {
 
 	path := copyTestVideo(t)
 
-	_, err := RunProbe(ctx, path)
+	_, err := RunProbe(ctx, path, "", false)
 	require.ErrorIs(t, err, context.Canceled, "cancelled context should propagate as error, not delete the file")
 
 	_, statErr := os.Stat(path)
 	assert.NoError(t, statErr, "file must not be deleted on context cancellation")
+}
+
+// TestRunProbe_PrunesEmptyParentsOnInvalidFile verifies that when a non-media file is
+// deleted by the probe step, empty parent directories up to the watch root are removed.
+func TestRunProbe_PrunesEmptyParentsOnInvalidFile(t *testing.T) {
+	t.Parallel()
+
+	watchRoot := t.TempDir()
+	subdir := filepath.Join(watchRoot, "Some.Release.Name")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	filePath := filepath.Join(subdir, "notavideo.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
+
+	got, err := RunProbe(t.Context(), filePath, watchRoot, false)
+	require.NoError(t, err)
+	assert.False(t, got.IsValidMedia)
+
+	_, statErr := os.Stat(filePath)
+	assert.True(t, os.IsNotExist(statErr), "invalid file should be deleted")
+
+	_, statErr = os.Stat(subdir)
+	assert.True(t, os.IsNotExist(statErr), "empty wrapper directory should be removed")
+
+	_, statErr = os.Stat(watchRoot)
+	assert.NoError(t, statErr, "watch root must not be removed")
+}
+
+// TestRunProbe_StopsAtNonEmptyParentOnInvalidFile verifies that traversal stops when a
+// sibling file exists in the same directory as the deleted file.
+func TestRunProbe_StopsAtNonEmptyParentOnInvalidFile(t *testing.T) {
+	t.Parallel()
+
+	watchRoot := t.TempDir()
+	subdir := filepath.Join(watchRoot, "release")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	filePath := filepath.Join(subdir, "notavideo.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
+
+	sibling := filepath.Join(subdir, "other.mkv")
+	require.NoError(t, os.WriteFile(sibling, []byte("data"), 0o600))
+
+	got, err := RunProbe(t.Context(), filePath, watchRoot, false)
+	require.NoError(t, err)
+	assert.False(t, got.IsValidMedia)
+
+	_, statErr := os.Stat(subdir)
+	assert.NoError(t, statErr, "directory with sibling file should not be removed")
+}
+
+// TestRunProbe_RetainEmptyDirsSkipsPruning verifies that empty parent directories are
+// left intact when retainEmptyDirs is true.
+func TestRunProbe_RetainEmptyDirsSkipsPruning(t *testing.T) {
+	t.Parallel()
+
+	watchRoot := t.TempDir()
+	subdir := filepath.Join(watchRoot, "release")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	filePath := filepath.Join(subdir, "notavideo.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
+
+	got, err := RunProbe(t.Context(), filePath, watchRoot, true)
+	require.NoError(t, err)
+	assert.False(t, got.IsValidMedia)
+
+	_, statErr := os.Stat(filePath)
+	assert.True(t, os.IsNotExist(statErr), "invalid file should still be deleted")
+
+	_, statErr = os.Stat(subdir)
+	assert.NoError(t, statErr, "empty parent should be kept when retainEmptyDirs is true")
 }
