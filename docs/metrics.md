@@ -41,9 +41,11 @@ Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compat
 
 ## Metric reference
 
-All metrics are emitted by `cmd/worker` during media workflow execution. The meter name is `media_workflow`.
+### Media workflow metrics (`cmd/worker`)
 
-### Histograms
+Emitted by `cmd/worker` during media workflow execution. The meter name is `media_workflow`.
+
+#### Histograms
 
 | Metric                                       | Unit    | Description                                        |
 | -------------------------------------------- | ------- | -------------------------------------------------- |
@@ -52,40 +54,73 @@ All metrics are emitted by `cmd/worker` during media workflow execution. The met
 | `media_workflow_source_duration_seconds`     | seconds | Duration of the source media file                  |
 | `media_workflow_source_file_size_bytes`      | bytes   | Size of the source file before transcoding         |
 | `media_workflow_destination_file_size_bytes` | bytes   | Size of the output file after transcoding          |
-| `media_workflow_transcode_duration_seconds`  | seconds | Wall-clock time spent in the transcode step        |
+| `media_workflow_transcode_duration_seconds`  | seconds | Wall-clock time spent in `RunTranscode`            |
 | `media_workflow_total_duration_seconds`      | seconds | Wall-clock time from probe start to cleanup finish |
 
-### Counters
+#### Counters
 
 | Metric                                       | Description                                                                            |
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `media_workflow_invalid_files_total`         | Files skipped because they are not valid media (no video stream)                       |
+| `media_workflow_invalid_files_total`         | Files skipped because they could not be probed or contain no video stream              |
 | `media_workflow_artwork_fetch_skipped_total` | Transcode runs where artwork fetch was attempted but yielded no embeddable image       |
 | `media_workflow_metrics_errors_total`        | Errors encountered while collecting per-run metrics (e.g. library API lookup failures) |
 
-## Standard labels
+### Watcher metrics (`cmd/watcher`)
 
-Every histogram observation and counter increment carries a common set of labels:
+Emitted by `cmd/watcher` on every scheduled directory scan. The meter name is `github.com/solidDoWant/media-processor/cmd/watcher`.
 
-| Label                  | Values                    | Description                                    |
-| ---------------------- | ------------------------- | ---------------------------------------------- |
-| `media_type`           | `movie`, `show`           | Type of media being processed                  |
-| `mapping_name`         | _(configured watch name)_ | Name of the watch entry that triggered the job |
-| `hardware_accelerated` | `true`, `false`           | Whether a hardware encoder was used            |
-| `source_codec`         | e.g. `h264`, `hevc`       | Video codec of the source file                 |
-| `container`            | e.g. `matroska`, `mov`    | Container format of the source file            |
+| Metric                                      | Kind      | Unit    | Description                                                       |
+| ------------------------------------------- | --------- | ------- | ----------------------------------------------------------------- |
+| `watcher_scans_total`                       | counter   | —       | Per-mapping directory scans completed (carries a `status` label). |
+| `watcher_scan_duration_seconds`             | histogram | seconds | Wall-clock duration of each per-mapping directory walk.           |
+| `watcher_last_successful_scan_unix_seconds` | gauge     | seconds | Unix timestamp of the most recent successful per-mapping scan.    |
+| `watcher_files_discovered_total`            | counter   | —       | Files found during directory scans.                               |
+| `watcher_dispatches_total`                  | counter   | —       | Workflow dispatches successfully submitted to Hatchet.            |
+| `watcher_dispatch_errors_total`             | counter   | —       | Workflow dispatch failures.                                       |
+
+## Labels
+
+### Media workflow histograms
+
+Every `media_workflow_*` histogram observation carries the full standard label set:
+
+| Label                   | Values                    | Description                                                                                                                           |
+| ----------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_type`            | `movie`, `show`           | Type of media being processed.                                                                                                        |
+| `mapping_name`          | _(configured watch name)_ | Name of the watch entry that triggered the job.                                                                                       |
+| `source_codec`          | e.g. `h264`, `hevc`       | Video codec of the source file.                                                                                                       |
+| `destination_codec`     | e.g. `hevc`, `copy`       | Video codec written to the output (`copy` when the source was remuxed without re-encode).                                             |
+| `source_container`      | e.g. `matroska,webm`      | Container format of the source file as reported by libavformat (comma-joined list).                                                   |
+| `destination_container` | `mkv`                     | Container format of the output file (always `mkv`).                                                                                   |
+| `hardware_accelerated`  | `true`, `false`           | `true` iff `MEDIA_HARDWARE_DEVICE_PATH` is set. Does **not** reflect whether a hardware encoder was actually selected at runtime.     |
+| `crop_applied`          | `true`, `false`           | Whether a crop filter was applied during transcoding.                                                                                 |
+
+### Media workflow counters
+
+Counters do **not** carry the full standard label set:
+
+| Counter                                      | Labels                         |
+| -------------------------------------------- | ------------------------------ |
+| `media_workflow_invalid_files_total`         | `media_type`, `mapping_name`   |
+| `media_workflow_artwork_fetch_skipped_total` | _(none)_                       |
+| `media_workflow_metrics_errors_total`        | _(none)_                       |
+
+### Watcher metrics
+
+All watcher metrics carry `mapping_name`. `watcher_files_discovered_total`, `watcher_dispatches_total`, and `watcher_dispatch_errors_total` additionally carry `media_type`. `watcher_scans_total` carries a `status` label (`success` or `error`).
 
 ## High-cardinality labels
 
-Set `METRICS_HIGH_CARDINALITY_LABELS=true` to attach per-item labels to every histogram observation. These labels are **not** added to counters.
+Set `METRICS_HIGH_CARDINALITY_LABELS=true` to attach per-item labels to every `media_workflow_*` histogram observation. These labels are **not** added to counters or watcher metrics.
 
-| Label     | Description                        |
-| --------- | ---------------------------------- |
-| `id`      | Library item ID from Radarr/Sonarr |
-| `title`   | Title of the movie or series       |
-| `year`    | Release year                       |
-| `season`  | Season number (TV episodes only)   |
-| `episode` | Episode number (TV episodes only)  |
+| Label            | Applies to   | Description                         |
+| ---------------- | ------------ | ----------------------------------- |
+| `id`             | all          | Library item ID from Radarr/Sonarr. |
+| `title`          | all          | Title of the movie or episode.      |
+| `year`           | all          | Release year.                       |
+| `series_title`   | shows only   | Series title.                       |
+| `season_number`  | shows only   | Season number.                      |
+| `episode_number` | shows only   | Episode number.                     |
 
 These labels significantly increase the cardinality of your metrics. Enable them only if your metrics backend can handle the volume and you need per-item drill-down.
 

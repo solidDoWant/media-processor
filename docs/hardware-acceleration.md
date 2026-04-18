@@ -2,7 +2,9 @@
 
 media-processor supports hardware-accelerated H.265 encoding via three backends. The backend is selected automatically based on which encoders are available at runtime; selection priority is QSV > NVENC > VAAPI. If no hardware encoder is found, the worker falls back to software encoding (libx265).
 
-Hardware acceleration is **auto-enabled** when the appropriate encoder is compiled into the embedded FFmpeg library. No configuration is required to activate it. `MEDIA_HARDWARE_DEVICE_PATH` controls which device node is opened; when left empty the library selects a device automatically. Set it explicitly when you need to target a specific device (e.g. when multiple GPUs are present).
+Hardware acceleration is **auto-enabled** when the appropriate encoder is available in the FFmpeg shared libraries the worker is linked against (via CGo/pkg-config). No configuration is required to activate it — set `MEDIA_HARDWARE_DEVICE_PATH` only when you need to target a specific device (e.g. when multiple GPUs are present); when left empty the library selects a device automatically.
+
+Note that the `hardware_accelerated` metric label is derived from whether `MEDIA_HARDWARE_DEVICE_PATH` is set, not from whether a hardware encoder was actually selected at runtime. Set the device path if you want the label to reflect hardware use.
 
 ## Backends
 
@@ -16,70 +18,38 @@ Uses Intel Quick Sync Video via the oneVPL runtime. Supported on Intel 6th-gener
 - Intel media driver (`intel-media-driver` / `iHD`) installed on the host for Gen 9+ GPUs, or the legacy VA-API driver (`libva-intel-driver` / `i965`) for older hardware
 - The device node must be accessible to the worker process (add the container user to the `render` group, or set the appropriate device permission in your container runtime)
 
-**Kubernetes example:**
-
-```yaml
-env:
-  - name: MEDIA_HARDWARE_DEVICE_PATH
-    value: /dev/dri/renderD128
-resources:
-  limits:
-    gpu.intel.com/i915: "1"
-```
-
 ### NVIDIA NVENC
 
-Uses NVIDIA hardware encoding via CUDA. Supported on Kepler-generation (GTX 600/700 series) and later GPUs.
+Uses NVIDIA hardware encoding via CUDA. HEVC (H.265) encoding requires Maxwell 2nd-generation (GM20x, e.g. GTX 950/960/970/980) or later; earlier NVENC silicon (Kepler and Maxwell 1st-gen) is H.264-only and cannot be used by this project.
 
-**Device path:** the CUDA device, typically `/dev/nvidia0`
+**Device value:** a CUDA device ordinal as a decimal string, e.g. `"0"` for the first GPU or `"1"` for the second. This is passed directly to FFmpeg's CUDA hwdevice API, which does not accept `/dev/nvidia*` device-node paths. Leave `MEDIA_HARDWARE_DEVICE_PATH` unset to let libav pick the default device.
 
 **Prerequisites:**
-- NVIDIA driver installed on the host (version 520+ recommended for AV1 support)
+- NVIDIA driver installed on the host (version 520+ recommended for AV1 support, which additionally requires Ada Lovelace hardware)
 - NVIDIA Container Toolkit configured so the GPU is visible inside the container
-
-**Kubernetes example (with NVIDIA device plugin):**
-
-```yaml
-env:
-  - name: MEDIA_HARDWARE_DEVICE_PATH
-    value: /dev/nvidia0
-resources:
-  limits:
-    nvidia.com/gpu: "1"
-```
 
 ### AMD VAAPI
 
-Uses AMD GPU encoding via the VA-API interface. Supported on GCN-generation and later AMD GPUs with the Mesa RADV or AMDGPU-PRO driver.
+Uses AMD GPU encoding via the VA-API interface. Supported on GCN-generation and later AMD GPUs with Mesa's Gallium VA-API driver (radeonsi) or the AMDGPU-PRO VA-API driver.
 
 **Device path:** typically `/dev/dri/renderD128` (same node as QSV on Intel systems; may be `renderD129` or higher if multiple GPUs are present)
 
 **Prerequisites:**
-- Mesa RADV driver or AMDGPU-PRO installed on the host
-- `libva-mesa-driver` present and accessible
+- Mesa Gallium VA-API driver (`mesa-va-drivers` / `libva-mesa-driver`) or AMDGPU-PRO's VA-API driver installed on the host
 - The device node must be accessible to the worker process
-
-**Kubernetes example:**
-
-```yaml
-env:
-  - name: MEDIA_HARDWARE_DEVICE_PATH
-    value: /dev/dri/renderD128
-resources:
-  limits:
-    amd.com/gpu: "1"
-```
 
 ## Supported codecs by backend
 
-| Codec | QSV | NVENC | VAAPI | Software      |
-| ----- | --- | ----- | ----- | ------------- |
-| H.264 | yes | yes   | yes   | yes (libx264) |
-| H.265 | yes | yes   | yes   | yes (libx265) |
-| AV1   | yes | yes   | yes   | —             |
-| VP9   | yes | —     | yes   | —             |
+The worker currently targets H.265 output for all transcodes, so only the H.265 row drives encoder selection. The other rows reflect what the underlying `pkg/ffmpeg` package can route through each backend, in case the codec selection logic is extended in future.
 
-The worker currently targets H.265 output for all transcodes.
+| Codec | QSV | NVENC | VAAPI | Software        |
+| ----- | --- | ----- | ----- | --------------- |
+| H.264 | yes | yes   | yes   | yes (libx264)\* |
+| H.265 | yes | yes   | yes   | yes (libx265)   |
+| AV1   | yes | yes   | yes   | —               |
+| VP9   | yes | —     | yes   | —               |
+
+\* libx264 is reachable through `pkg/ffmpeg` but is not selected by the worker today, since H.265 is the only output codec.
 
 ## Quality tuning
 
@@ -92,7 +62,7 @@ Use `MEDIA_H265_CRF` to control output quality. The meaning of the value varies 
 | QSV (hevc_qsv)     | global_quality (ICQ) | 1–51  | yes                    |
 | VAAPI (hevc_vaapi) | global_quality       | 1–51  | yes                    |
 
-`MEDIA_H265_CRF=0` (the default) leaves the value unset and lets each encoder use its own built-in default.
+Leaving `MEDIA_H265_CRF` unset (the default) lets each encoder use its own built-in default. Valid explicit values are `1`–`51`; setting `MEDIA_H265_CRF=0` (or any other out-of-range value) is rejected at startup.
 
 ## Checking encoder availability
 
