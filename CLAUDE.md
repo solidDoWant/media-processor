@@ -7,7 +7,7 @@
 
 ## Tech Stack
 - Go 1.26, PostgreSQL, Hatchet (workflow orchestration)
-- `fsnotify` for filesystem watching; `golangci-lint` for static analysis
+- `golangci-lint` for static analysis
 - Nix (flake.nix) for reproducible dev environments
 
 ## Project Structure
@@ -26,7 +26,7 @@ media-processor/
 ├── .github/
 │   └── ISSUE_TEMPLATE/
 ├── cmd/
-│   ├── watcher/               # fsnotify + Hatchet job submission binary
+│   ├── watcher/               # directory scanner + Hatchet job submission binary
 │   └── worker/                # Hatchet worker + workflow handlers binary
 ├── pkg/
 │   ├── ffmpeg/                # ffmpeg CLI wrapper

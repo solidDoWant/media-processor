@@ -7,7 +7,7 @@
 | Language | Go 1.24 |
 | Workflow orchestration | [Hatchet](https://hatchet.run) |
 | Database | PostgreSQL |
-| Filesystem watching | `fsnotify` |
+| Directory scanning | `filepath.WalkDir` on a Hatchet cron schedule |
 | Media processing | `github.com/asticode/go-astiav` (FFmpeg 8 Cgo bindings) |
 | Static analysis | `golangci-lint` |
 | Dev environment | Nix (flake.nix) |
@@ -16,12 +16,12 @@
 
 ### `cmd/watcher`
 
-Watches configured filesystem paths for media file events using `fsnotify`. When a qualifying file event is detected, it maps the event to a workflow via YAML configuration and submits the corresponding job to Hatchet for processing.
+Scans configured filesystem paths on a cron schedule and submits a Hatchet job for each file found. Uses `filepath.WalkDir` for recursive directory traversal rather than filesystem event notifications.
 
 Responsibilities:
 - Load and parse the watcher YAML config at startup
-- Register `fsnotify` watchers for all configured paths
-- On file event, look up the matching workflow mapping and submit a Hatchet job
+- On each cron tick, walk all configured watch directories and submit a Hatchet job per file found
+- Apply ignore patterns to skip files and directory subtrees
 - Reconnect and retry on transient failures
 
 ### `cmd/worker`
