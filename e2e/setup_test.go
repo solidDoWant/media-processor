@@ -279,6 +279,7 @@ func startProcesses() error {
 		"RADARR_REMOTE_PATH_PREFIX=/downloads",
 		"SONARR_LOCAL_PATH_PREFIX="+filepath.Join(downloadsDir, "sonarr"),
 		"SONARR_REMOTE_PATH_PREFIX=/downloads",
+		"MEDIA_H265_CRF=51",
 	)
 
 	workerCmd = exec.Command(workerBin)

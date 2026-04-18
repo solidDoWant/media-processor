@@ -158,12 +158,17 @@ func codecName(c ffmpeg.Codec) string {
 // written flat into outputDir (no subdirectory).
 // hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
 // an empty string uses the libav default (auto-select).
+// h265CRF is the constant-quality value for H.265 encoders. 0 means use the
+// encoder's built-in default; valid explicit values are 1–51 (lower = higher
+// quality). For libx265 this is the CRF; for hevc_nvenc it is the CQ value;
+// for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value. Values
+// outside 1–51 are silently ignored and the encoder default is used.
 // library is the arr library used to fetch poster artwork. When nil, no fetch
 // is attempted and transcoding proceeds without an embedded attachment, and
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -359,6 +364,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		WithHardwareDevice(hardwareDevicePath).
+		WithH265CRF(h265CRF).
 		WithCoverArt(artBytes, artMime).
 		WithCrop(cropParams).
 		Build().

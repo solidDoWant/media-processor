@@ -70,6 +70,12 @@ type MediaWorkflowConfig struct {
 	// When zero, NewMediaWorkflow applies a default of 4 hours. Set by the caller
 	// (e.g. cmd/worker via parseTimeout from MEDIA_TRANSCODE_TIMEOUT).
 	TranscodeTimeout time.Duration
+	// H265CRF is the constant-quality value passed to H.265 encoders. 0 means
+	// use the encoder's built-in default. For libx265 this is the CRF; for
+	// hevc_nvenc it is the CQ value; for hevc_qsv and hevc_vaapi it is the
+	// global_quality (ICQ) value. Set by the caller (e.g. cmd/worker via
+	// MEDIA_H265_CRF).
+	H265CRF int
 }
 
 // MediaInput is the workflow's trigger payload.
@@ -199,7 +205,7 @@ func NewMediaWorkflow(
 			return steps.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
 		}
 
-		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, library)
+		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, cfg.H265CRF, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
