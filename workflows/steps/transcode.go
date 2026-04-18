@@ -163,7 +163,7 @@ func codecName(c ffmpeg.Codec) string {
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -359,6 +359,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		WithDownmixTitle(downmixLangName).
 		WithAutoDownmixTitle().
 		WithHardwareDevice(hardwareDevicePath).
+		WithH265CRF(h265CRF).
 		WithCoverArt(artBytes, artMime).
 		WithCrop(cropParams).
 		Build().

@@ -30,6 +30,7 @@ type TranscodeBuilder struct {
 	coverArtBytes         []byte         // raw image bytes to embed as MKV attachment; nil = no cover art
 	coverArtMimeType      string         // MIME type of coverArtBytes ("image/jpeg" or "image/png")
 	cropParams            *CropParams    // crop region to apply during video encode; nil = no crop
+	h265CRF               int            // constant-quality for H.265 encoders; 0 = use encoder default
 }
 
 // NewTranscode returns a builder for a transcode job from inputPath to outputPath.
@@ -198,6 +199,20 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 
 	b.coverArtBytes = imageBytes
 	b.coverArtMimeType = mimeType
+
+	return b
+}
+
+// WithH265CRF sets the constant-quality value for H.265 video encoders. A value
+// of 0 (the default) leaves the encoder's built-in default in effect. For
+// libx265 this sets the CRF; for hevc_nvenc it sets the CQ value; for hevc_qsv
+// and hevc_vaapi it sets the global_quality (ICQ) value. Typical values range
+// from 18 (high quality) to 28 (lower quality). Has no effect when the video
+// codec is CodecCopy or when the encoder is not an H.265 variant.
+func (b *TranscodeBuilder) WithH265CRF(crf int) *TranscodeBuilder {
+	if crf > 0 {
+		b.h265CRF = crf
+	}
 
 	return b
 }
@@ -442,7 +457,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 		switch {
 		case mediaType == astiav.MediaTypeVideo && t.videoCodec != CodecCopy:
-			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath, cropParams: t.cropParams}
+			videoState := &videoStreamState{copyStreamState: base, encoder: videoEncoderState{codecID: t.videoCodec}, hardwareDevicePath: t.hardwareDevicePath, cropParams: t.cropParams, h265CRF: t.h265CRF}
 			if err := videoState.setupDecoder(inStream, inputFmt, hwAccel); err != nil {
 				freeStreams(streams)
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)

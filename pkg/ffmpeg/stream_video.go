@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 
 	"github.com/asticode/go-astiav"
 )
@@ -74,6 +75,10 @@ type videoStreamState struct {
 
 	// cropParams is the requested spatial crop region, or nil when no crop is needed.
 	cropParams *CropParams
+	// h265CRF is the constant-quality value for H.265 encoders. 0 means use the
+	// encoder's default. For libx265 this is the CRF; for hevc_nvenc it is the CQ
+	// value; for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value.
+	h265CRF int
 	// plan captures the outputs of the decoder and crop-filter setup phases and
 	// is consumed by the encoder setup and per-frame processing. See videoProcessingPlan.
 	plan videoProcessingPlan
@@ -619,16 +624,40 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 	}
 
 	var openDict *astiav.Dictionary
+	defer func() {
+		if openDict != nil {
+			openDict.Free()
+		}
+	}()
 
-	// libx265 has its own logging that writes directly to stderr, bypassing
-	// FFmpeg's av_log callback. Align its log level with the application logger
-	// so that x265 info-level noise is suppressed unless debug logging is on.
-	if enc.Name() == "libx265" {
+	switch enc.Name() {
+	case "libx265":
+		// libx265 has its own logging that writes directly to stderr, bypassing
+		// FFmpeg's av_log callback. Align its log level with the application logger
+		// so that x265 info-level noise is suppressed unless debug logging is on.
 		openDict = astiav.NewDictionary()
-		defer openDict.Free()
-
-		if err := openDict.Set("x265-params", "log-level="+x265LogLevel(), astiav.NewDictionaryFlags()); err != nil {
+		x265Params := "log-level=" + x265LogLevel()
+		if vss.h265CRF > 0 {
+			x265Params += fmt.Sprintf(":crf=%d", vss.h265CRF)
+		}
+		if err := openDict.Set("x265-params", x265Params, astiav.NewDictionaryFlags()); err != nil {
 			return fmt.Errorf("setting x265-params: %w", err)
+		}
+
+	case "hevc_nvenc":
+		if vss.h265CRF > 0 {
+			openDict = astiav.NewDictionary()
+			if err := openDict.Set("cq", strconv.Itoa(vss.h265CRF), astiav.NewDictionaryFlags()); err != nil {
+				return fmt.Errorf("setting hevc_nvenc cq: %w", err)
+			}
+		}
+
+	case "hevc_qsv", "hevc_vaapi":
+		if vss.h265CRF > 0 {
+			openDict = astiav.NewDictionary()
+			if err := openDict.Set("global_quality", strconv.Itoa(vss.h265CRF), astiav.NewDictionaryFlags()); err != nil {
+				return fmt.Errorf("setting %s global_quality: %w", enc.Name(), err)
+			}
 		}
 	}
 

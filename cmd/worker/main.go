@@ -117,6 +117,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	h265CRF, err := parseH265CRF("MEDIA_H265_CRF")
+	if err != nil {
+		return err
+	}
+
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
@@ -128,6 +133,7 @@ func run(ctx context.Context) error {
 		MinCropY:              minCropY,
 		DetectCropTimeout:     detectCropTimeout,
 		TranscodeTimeout:      transcodeTimeout,
+		H265CRF:               h265CRF,
 	}, radarrClient, sonarrClient, webhookClient)
 
 	workerLogger := logging.NewZerologLogger("worker")
@@ -162,6 +168,23 @@ func parseCropThreshold(envVar string, defaultVal int) (int, error) {
 	v, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer (got %q): %w", envVar, raw, err)
+	}
+
+	return v, nil
+}
+
+// parseH265CRF reads the H.265 constant-quality value from the named environment
+// variable. If the variable is unset or empty, 0 is returned (encoder default).
+// Valid values are 1–51; any other non-integer or out-of-range value is a fatal error.
+func parseH265CRF(envVar string) (int, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return 0, nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 1 || v > 51 {
+		return 0, fmt.Errorf("%s must be an integer between 1 and 51 (got %q)", envVar, raw)
 	}
 
 	return v, nil
