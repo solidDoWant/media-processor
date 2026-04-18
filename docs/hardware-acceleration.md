@@ -72,12 +72,12 @@ resources:
 
 ## Supported codecs by backend
 
-| Codec | QSV | NVENC | VAAPI | Software |
-|-------|-----|-------|-------|----------|
-| H.264 | yes | yes | yes | yes (libx264) |
-| H.265 | yes | yes | yes | yes (libx265) |
-| AV1 | yes | yes | yes | — |
-| VP9 | yes | — | yes | — |
+| Codec | QSV | NVENC | VAAPI | Software      |
+| ----- | --- | ----- | ----- | ------------- |
+| H.264 | yes | yes   | yes   | yes (libx264) |
+| H.265 | yes | yes   | yes   | yes (libx265) |
+| AV1   | yes | yes   | yes   | —             |
+| VP9   | yes | —     | yes   | —             |
 
 The worker currently targets H.265 output for all transcodes.
 
@@ -85,12 +85,12 @@ The worker currently targets H.265 output for all transcodes.
 
 Use `MEDIA_H265_CRF` to control output quality. The meaning of the value varies by encoder:
 
-| Backend | Parameter | Range | Lower = better quality |
-|---------|-----------|-------|------------------------|
-| libx265 | CRF | 1–51 | yes |
-| NVENC (hevc_nvenc) | CQ | 1–51 | yes |
-| QSV (hevc_qsv) | global_quality (ICQ) | 1–51 | yes |
-| VAAPI (hevc_vaapi) | global_quality | 1–51 | yes |
+| Backend            | Parameter            | Range | Lower = better quality |
+| ------------------ | -------------------- | ----- | ---------------------- |
+| libx265            | CRF                  | 1–51  | yes                    |
+| NVENC (hevc_nvenc) | CQ                   | 1–51  | yes                    |
+| QSV (hevc_qsv)     | global_quality (ICQ) | 1–51  | yes                    |
+| VAAPI (hevc_vaapi) | global_quality       | 1–51  | yes                    |
 
 `MEDIA_H265_CRF=0` (the default) leaves the value unset and lets each encoder use its own built-in default.
 

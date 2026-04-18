@@ -15,11 +15,11 @@ Hardware-accelerated encoding is supported for NVIDIA (NVENC), Intel (QSV via on
 
 The key to making this transparent to Sonarr/Radarr is a single bind mount:
 
-| Path | Visible to |
-|------|------------|
-| `/downloads` | Download client, watcher, worker |
-| `/processed-output` | watcher, worker |
-| `/downloads` (bind-mounted from `/processed-output`) | Sonarr/Radarr |
+| Path                                                 | Visible to                       |
+| ---------------------------------------------------- | -------------------------------- |
+| `/downloads`                                         | Download client, watcher, worker |
+| `/processed-output`                                  | watcher, worker                  |
+| `/downloads` (bind-mounted from `/processed-output`) | Sonarr/Radarr                    |
 
 Sonarr/Radarr's `/downloads` is bind-mounted from `/processed-output` on the host. This means Sonarr/Radarr never sees the raw download — it only sees files after they have been processed. The download client reports `/downloads/…` to Sonarr/Radarr; because `/processed-output` is mounted there, the path resolves to the transcoded output automatically.
 
@@ -66,14 +66,14 @@ watches:
 
 The worker is configured entirely via environment variables. Required variables:
 
-| Variable | Description |
-|----------|-------------|
-| `HATCHET_CLIENT_TOKEN` | Hatchet API token |
-| `MEDIA_OUTPUT_DIR` | Directory where transcoded output is written (e.g. `/processed-output`) |
-| `RADARR_URL` | Radarr base URL (e.g. `http://radarr:7878`) |
-| `RADARR_API_KEY` | Radarr API key |
-| `SONARR_URL` | Sonarr base URL (e.g. `http://sonarr:8989`) |
-| `SONARR_API_KEY` | Sonarr API key |
+| Variable               | Description                                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `HATCHET_CLIENT_TOKEN` | Hatchet API token                                                       |
+| `MEDIA_OUTPUT_DIR`     | Directory where transcoded output is written (e.g. `/processed-output`) |
+| `RADARR_URL`           | Radarr base URL (e.g. `http://radarr:7878`)                             |
+| `RADARR_API_KEY`       | Radarr API key                                                          |
+| `SONARR_URL`           | Sonarr base URL (e.g. `http://sonarr:8989`)                             |
+| `SONARR_API_KEY`       | Sonarr API key                                                          |
 
 See [docs/configuration.md](docs/configuration.md) for all variables including optional ones.
 
