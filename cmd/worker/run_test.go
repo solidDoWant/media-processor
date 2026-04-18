@@ -18,6 +18,82 @@ func TestRun_MissingToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "HATCHET_CLIENT_TOKEN")
 }
 
+func TestParseH265CRF(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected int
+		errFunc  require.ErrorAssertionFunc
+	}{
+		{
+			name:     "unset returns 0",
+			envValue: "",
+			expected: 0,
+		},
+		{
+			name:     "minimum valid value",
+			envValue: "1",
+			expected: 1,
+		},
+		{
+			name:     "maximum valid value",
+			envValue: "51",
+			expected: 51,
+		},
+		{
+			name:     "typical quality value",
+			envValue: "24",
+			expected: 24,
+		},
+		{
+			name:     "zero is out of range",
+			envValue: "0",
+			errFunc:  require.Error,
+		},
+		{
+			name:     "52 is out of range",
+			envValue: "52",
+			errFunc:  require.Error,
+		},
+		{
+			name:     "negative value is out of range",
+			envValue: "-1",
+			errFunc:  require.Error,
+		},
+		{
+			name:     "non-integer returns error naming var and value",
+			envValue: "high",
+			errFunc:  require.Error,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_H265_CRF_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parseH265CRF(envVar)
+			errFunc(t, err)
+
+			if err != nil {
+				if test.envValue != "" {
+					assert.Contains(t, err.Error(), envVar)
+					assert.Contains(t, err.Error(), test.envValue)
+				}
+
+				return
+			}
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
 func TestParseTimeout(t *testing.T) {
 	tests := []struct {
 		name       string
