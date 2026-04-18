@@ -4,9 +4,21 @@
 
 `cmd/watcher` reads a YAML configuration file at startup. Pass the path with `--config` (default: `config.yaml`).
 
+### Schema
+
+A JSON Schema for the watcher config is published at:
+
+```
+https://raw.githubusercontent.com/solidDoWant/media-processor/refs/heads/master/schemas/watcher.schema.json
+```
+
+Editors that support [yaml-language-server](https://github.com/redhat-developer/yaml-language-server) (VS Code with the YAML extension, Neovim via nvim-lspconfig, etc.) will pick up the schema automatically from the modeline comment shown in the example below, giving you inline validation and autocompletion.
+
 ### Full example
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/solidDoWant/media-processor/refs/heads/master/schemas/watcher.schema.json
+
 # cronSchedule controls how often each watch directory is scanned.
 # Accepts a 6-field cron expression (seconds-precision).
 # Defaults to "*/5 * * * * *" (every 5 seconds) when omitted.
