@@ -277,6 +277,8 @@ func (t *Transcoder) HardwareAccelerated() bool {
 // context is cancelled, or an error occurs. A cancelled context causes Run to
 // return promptly with ctx.Err().
 func (t *Transcoder) Run(ctx context.Context) error {
+	t.hardwareAccelerated = false
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
