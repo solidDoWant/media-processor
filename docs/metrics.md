@@ -33,6 +33,12 @@ This follows the standard [OpenTelemetry environment variable convention](https:
 
 Both exporters can be active simultaneously.
 
+### Choosing between the two
+
+Use **Prometheus pull** if you already run a Prometheus server that scrapes targets directly. It is simpler to configure and requires no additional infrastructure beyond what Prometheus already provides. The downside is that Prometheus must be able to reach the worker's metrics port; this can be awkward in environments where processes are behind NAT or where scrape intervals add latency to alerting.
+
+Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compatible backend such as Grafana Alloy, Datadog Agent, or Honeycomb) already running. Push works regardless of whether the worker is network-reachable from the backend, making it a better fit for ephemeral or firewalled environments. The trade-off is that it requires a running collector to receive and forward the metrics.
+
 ## Metric reference
 
 All metrics are emitted by `cmd/worker` during media workflow execution. The meter name is `media_workflow`.

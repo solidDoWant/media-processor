@@ -2,7 +2,7 @@
 
 media-processor supports hardware-accelerated H.265 encoding via three backends. The backend is selected automatically based on which encoders are available at runtime; selection priority is QSV > NVENC > VAAPI. If no hardware encoder is found, the worker falls back to software encoding (libx265).
 
-Hardware acceleration is opt-in: set `MEDIA_HARDWARE_DEVICE_PATH` to the appropriate device node. Leave it empty to use the software encoder.
+Hardware acceleration is **auto-enabled** when the appropriate encoder is compiled into the embedded FFmpeg library. No configuration is required to activate it. `MEDIA_HARDWARE_DEVICE_PATH` controls which device node is opened; when left empty the library selects a device automatically. Set it explicitly when you need to target a specific device (e.g. when multiple GPUs are present).
 
 ## Backends
 
@@ -13,8 +13,7 @@ Uses Intel Quick Sync Video via the oneVPL runtime. Supported on Intel 6th-gener
 **Device path:** typically `/dev/dri/renderD128`
 
 **Prerequisites:**
-- Intel media driver (`intel-media-driver` / `iHD`) or legacy VA-API driver (`libva-intel-driver` / `i965`) installed on the host
-- oneVPL GPU runtime (`libvpl`) present and linked against the FFmpeg build
+- Intel media driver (`intel-media-driver` / `iHD`) installed on the host for Gen 9+ GPUs, or the legacy VA-API driver (`libva-intel-driver` / `i965`) for older hardware
 - The device node must be accessible to the worker process (add the container user to the `render` group, or set the appropriate device permission in your container runtime)
 
 **Kubernetes example:**
@@ -37,7 +36,6 @@ Uses NVIDIA hardware encoding via CUDA. Supported on Kepler-generation (GTX 600/
 **Prerequisites:**
 - NVIDIA driver installed on the host (version 520+ recommended for AV1 support)
 - NVIDIA Container Toolkit configured so the GPU is visible inside the container
-- FFmpeg built with CUDA/NVENC support (included in the Nix dev shell)
 
 **Kubernetes example (with NVIDIA device plugin):**
 

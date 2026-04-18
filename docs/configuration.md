@@ -7,8 +7,9 @@
 ### Full example
 
 ```yaml
-# cronSchedule runs a periodic directory scan in addition to fsnotify events.
-# Accepts a 6-field cron expression (seconds-precision). Optional.
+# cronSchedule controls how often each watch directory is scanned.
+# Accepts a 6-field cron expression (seconds-precision).
+# Defaults to "*/5 * * * * *" (every 5 seconds) when omitted.
 cronSchedule: "*/5 * * * * *"
 
 watches:
@@ -36,7 +37,7 @@ watches:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cronSchedule` | string | `""` | 6-field cron expression for periodic directory scans. Omit to disable. |
+| `cronSchedule` | string | `*/5 * * * * *` | 6-field cron expression controlling how often each watch directory is scanned. Defaults to every 5 seconds when omitted. |
 | `watches[].name` | string | — | **Required.** Logical name for this watch entry; used as a label in metrics. |
 | `watches[].path` | string | — | **Required.** Absolute path to watch. |
 | `watches[].mediaType` | string | — | **Required.** `movie` or `show`. Determines which library service (Radarr or Sonarr) is notified. |
@@ -72,7 +73,7 @@ Variables marked **Required** cause the binary to exit immediately if unset or e
 | `SONARR_REMOTE_PATH_PREFIX` | path | `""` | Optional | Sonarr-side prefix for path translation. Replaces `SONARR_LOCAL_PATH_PREFIX` in paths sent to Sonarr. |
 | `MEDIA_WEBHOOK_URL` | URL | `""` | Optional | Endpoint notified on workflow step failure. No notification is sent when empty. |
 | `MEDIA_INPUT_ROOT` | path | `""` | Optional | Root of the watched input directories. When set, transcoded output is placed in a mirrored subdirectory under `MEDIA_OUTPUT_DIR`. **Must be set** for nested downloads to produce matching subdirectory structure in the output. |
-| `MEDIA_HARDWARE_DEVICE_PATH` | path | `""` | Optional | Hardware device path for hardware-accelerated encoding (e.g. `/dev/dri/renderD128`). Software encoder is used when empty. |
+| `MEDIA_HARDWARE_DEVICE_PATH` | path | `""` | Optional | Hardware device path passed to the encoder (e.g. `/dev/dri/renderD128`). Hardware acceleration is auto-detected regardless; this controls which specific device is opened. When empty, the library selects a device automatically. |
 | `MEDIA_MIN_CROP_X` | integer | `10` | Optional | Minimum pixels to trim horizontally before a crop is applied. `-1` disables the threshold (any detected crop is accepted). |
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum pixels to trim vertically before a crop is applied. `-1` disables the threshold. |
 | `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Hatchet execution timeout for the crop-detection step (e.g. `45m`, `1h`). |

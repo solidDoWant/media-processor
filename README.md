@@ -6,7 +6,7 @@ media-processor sits transparently between a download client and Sonarr/Radarr. 
 
 Two binaries run as separate processes and communicate through [Hatchet](https://hatchet.run), a distributed workflow engine backed by PostgreSQL:
 
-- **`cmd/watcher`** — watches configured filesystem paths with `fsnotify`. When a qualifying file event fires, it submits a media-processing job to Hatchet.
+- **`cmd/watcher`** — scans configured filesystem paths on a configurable cron schedule and submits a media-processing job to Hatchet for each file found.
 - **`cmd/worker`** — registers workflow step handlers with Hatchet and processes jobs. It probes files in-process (via FFmpeg 8 CGo bindings), transcodes them, and notifies Radarr or Sonarr when the output is ready.
 
 Hardware-accelerated encoding is supported for NVIDIA (NVENC), Intel (QSV via oneVPL), and AMD (VAAPI).
