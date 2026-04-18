@@ -283,7 +283,7 @@ func NewMediaWorkflow(
 			}
 		}
 
-		hardwareAccelerated := cfg.HardwareDevicePath != ""
+		hardwareAccelerated := transcode.HardwareAccelerated
 		totalElapsed := time.Since(probe.StartedAt)
 		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
 

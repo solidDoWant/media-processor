@@ -169,6 +169,47 @@ func TestRecorder_CropAppliedLabel(t *testing.T) {
 	}
 }
 
+func TestRecorder_HardwareAcceleratedLabel(t *testing.T) {
+	tests := []struct {
+		name                    string
+		hardwareAccelerated     bool
+		wantHardwareAccelerated string
+	}{
+		{
+			name:                    "software encoder — label is false",
+			hardwareAccelerated:     false,
+			wantHardwareAccelerated: "false",
+		},
+		{
+			name:                    "hardware encoder — label is true",
+			hardwareAccelerated:     true,
+			wantHardwareAccelerated: "true",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, reader := newTestRecorder(t, false)
+
+			transcode := sampleTranscode()
+			transcode.HardwareAccelerated = tc.hardwareAccelerated
+
+			rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, tc.hardwareAccelerated, 5*time.Second)
+
+			rm := collectMetrics(t, reader)
+
+			m := findMetric(rm, "media_workflow_audio_track_count")
+			require.NotNil(t, m)
+			dps := histogramDataPoints(t, m)
+			require.Len(t, dps, 1)
+
+			val, present := dps[0].Attributes.Value(attributeKey("hardware_accelerated"))
+			assert.True(t, present, "hardware_accelerated label should be present")
+			assert.Equal(t, tc.wantHardwareAccelerated, val.AsString())
+		})
+	}
+}
+
 func TestRecorder_InvalidFileRecordsOnlyCounter(t *testing.T) {
 	rec, reader := newTestRecorder(t, false)
 
