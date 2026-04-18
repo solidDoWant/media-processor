@@ -28,9 +28,9 @@ Uses NVIDIA hardware encoding via CUDA. HEVC (H.265) encoding requires Maxwell 2
 - NVIDIA driver installed on the host (version 520+ recommended for AV1 support, which additionally requires Ada Lovelace hardware)
 - NVIDIA Container Toolkit configured so the GPU is visible inside the container
 
-### AMD VAAPI
+### VAAPI
 
-Uses AMD GPU encoding via the VA-API interface. Supported on GCN-generation and later AMD GPUs with Mesa's Gallium VA-API driver (radeonsi) or the AMDGPU-PRO VA-API driver.
+Uses the VA-API interface for hardware encoding on Linux. This backend is not AMD-specific and can be used with multiple vendors; for AMD, it is supported on GCN-generation and later GPUs with Mesa's Gallium VA-API driver (radeonsi) or the AMDGPU-PRO VA-API driver.
 
 **Device path:** typically `/dev/dri/renderD128` (same node as QSV on Intel systems; may be `renderD129` or higher if multiple GPUs are present)
 

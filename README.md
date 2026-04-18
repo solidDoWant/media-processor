@@ -9,7 +9,7 @@ Two binaries run as separate processes and communicate through [Hatchet](https:/
 - **The watcher** (`bin/watcher`) — scans configured filesystem paths on a configurable cron schedule and submits a media-processing job to Hatchet for each file found.
 - **The worker** (`bin/worker`) — pulls jobs from Hatchet and processes them. It probes each file with FFmpeg, transcodes it, and notifies Radarr or Sonarr when the output is ready.
 
-Hardware-accelerated encoding is supported for NVIDIA (NVENC), Intel (QSV via oneVPL), and AMD (VAAPI).
+Hardware-accelerated encoding is supported via NVIDIA NVENC, Intel QSV (oneVPL), and VAAPI on Linux.
 
 ### The bind-mount arrangement
 
@@ -83,7 +83,7 @@ Both binaries support Prometheus pull and OTLP push metrics. See [docs/metrics.m
 
 ## Hardware acceleration
 
-NVIDIA NVENC, Intel QSV, and AMD VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
+NVIDIA NVENC, Intel QSV, and VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
 
 ## Development
 
