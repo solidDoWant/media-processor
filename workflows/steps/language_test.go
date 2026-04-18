@@ -69,9 +69,9 @@ func TestAudioLangName(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "empty tag returns empty string",
+			name:     "empty tag returns Unknown Language",
 			tag:      "",
-			expected: "",
+			expected: "Unknown Language",
 		},
 		{
 			name:     "und returns Unknown Language",
@@ -132,6 +132,16 @@ func TestDisambiguateLang(t *testing.T) {
 		{
 			name:     "eng and und returns true",
 			streams:  []AudioStreamInfo{{StreamInfo: StreamInfo{Language: "eng"}}, {StreamInfo: StreamInfo{Language: "und"}}},
+			expected: true,
+		},
+		{
+			name:     "empty tag and und treated as same language returns false",
+			streams:  []AudioStreamInfo{{StreamInfo: StreamInfo{Language: ""}}, {StreamInfo: StreamInfo{Language: "und"}}},
+			expected: false,
+		},
+		{
+			name:     "eng and empty tag returns true",
+			streams:  []AudioStreamInfo{{StreamInfo: StreamInfo{Language: "eng"}}, {StreamInfo: StreamInfo{Language: ""}}},
 			expected: true,
 		},
 	}

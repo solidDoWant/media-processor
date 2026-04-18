@@ -500,12 +500,12 @@ func TestRunTranscode(t *testing.T) {
 		{
 			name: "multi-language audio tracks include language in title, und shown as Unknown Language",
 			setup: func(t *testing.T) (string, string) {
-				// Use the two-audio fixture: stream 1 = AAC stereo "eng",
+				// Use the two-audio fixture: stream 1 = AAC stereo "jpn",
 				// stream 2 = AAC stereo "und".
 				return copyTwoAudioTestVideo(t), t.TempDir()
 			},
-			// Use "jpn" + "und": nonEnglishAudioIndices only filters when
-			// English is present, so both streams are retained here.
+			// "jpn" + "und": nonEnglishAudioIndices only filters when English
+			// is present, so both streams are retained here.
 			probe: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
@@ -521,11 +521,11 @@ func TestRunTranscode(t *testing.T) {
 				info, err := ffprobe.Probe(t.Context(), out)
 				require.NoError(t, err)
 
-				titles := map[int]string{}
+				var titles []string
 
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
-						titles[len(titles)] = s.Tags["title"]
+						titles = append(titles, s.Tags["title"])
 					}
 				}
 

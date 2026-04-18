@@ -12,7 +12,7 @@ import (
 const testVideoPath = "../../pkg/ffprobe/testdata/video.mp4"
 
 // testTwoAudioVideoPath points to a variant of the test clip that has two AAC
-// audio streams: stream 1 tagged "eng" and stream 2 tagged "und".
+// audio streams: stream 1 tagged "jpn" and stream 2 tagged "und".
 const testTwoAudioVideoPath = "testdata/video_two_audio.mp4"
 
 // copyTestVideo copies the shared test video to a temp file and returns its path.
