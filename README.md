@@ -4,10 +4,10 @@ media-processor sits transparently between a download client and Sonarr/Radarr. 
 
 ## How it works
 
-Two binaries run as separate processes and communicate through [Hatchet](https://hatchet.run), a distributed workflow engine backed by PostgreSQL:
+Two binaries run as separate processes and communicate through [Hatchet](https://hatchet.run), a distributed workflow engine:
 
-- **`cmd/watcher`** — scans configured filesystem paths on a configurable cron schedule and submits a media-processing job to Hatchet for each file found.
-- **`cmd/worker`** — registers workflow step handlers with Hatchet and processes jobs. It probes files in-process (via FFmpeg 8 CGo bindings), transcodes them, and notifies Radarr or Sonarr when the output is ready.
+- **The watcher** (`bin/watcher`) — scans configured filesystem paths on a configurable cron schedule and submits a media-processing job to Hatchet for each file found.
+- **The worker** (`bin/worker`) — pulls jobs from Hatchet and processes them. It probes each file with FFmpeg, transcodes it, and notifies Radarr or Sonarr when the output is ready.
 
 Hardware-accelerated encoding is supported for NVIDIA (NVENC), Intel (QSV via oneVPL), and AMD (VAAPI).
 
@@ -30,7 +30,7 @@ Sonarr/Radarr's `/downloads` is bind-mounted from `/processed-output` on the hos
 3. The download client saves the completed file to `/downloads` and reports the path back to Sonarr/Radarr.
 4. The watcher detects the new file and submits a Hatchet job.
 5. The worker picks up the job: it probes the file, detects black-bar crop, and writes an MKV output to `/processed-output` (mirroring the input's subdirectory when `MEDIA_INPUT_ROOT` is set). Non-H.264/H.265 video is re-encoded to H.265; H.264 or H.265 sources already in MKV are remuxed without re-encode unless a crop is being applied.
-6. The worker calls the Radarr or Sonarr API to trigger a `DownloadedMoviesScan` / `DownloadedEpisodesScan`. The scan path is derived from the original download path with the extension swapped to `.mkv` (not the worker's actual output path); the arr service resolves this to the transcoded file via its `/downloads` bind mount.
+6. The worker calls the Radarr or Sonarr API to trigger a library rescan. The scan path is derived from the original download path with the extension swapped to `.mkv` (not the worker's actual output path); the arr service resolves this to the transcoded file via its `/downloads` bind mount.
 7. Sonarr/Radarr scans its `/downloads` (which resolves to `/processed-output`), finds the processed file, and imports it.
 
 ## Building
@@ -46,7 +46,7 @@ Binaries are written to `bin/watcher` and `bin/worker`.
 
 ## Configuration
 
-### `cmd/watcher`
+### Watcher
 
 The watcher is configured by a YAML file (passed via `--config`, defaults to `config.yaml`) and a small set of environment variables. See [docs/configuration.md](docs/configuration.md) for the full reference.
 
@@ -62,7 +62,7 @@ watches:
     mediaType: show
 ```
 
-### `cmd/worker`
+### Worker
 
 The worker is configured entirely via environment variables. Required variables:
 

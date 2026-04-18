@@ -2,7 +2,7 @@
 
 ## Exporters
 
-Both `cmd/watcher` and `cmd/worker` support two independent, opt-in metric exporters. Neither is enabled by default.
+Both the watcher and the worker support two independent, opt-in metric exporters. Neither is enabled by default.
 
 ### Prometheus pull endpoint
 
@@ -29,21 +29,21 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP gRPC endpoint to push metrics perio
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
-This follows the standard [OpenTelemetry environment variable convention](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/). The exporter uses gRPC (not HTTP/protobuf), so point it at the gRPC port of your collector (typically 4317).
+This follows the standard [OpenTelemetry environment variable convention](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/). Point it at the gRPC port of your collector (typically 4317).
 
 Both exporters can be active simultaneously.
 
 ### Choosing between the two
 
-Use **Prometheus pull** if you already run a Prometheus server that scrapes targets directly. It is simpler to configure and requires no additional infrastructure beyond what Prometheus already provides. The downside is that Prometheus must be able to reach the worker's metrics port; this can be awkward in environments where processes are behind NAT or where scrape intervals add latency to alerting.
+Use **Prometheus pull** if you already run a Prometheus server that scrapes targets directly. It is simpler to configure and requires no additional infrastructure beyond what Prometheus already provides.
 
-Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compatible backend such as Grafana Alloy, Datadog Agent, or Honeycomb) already running. Push works regardless of whether the worker is network-reachable from the backend, making it a better fit for ephemeral or firewalled environments. The trade-off is that it requires a running collector to receive and forward the metrics.
+Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compatible backend such as Grafana Alloy, Datadog Agent, or Honeycomb) already running. Push is also the better fit when the worker is run once per job rather than long-lived: metrics are flushed on shutdown, so each workflow run's observations are guaranteed to be delivered before the worker exits. A pull endpoint that is never scraped during a short-lived run would lose that data. The trade-off is that OTLP requires a running collector to receive and forward the metrics.
 
 ## Metric reference
 
-### Media workflow metrics (`cmd/worker`)
+### Media workflow metrics (worker)
 
-Emitted by `cmd/worker` during media workflow execution. The meter name is `media_workflow`.
+Emitted by the worker during media workflow execution.
 
 #### Histograms
 
@@ -54,8 +54,8 @@ Emitted by `cmd/worker` during media workflow execution. The meter name is `medi
 | `media_workflow_source_duration_seconds`     | seconds | Duration of the source media file                  |
 | `media_workflow_source_file_size_bytes`      | bytes   | Size of the source file before transcoding         |
 | `media_workflow_destination_file_size_bytes` | bytes   | Size of the output file after transcoding          |
-| `media_workflow_transcode_duration_seconds`  | seconds | Wall-clock time spent in `RunTranscode`            |
-| `media_workflow_total_duration_seconds`      | seconds | Wall-clock time from probe start to cleanup finish |
+| `media_workflow_transcode_duration_seconds`  | seconds | Wall-clock time spent transcoding                  |
+| `media_workflow_total_duration_seconds`      | seconds | Wall-clock time for the full processing run       |
 
 #### Counters
 
@@ -63,11 +63,11 @@ Emitted by `cmd/worker` during media workflow execution. The meter name is `medi
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `media_workflow_invalid_files_total`         | Files skipped because they could not be probed or contain no video stream              |
 | `media_workflow_artwork_fetch_skipped_total` | Transcode runs where artwork fetch was attempted but yielded no embeddable image       |
-| `media_workflow_metrics_errors_total`        | Errors encountered while collecting per-run metrics (e.g. library API lookup failures) |
+| `media_workflow_metrics_errors_total`        | Errors encountered while collecting per-run metrics (e.g. Radarr/Sonarr API lookup failures) |
 
-### Watcher metrics (`cmd/watcher`)
+### Watcher metrics
 
-Emitted by `cmd/watcher` on every scheduled directory scan. The meter name is `github.com/solidDoWant/media-processor/cmd/watcher`.
+Emitted by the watcher on every scheduled directory scan.
 
 | Metric                                      | Kind      | Unit    | Description                                                       |
 | ------------------------------------------- | --------- | ------- | ----------------------------------------------------------------- |
@@ -92,7 +92,7 @@ Every `media_workflow_*` histogram observation carries the full standard label s
 | `destination_codec`     | e.g. `hevc`, `copy`       | Video codec written to the output (`copy` when the source was remuxed without re-encode).                                             |
 | `source_container`      | e.g. `matroska,webm`      | Container format of the source file as reported by libavformat (comma-joined list).                                                   |
 | `destination_container` | `mkv`                     | Container format of the output file (always `mkv`).                                                                                   |
-| `hardware_accelerated`  | `true`, `false`           | `true` iff `MEDIA_HARDWARE_DEVICE_PATH` is set. Does **not** reflect whether a hardware encoder was actually selected at runtime.     |
+| `hardware_accelerated`  | `true`, `false`           | `true` only when `MEDIA_HARDWARE_DEVICE_PATH` is set. Does **not** reflect whether a hardware encoder was actually selected at runtime. |
 | `crop_applied`          | `true`, `false`           | Whether a crop filter was applied during transcoding.                                                                                 |
 
 ### Media workflow counters
@@ -126,4 +126,4 @@ These labels significantly increase the cardinality of your metrics. Enable them
 
 ## Logging
 
-Both binaries use `log/slog` with a text handler. Set `LOG_LEVEL` to one of `debug`, `info`, `warn`, or `error` (default: `info`). Hatchet SDK logs are bridged through slog via zerolog so all output is consistently formatted.
+Both binaries write plain-text logs to stderr. Set `LOG_LEVEL` to one of `debug`, `info`, `warn`, or `error` (default: `info`).
