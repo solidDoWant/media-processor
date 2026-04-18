@@ -465,12 +465,12 @@ func TestRunTranscode(t *testing.T) {
 			},
 		},
 		{
-			name: "stereo audio stream title includes language name and channel config label",
+			name: "single-language audio tracks omit language from title",
 			setup: func(t *testing.T) (string, string) {
 				return copyTestVideo(t), t.TempDir()
 			},
-			// Stereo audio (2 channels, no LFE), language "und" → "Undetermined":
-			// expected title "Undetermined 2.0".
+			// All streams share the same language ("und"), so language is suppressed
+			// and the title is just the channel config label.
 			probe: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
@@ -487,8 +487,8 @@ func TestRunTranscode(t *testing.T) {
 
 				for _, s := range info.Streams {
 					if s.CodecType == ffprobe.CodecTypeAudio {
-						assert.Equal(t, "Undetermined 2.0", s.Tags["title"],
-							"stereo audio stream should have title 'Undetermined 2.0'")
+						assert.Equal(t, "2.0", s.Tags["title"],
+							"single-language stereo stream should have title '2.0' with no language prefix")
 
 						return
 					}
@@ -498,12 +498,49 @@ func TestRunTranscode(t *testing.T) {
 			},
 		},
 		{
-			name: "downmix stream title includes language name and encoder channel layout",
+			name: "multi-language audio tracks include language in title, und shown as Unknown Language",
+			setup: func(t *testing.T) (string, string) {
+				// Use the two-audio fixture: stream 1 = AAC stereo "jpn",
+				// stream 2 = AAC stereo "und".
+				return copyTwoAudioTestVideo(t), t.TempDir()
+			},
+			// "jpn" + "und": nonEnglishAudioIndices only filters when English
+			// is present, so both streams are retained here.
+			probe: ProbeOutput{
+				IsValidMedia: true,
+				VideoCodec:   "h264",
+				Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+				AudioStreams: []AudioStreamInfo{
+					{StreamInfo: StreamInfo{Index: 1, Language: "jpn"}, ReportedChannelCount: 2, EffectiveChannelCount: 2, HasLFE: false},
+					{StreamInfo: StreamInfo{Index: 2, Language: "und"}, ReportedChannelCount: 2, EffectiveChannelCount: 2, HasLFE: false},
+				},
+			},
+			errFunc: require.NoError,
+			check: func(t *testing.T, outputDir, inputPath string) {
+				out := filepath.Join(outputDir, mkvOutputName(inputPath))
+				info, err := ffprobe.Probe(t.Context(), out)
+				require.NoError(t, err)
+
+				var titles []string
+
+				for _, s := range info.Streams {
+					if s.CodecType == ffprobe.CodecTypeAudio {
+						titles = append(titles, s.Tags["title"])
+					}
+				}
+
+				require.Len(t, titles, 2, "expected two audio streams")
+				assert.Equal(t, "Japanese 2.0", titles[0], "Japanese stereo stream title")
+				assert.Equal(t, "Unknown Language 2.0", titles[1], "undetermined stereo stream title")
+			},
+		},
+		{
+			name: "single-language surround-only probe omits language from downmix title",
 			setup: func(t *testing.T) (string, string) {
 				return copyTestVideo(t), t.TempDir()
 			},
-			// Report as surround so a downmix is synthesized. Language "und" →
-			// "Undetermined": expected title "Undetermined 2.1" or "Undetermined 2.0".
+			// All streams are "und"; downmix title should be just the channel layout
+			// label with no language prefix.
 			probe: ProbeOutput{
 				IsValidMedia: true,
 				VideoCodec:   "h264",
@@ -515,9 +552,7 @@ func TestRunTranscode(t *testing.T) {
 				out := filepath.Join(outputDir, mkvOutputName(inputPath))
 				info, err := ffprobe.Probe(t.Context(), out)
 				require.NoError(t, err)
-				// The downmix stream is the last audio stream. Its title must be
-				// "Undetermined 2.1" when the AC-3 encoder supports the 2.1
-				// layout, or "Undetermined 2.0" when it falls back to stereo.
+
 				var lastAudio ffprobe.StreamInfo
 
 				for _, s := range info.Streams {
@@ -527,8 +562,8 @@ func TestRunTranscode(t *testing.T) {
 				}
 
 				title := lastAudio.Tags["title"]
-				assert.True(t, title == "Undetermined 2.1" || title == "Undetermined 2.0",
-					"downmix stream title should be 'Undetermined 2.1' or 'Undetermined 2.0', got %q", title)
+				assert.True(t, title == "2.1" || title == "2.0",
+					"downmix stream title should be '2.1' or '2.0' with no language prefix, got %q", title)
 			},
 		},
 	}

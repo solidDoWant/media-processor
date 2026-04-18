@@ -263,12 +263,18 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 	tempPath := filepath.Join(effectiveOutputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(effectiveOutputDir, mkvBase)
 
-	// Build per-stream title map for retained audio streams.
-	// Streams with unknown channel layouts (ReportedChannelCount=0) still receive
-	// a language-only title when a language tag is present; otherwise they are skipped.
+	// Build per-stream title map for retained audio streams. Language is only
+	// included when streams span multiple distinct languages; it adds no useful
+	// information when every track shares the same language (or all are "und").
+	needsLang := disambiguateLang(retainedAudio)
 	audioTitles := make(map[int]string, len(retainedAudio))
+
 	for _, s := range retainedAudio {
-		langName := iso639Name(s.Language)
+		var langName string
+		if needsLang {
+			langName = audioLangName(s.Language)
+		}
+
 		if s.ReportedChannelCount == 0 {
 			if langName != "" {
 				audioTitles[s.Index] = langName
@@ -310,7 +316,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 	if downmixSrcIdx != nil {
 		for _, s := range retainedAudio {
 			if s.Index == *downmixSrcIdx {
-				downmixLangName = iso639Name(s.Language)
+				if needsLang {
+					downmixLangName = audioLangName(s.Language)
+				}
+
 				break
 			}
 		}
