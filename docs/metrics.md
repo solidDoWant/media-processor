@@ -92,7 +92,7 @@ Every `media_workflow_*` histogram observation carries the full standard label s
 | `destination_codec`     | e.g. `hevc`, `copy`       | Video codec written to the output (`copy` when the source was remuxed without re-encode).                                             |
 | `source_container`      | e.g. `matroska,webm`      | Container format of the source file as reported by libavformat (comma-joined list).                                                   |
 | `destination_container` | `mkv`                     | Container format of the output file (always `mkv`).                                                                                   |
-| `hardware_accelerated`  | `true`, `false`           | `true` only when `MEDIA_HARDWARE_DEVICE_PATH` is set. Does **not** reflect whether a hardware encoder was actually selected at runtime. |
+| `hardware_accelerated`  | `true`, `false`           | `true` when at least one video stream was encoded with a hardware encoder (NVENC, QSV, VAAPI) at runtime. `false` when the encoder fell back to software (e.g. libx265), even if `MEDIA_HARDWARE_DEVICE_PATH` is set. |
 | `crop_applied`          | `true`, `false`           | Whether a crop filter was applied during transcoding.                                                                                 |
 
 ### Media workflow counters

@@ -128,6 +128,11 @@ type TranscodeOutput struct {
 	ArtworkFetchSkipped bool `json:"artwork_fetch_skipped,omitempty"`
 	// CropApplied is true when a crop filter was applied during transcoding.
 	CropApplied bool `json:"crop_applied,omitempty"`
+	// HardwareAccelerated is true when at least one video stream was encoded
+	// using a hardware encoder (e.g. NVENC, QSV, VAAPI) at runtime. False when
+	// the encoder fell back to software (e.g. libx265) even if
+	// MEDIA_HARDWARE_DEVICE_PATH is set.
+	HardwareAccelerated bool `json:"hardware_accelerated,omitempty"`
 }
 
 // codecName returns a human-readable name for a codec, matching the names used
@@ -351,7 +356,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		}
 	}
 
-	if err := ffmpeg.NewTranscode(filePath, tempPath).
+	transcoder := ffmpeg.NewTranscode(filePath, tempPath).
 		ToVideoCodec(videoCodec).
 		ToContainer(ffmpeg.ContainerMKV).
 		HardwareAccel(ffmpeg.HWAccelAuto).
@@ -367,8 +372,9 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		WithH265CRF(h265CRF).
 		WithCoverArt(artBytes, artMime).
 		WithCrop(cropParams).
-		Build().
-		Run(ctx); err != nil {
+		Build()
+
+	if err := transcoder.Run(ctx); err != nil {
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return TranscodeOutput{}, errors.Join(
 				fmt.Errorf("transcode: %w", err),
@@ -404,5 +410,6 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		TranscodeDurationSeconds: time.Since(transcodeStart).Seconds(),
 		ArtworkFetchSkipped:      artworkSkipped,
 		CropApplied:              cropParams != nil,
+		HardwareAccelerated:      transcoder.HardwareAccelerated(),
 	}, nil
 }

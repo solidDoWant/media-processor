@@ -263,6 +263,14 @@ func (b *TranscodeBuilder) Build() *Transcoder {
 // It embeds TranscodeBuilder so all configuration is accessible in one place.
 type Transcoder struct {
 	TranscodeBuilder
+	hardwareAccelerated bool // set by Run after encoder setup
+}
+
+// HardwareAccelerated reports whether any video stream used a hardware encoder
+// during the most recent Run call. Always false before Run is called or when
+// Run returns an error before encoder setup completes.
+func (t *Transcoder) HardwareAccelerated() bool {
+	return t.hardwareAccelerated
 }
 
 // Run executes the transcode job. It blocks until the job completes, the
@@ -307,6 +315,8 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	defer outputFmt.Free()
 	defer closeIO()
 
+	t.hardwareAccelerated = anyStreamHWAccel(streams)
+
 	if err := outputFmt.WriteHeader(nil); err != nil {
 		return fmt.Errorf("ffmpeg: writing header: %w", err)
 	}
@@ -324,6 +334,18 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	}
 
 	return outputFmt.WriteTrailer()
+}
+
+// anyStreamHWAccel reports whether any video stream in streams selected a
+// hardware encoder during setupEncoder.
+func anyStreamHWAccel(streams map[int]stream) bool {
+	for _, s := range streams {
+		if vss, ok := s.(*videoStreamState); ok && vss.encoder.usesHardwareAccelerator {
+			return true
+		}
+	}
+
+	return false
 }
 
 // resolveHWAccel resolves HWAccelAuto to a concrete value by detecting the
