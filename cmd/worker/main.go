@@ -36,9 +36,15 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	healthServer, err := health.NewFromEnv()
-	if err != nil {
-		return fmt.Errorf("init health server: %w", err)
+	var healthServer *health.Server
+
+	if addr := os.Getenv("HEALTH_ADDR"); addr != "" {
+		var err error
+
+		healthServer, err = health.New(ctx, addr)
+		if err != nil {
+			return fmt.Errorf("init health server: %w", err)
+		}
 	}
 
 	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)

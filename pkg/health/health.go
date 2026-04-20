@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -14,8 +15,9 @@ type Server struct {
 	ready atomic.Bool
 }
 
-// New starts an HTTP health server on addr. Returns an error if the listener cannot be opened.
-func New(addr string) (*Server, error) {
+// New starts an HTTP health server on addr. The server shuts down when ctx is cancelled.
+// Returns an error if the listener cannot be opened.
+func New(ctx context.Context, addr string) (*Server, error) {
 	s := &Server{}
 
 	listener, err := net.Listen("tcp", addr)
@@ -28,11 +30,12 @@ func New(addr string) (*Server, error) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if s.ready.Load() {
-			w.WriteHeader(http.StatusOK)
-		} else {
+		if !s.ready.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
+			return
 		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	srv := &http.Server{Handler: mux}
@@ -43,17 +46,13 @@ func New(addr string) (*Server, error) {
 		}
 	}()
 
+	go func() {
+		<-ctx.Done()
+
+		_ = srv.Shutdown(context.Background()) //nolint:contextcheck // intentional: process is exiting
+	}()
+
 	return s, nil
-}
-
-// NewFromEnv reads HEALTH_ADDR. Returns (nil, nil) when the variable is unset or empty.
-func NewFromEnv() (*Server, error) {
-	addr := os.Getenv("HEALTH_ADDR")
-	if addr == "" {
-		return nil, nil
-	}
-
-	return New(addr)
 }
 
 // SetReady atomically flips the readiness state to ready. Subsequent /readyz requests return 200.

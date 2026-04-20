@@ -38,7 +38,7 @@ func get(t *testing.T, url string) *http.Response {
 func TestNew_StartsServerOnAddr(t *testing.T) {
 	addr := freeAddr(t)
 
-	s, err := health.New(addr)
+	s, err := health.New(t.Context(), addr)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -52,7 +52,7 @@ func TestNew_StartsServerOnAddr(t *testing.T) {
 func TestHealthz_AlwaysOK(t *testing.T) {
 	addr := freeAddr(t)
 
-	s, err := health.New(addr)
+	s, err := health.New(t.Context(), addr)
 	require.NoError(t, err)
 
 	// Before SetReady
@@ -69,7 +69,7 @@ func TestHealthz_AlwaysOK(t *testing.T) {
 func TestReadyz_NotReadyBefore_ReadyAfterSetReady(t *testing.T) {
 	addr := freeAddr(t)
 
-	s, err := health.New(addr)
+	s, err := health.New(t.Context(), addr)
 	require.NoError(t, err)
 
 	resp := get(t, "http://"+addr+"/readyz")
@@ -81,27 +81,7 @@ func TestReadyz_NotReadyBefore_ReadyAfterSetReady(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestNewFromEnv_WithAddr_StartsServer(t *testing.T) {
-	addr := freeAddr(t)
-	t.Setenv("HEALTH_ADDR", addr)
-
-	s, err := health.NewFromEnv()
-	require.NoError(t, err)
-	require.NotNil(t, s)
-
-	resp := get(t, "http://"+addr+"/healthz")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestNewFromEnv_EmptyAddr_ReturnsNil(t *testing.T) {
-	t.Setenv("HEALTH_ADDR", "")
-
-	s, err := health.NewFromEnv()
-	require.NoError(t, err)
-	assert.Nil(t, s)
-}
-
 func TestNew_InvalidAddr_ReturnsError(t *testing.T) {
-	_, err := health.New("invalid-addr:99999")
+	_, err := health.New(t.Context(), "invalid-addr:99999")
 	require.Error(t, err)
 }
