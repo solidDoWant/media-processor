@@ -8,12 +8,17 @@ import (
 	"encoding/json"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,6 +122,98 @@ func probeOutputFile(t *testing.T, path string) outputFileInfo {
 	}
 
 	return info
+}
+
+// metricSeries wraps the metric-family map returned by expfmt.TextParser,
+// keyed by the base metric name (e.g. "media_workflow_total_duration_seconds").
+type metricSeries map[string]*dto.MetricFamily
+
+// sum returns the combined value of all samples of the named metric that match
+// every (key, value) pair in filter. An empty filter matches all samples.
+//
+// Names ending in _count or _sum are resolved against the histogram base name:
+// "foo_count" → foo.SampleCount, "foo_sum" → foo.SampleSum.
+// All other names are read from their Counter or Gauge field.
+func (m metricSeries) sum(name string, filter map[string]string) float64 {
+	var (
+		baseName string
+		getValue func(*dto.Metric) float64
+	)
+
+	switch {
+	case strings.HasSuffix(name, "_count"):
+		baseName = strings.TrimSuffix(name, "_count")
+		getValue = func(metric *dto.Metric) float64 { return float64(metric.GetHistogram().GetSampleCount()) }
+	case strings.HasSuffix(name, "_sum"):
+		baseName = strings.TrimSuffix(name, "_sum")
+		getValue = func(metric *dto.Metric) float64 { return metric.GetHistogram().GetSampleSum() }
+	default:
+		baseName = name
+		getValue = func(metric *dto.Metric) float64 {
+			if c := metric.GetCounter(); c != nil {
+				return c.GetValue()
+			}
+
+			return metric.GetGauge().GetValue()
+		}
+	}
+
+	var total float64
+
+	for _, metric := range m[baseName].GetMetric() {
+		if labelsMatch(metric.GetLabel(), filter) {
+			total += getValue(metric)
+		}
+	}
+
+	return total
+}
+
+// labelsMatch reports whether labels contains all key/value pairs in filter.
+func labelsMatch(labels []*dto.LabelPair, filter map[string]string) bool {
+	for key, want := range filter {
+		found := false
+
+		for _, lp := range labels {
+			if lp.GetName() == key {
+				found = lp.GetValue() == want
+				break
+			}
+		}
+
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// fetchMetrics GETs /metrics on addr, parses the Prometheus text exposition,
+// and returns the metric families keyed by base name. Network, protocol, and
+// parse errors fail the test immediately.
+func fetchMetrics(t *testing.T, addr string) metricSeries {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/metrics", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "GET /metrics from %s", addr)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "unexpected status from %s", addr)
+
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+
+	families, err := parser.TextToMetricFamilies(resp.Body)
+	require.NoError(t, err, "parse /metrics from %s", addr)
+
+	return metricSeries(families)
 }
 
 // findMKV walks dir and returns the path of the first .mkv file found.

@@ -91,4 +91,35 @@ func TestRadarrHappyPath(t *testing.T) {
 	assert.Contains(t, info.formatName, "matroska", "output container should be Matroska")
 	assert.Equal(t, "hevc", info.videoCodec, "output video codec should be H.265")
 	assert.Greater(t, info.durationSec, 300.0, "output duration should be at least 5 minutes")
+
+	assertRadarrPipelineMetrics(t)
+}
+
+func assertRadarrPipelineMetrics(t *testing.T) {
+	t.Helper()
+
+	// The watcher counters are updated synchronously from the scan goroutine;
+	// the worker's record_metrics task runs after cleanup, so poll until it lands.
+	filter := map[string]string{"mapping_name": "radarr"}
+
+	var workerSeries metricSeries
+
+	require.Eventually(t, func() bool {
+		workerSeries = fetchMetrics(t, workerMetricsAddr)
+		return workerSeries.sum("media_workflow_total_duration_seconds_count", filter) >= 1
+	}, 30*time.Second, 500*time.Millisecond,
+		"expected worker to record at least one completed media_workflow run for the radarr mapping")
+
+	watcherSeries := fetchMetrics(t, watcherMetricsAddr)
+	assert.Greater(t, watcherSeries.sum("watcher_scans_total", filter), 0.0,
+		"watcher should have completed at least one scan of the radarr mapping")
+	assert.Greater(t, watcherSeries.sum("watcher_files_discovered_total", filter), 0.0,
+		"watcher should have discovered the radarr source file")
+	assert.Greater(t, watcherSeries.sum("watcher_dispatches_total", filter), 0.0,
+		"watcher should have dispatched the radarr workflow to Hatchet")
+
+	assert.GreaterOrEqual(t, workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter), 1.0,
+		"worker should have recorded the radarr transcode duration")
+	assert.Greater(t, workerSeries.sum("media_workflow_destination_file_size_bytes_sum", filter), 0.0,
+		"worker should have recorded a positive destination-file-size observation")
 }

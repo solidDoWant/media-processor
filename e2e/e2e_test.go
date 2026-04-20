@@ -42,10 +42,12 @@ var log = slog.Default().With("source", "e2e") //nolint:gochecknoglobals
 
 // Package-level state set during TestMain and shared across test functions.
 var (
-	hatchetToken    string
-	radarrMovieID   int
-	sonarrSeriesID  int
-	sonarrEpisodeID int
+	hatchetToken       string
+	radarrMovieID      int
+	sonarrSeriesID     int
+	sonarrEpisodeID    int
+	watcherMetricsAddr string
+	workerMetricsAddr  string
 )
 
 func TestMain(m *testing.M) {
