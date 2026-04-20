@@ -75,14 +75,15 @@ var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType
 type WatchEntry struct {
 	// Name is a human-readable label for this watch entry, used in logs and metrics.
 	Name string `yaml:"name" jsonschema:"minLength=1" validate:"min=1"`
-	// Path is the absolute filesystem path to the directory to watch.
+	// Path is the filesystem path to the directory to watch. Relative paths are resolved
+	// against the watcher's working directory.
 	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
 	// MediaType indicates whether this directory contains movies or TV show episodes.
 	MediaType medialib.MediaType `yaml:"mediaType" validate:"mediatype"`
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
 	// path of each file and directory encountered during a scan. A matching file is silently
 	// skipped; a matching directory causes its entire subtree to be pruned. Patterns are
-	// compiled at config load; an invalid expression causes loadConfig to return an error.
+	// compiled when the configuration is loaded; an invalid expression causes configuration loading to fail.
 	IgnorePatterns []CompiledRegexp `yaml:"ignorePatterns,omitempty" validate:"omitempty"`
 	// PreserveSource controls whether the source file is deleted after successful processing.
 	// When true, the source file is kept; when false or omitted, the source file is deleted

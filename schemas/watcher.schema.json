@@ -49,7 +49,7 @@
         "path": {
           "type": "string",
           "minLength": 1,
-          "description": "Path is the absolute filesystem path to the directory to watch."
+          "description": "Path is the filesystem path to the directory to watch. Relative paths are resolved\nagainst the watcher's working directory."
         },
         "mediaType": {
           "$ref": "#/$defs/MediaType",
@@ -60,7 +60,7 @@
             "$ref": "#/$defs/CompiledRegexp"
           },
           "type": "array",
-          "description": "IgnorePatterns is an optional list of Go regular expressions matched against the absolute\npath of each file and directory encountered during a scan. A matching file is silently\nskipped; a matching directory causes its entire subtree to be pruned. Patterns are\ncompiled at config load; an invalid expression causes loadConfig to return an error."
+          "description": "IgnorePatterns is an optional list of Go regular expressions matched against the absolute\npath of each file and directory encountered during a scan. A matching file is silently\nskipped; a matching directory causes its entire subtree to be pruned. Patterns are\ncompiled when the configuration is loaded; an invalid expression causes configuration loading to fail."
         },
         "preserveSource": {
           "type": "boolean",
