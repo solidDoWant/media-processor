@@ -5,58 +5,70 @@
   "$defs": {
     "CompiledRegexp": {
       "type": "string",
-      "format": "regex"
+      "format": "regex",
+      "description": "Go regular expression matched against the absolute path of each file or directory. A matching file is skipped; a matching directory prunes its entire subtree."
     },
     "Config": {
       "properties": {
         "cronSchedule": {
-          "$ref": "#/$defs/CronExpression"
+          "$ref": "#/$defs/CronExpression",
+          "description": "CronSchedule controls how often the watcher scans directories (default: every 5 seconds).\nUses Hatchet's 6-field cron format with a leading seconds field, e.g. \"*/5 * * * * *\"."
         },
         "watches": {
           "items": {
             "$ref": "#/$defs/WatchEntry"
           },
-          "type": "array"
+          "type": "array",
+          "description": "Watches lists the directories to monitor and their associated media types."
         }
       },
       "additionalProperties": false,
-      "type": "object"
+      "type": "object",
+      "description": "Config is the top-level watcher configuration loaded from the YAML config file."
     },
     "CronExpression": {
       "type": "string",
-      "pattern": "^(\\S+ ){5}\\S+$"
+      "pattern": "^(\\S+ ){5}\\S+$",
+      "description": "Hatchet 6-field cron expression (seconds-leading) controlling how often the watcher scans directories. Example: \"*/5 * * * * *\" runs every 5 seconds."
     },
     "MediaType": {
       "type": "string",
       "enum": [
         "movie",
         "show"
-      ]
+      ],
+      "description": "Whether the watched directory contains movies (\"movie\") or TV show episodes (\"show\")."
     },
     "WatchEntry": {
       "properties": {
         "name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Name is a human-readable label for this watch entry, used in logs and metrics."
         },
         "path": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Path is the absolute filesystem path to the directory to watch."
         },
         "mediaType": {
-          "$ref": "#/$defs/MediaType"
+          "$ref": "#/$defs/MediaType",
+          "description": "MediaType indicates whether this directory contains movies or TV show episodes."
         },
         "ignorePatterns": {
           "items": {
             "$ref": "#/$defs/CompiledRegexp"
           },
-          "type": "array"
+          "type": "array",
+          "description": "IgnorePatterns is an optional list of Go regular expressions matched against the absolute\npath of each file and directory encountered during a scan. A matching file is silently\nskipped; a matching directory causes its entire subtree to be pruned. Patterns are\ncompiled at config load; an invalid expression causes loadConfig to return an error."
         },
         "preserveSource": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "PreserveSource controls whether the source file is deleted after successful processing.\nWhen true, the source file is kept; when false or omitted, the source file is deleted\n(default behaviour)."
         },
         "retainEmptyDirectories": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "RetainEmptyDirectories controls whether empty parent directories are removed after the\nsource file is deleted. When false or omitted (the default), parent directories that\nbecome empty as a result of source-file deletion are pruned bottom-up, stopping at the\nwatch root. When true, no directory removal is performed (current behaviour)."
         }
       },
       "additionalProperties": false,
@@ -65,7 +77,8 @@
         "name",
         "path",
         "mediaType"
-      ]
+      ],
+      "description": "WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch and carrying a human-readable name for identification."
     }
   }
 }

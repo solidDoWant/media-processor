@@ -20,7 +20,11 @@ type CronExpression string
 
 // JSONSchema returns a JSON Schema for CronExpression using the canonical Hatchet cron regex.
 func (CronExpression) JSONSchema() *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "string", Pattern: sixFieldCronPattern}
+	return &jsonschema.Schema{
+		Type:        "string",
+		Pattern:     sixFieldCronPattern,
+		Description: "Hatchet 6-field cron expression (seconds-leading) controlling how often the watcher scans directories. Example: \"*/5 * * * * *\" runs every 5 seconds.",
+	}
 }
 
 // CompiledRegexp is a Go regular expression that is compiled at YAML parse time. An invalid
@@ -34,7 +38,11 @@ type CompiledRegexp struct {
 // (the regex pattern) at YAML parse time; reflecting the Go struct would produce an empty object
 // schema, so this method overrides that to describe the on-disk shape accurately.
 func (CompiledRegexp) JSONSchema() *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "string", Format: "regex"}
+	return &jsonschema.Schema{
+		Type:        "string",
+		Format:      "regex",
+		Description: "Go regular expression matched against the absolute path of each file or directory. A matching file is skipped; a matching directory prunes its entire subtree.",
+	}
 }
 
 // UnmarshalYAML compiles the scalar YAML string as a Go regular expression. It returns an error
@@ -65,10 +73,11 @@ var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType
 // WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch
 // and carrying a human-readable name for identification.
 type WatchEntry struct {
+	// Name is a human-readable label for this watch entry, used in logs and metrics.
 	Name string `yaml:"name" jsonschema:"minLength=1" validate:"min=1"`
+	// Path is the absolute filesystem path to the directory to watch.
 	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
-	// MediaType must be one of the values in validMediaTypes; validated by the mediatype tag.
-	// The validate tag is required for runtime enforcement; medialib.MediaType.JSONSchema handles schema generation.
+	// MediaType indicates whether this directory contains movies or TV show episodes.
 	MediaType medialib.MediaType `yaml:"mediaType" validate:"mediatype"`
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
 	// path of each file and directory encountered during a scan. A matching file is silently
@@ -88,12 +97,10 @@ type WatchEntry struct {
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
 type Config struct {
-	// CronSchedule is the Hatchet cron expression controlling how often the watcher
-	// scans directories (default: every 5 seconds). Supports Hatchet's 6-field format
-	// with a leading seconds field, e.g. "*/5 * * * * *".
-	// The CronExpression type provides the JSON Schema pattern; hatchetcron validates at runtime.
+	// CronSchedule controls how often the watcher scans directories (default: every 5 seconds).
+	// Uses Hatchet's 6-field cron format with a leading seconds field, e.g. "*/5 * * * * *".
 	CronSchedule CronExpression `yaml:"cronSchedule,omitempty" validate:"omitempty,hatchetcron"`
-	// Watches uses validate:"dive" to validate each WatchEntry element in the slice.
+	// Watches lists the directories to monitor and their associated media types.
 	Watches []WatchEntry `yaml:"watches,omitempty" validate:"dive"`
 }
 

@@ -15,6 +15,11 @@ func main() {
 		FieldNameTag: "yaml",
 	}
 
+	if err := r.AddGoComments("github.com/solidDoWant/media-processor", "./internal/watcherconfig"); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load Go comments: %v\n", err)
+		os.Exit(1)
+	}
+
 	schema := r.Reflect(&watcherconfig.Config{})
 
 	out, err := json.Marshal(schema)
