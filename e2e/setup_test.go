@@ -254,9 +254,23 @@ func startProcesses() error {
 		"HATCHET_CLIENT_TLS_STRATEGY=none",
 	)
 
+	// Pick free loopback ports for the Prometheus /metrics endpoints so parallel
+	// runs and local port conflicts don't interfere. The TOCTOU race is accepted
+	// per project convention.
+	var err error
+	if watcherMetricsAddr, err = reserveFreeAddr(); err != nil {
+		return fmt.Errorf("reserve watcher metrics addr: %w", err)
+	}
+
+	if workerMetricsAddr, err = reserveFreeAddr(); err != nil {
+		return fmt.Errorf("reserve worker metrics addr: %w", err)
+	}
+
+	watcherEnv := append(baseEnv, "METRICS_ADDR="+watcherMetricsAddr)
+
 	// Start watcher subprocess.
 	watcherCmd = exec.Command(watcherBin, "--config", watcherCfg)
-	watcherCmd.Env = baseEnv
+	watcherCmd.Env = watcherEnv
 	// These already use slog so write directly to stdout/stderr to avoid double encapsulation
 	watcherCmd.Stdout = os.Stdout
 	watcherCmd.Stderr = os.Stderr
@@ -269,6 +283,7 @@ func startProcesses() error {
 
 	// Start worker subprocess with path-translation env vars.
 	workerEnv := append(baseEnv,
+		"METRICS_ADDR="+workerMetricsAddr,
 		"MEDIA_OUTPUT_DIR="+processedDir,
 		"MEDIA_INPUT_ROOT="+downloadsDir,
 		"RADARR_URL="+radarrBase,
@@ -303,6 +318,21 @@ func stopProcesses() {
 			_ = cmd.Wait()
 		}
 	}
+}
+
+// reserveFreeAddr binds a TCP listener on a random loopback port, closes it, and
+// returns the address string. There is an inherent TOCTOU race between close and
+// the caller's re-bind, but this matches the convention used elsewhere in the
+// codebase (see pkg/metrics/metrics_test.go freeAddr).
+func reserveFreeAddr() (string, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+
+	addr := listener.Addr().String()
+
+	return addr, listener.Close()
 }
 
 // moduleRoot returns the absolute path of the Go module root by invoking
