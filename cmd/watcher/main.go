@@ -12,6 +12,7 @@ import (
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
+	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 )
@@ -32,6 +33,11 @@ func main() {
 
 func run(ctx context.Context, configPath string) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
+
+	healthServer, err := health.NewFromEnv()
+	if err != nil {
+		return fmt.Errorf("init health server: %w", err)
+	}
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
@@ -81,6 +87,10 @@ func run(ctx context.Context, configPath string) error {
 	}
 
 	slog.Info("starting directory scan worker", "schedule", cfg.CronSchedule)
+
+	if healthServer != nil {
+		healthServer.SetReady()
+	}
 
 	if err := worker.StartBlocking(ctx); err != nil {
 		return fmt.Errorf("watcher stopped: %w", err)
