@@ -6,7 +6,8 @@
 - Don't put line breaks within individual paragraph in markdown documents, or anything posted to GitHub (bodies, comments). These don't render well in some markdown renderes, such as GitHub issues.
 
 ## Tech Stack
-- Go 1.26, PostgreSQL, Hatchet (workflow orchestration)
+- Go 1.26, Hatchet (workflow orchestration; backed by PostgreSQL via the Hatchet server — the Go code does not connect to Postgres directly)
+- CGO + FFmpeg 8 shared libraries (media processing via `github.com/asticode/go-astiav`)
 - `golangci-lint` for static analysis
 - Nix (flake.nix) for reproducible dev environments
 
@@ -15,35 +16,52 @@
 media-processor/
 ├── CLAUDE.md
 ├── SPEC.md
+├── README.md
 ├── flake.nix                  # Nix dev environment
 ├── Makefile
 ├── go.mod
 ├── .golangci.yml
+├── docker-compose.yml         # Local Hatchet dev stack
 ├── .claude/
-│   ├── settings.json          # Hooks and permission rules
 │   ├── commands/              # Slash commands
 │   └── tasks/                 # Per-issue working files (gitignored)
-├── .github/
-│   └── ISSUE_TEMPLATE/
+├── bin/                       # Build outputs (gitignored)
 ├── cmd/
-│   ├── watcher/               # directory scanner + Hatchet job submission binary
-│   └── worker/                # Hatchet worker + workflow handlers binary
+│   ├── watcher/               # Cron-driven directory scanner + Hatchet job submission binary
+│   ├── worker/                # Hatchet worker + workflow handlers binary
+│   └── gen-config-schema/     # Emits the watcher YAML JSON Schema (see schemas/)
+├── docs/                      # Operator-facing documentation (configuration, hardware accel, metrics)
+├── e2e/                       # End-to-end test suite (Docker-based, build tag `e2e`)
+├── internal/
+│   └── watcherconfig/         # Shared watcher config types + validation
 ├── pkg/
-│   ├── ffmpeg/                # ffmpeg CLI wrapper
-│   ├── ffprobe/               # ffprobe CLI wrapper
-│   ├── medialib/              # Higher-level media processing abstractions
-│   └── webhook/               # Inbound webhook HTTP handler utilities
-├── workflows/                 # Hatchet workflow definitions
+│   ├── ffmpeg/                # In-process FFmpeg wrapper (CGO via go-astiav)
+│   ├── ffprobe/               # In-process ffprobe-equivalent inspector (CGO via go-astiav)
+│   ├── logging/               # zerolog-backed slog setup
+│   ├── medialib/              # MediaType/Movie/Episode domain types + radarr/sonarr API clients
+│   ├── metrics/               # Prometheus + OTLP metrics provider
+│   └── webhook/               # Outbound failure-notification HTTP client
+├── schemas/                   # Generated JSON schema(s) for config files
+├── workflows/                 # Hatchet workflow definitions and step handlers
+│   ├── placeholder.go         # No-op standalone task registered with the worker to verify Hatchet connectivity
+│   ├── media/                 # Top-level media workflow
+│   └── steps/                 # Individual workflow step handlers (probe, detectcrop, transcode, etc.)
 └── deploy/
     └── k8s/                   # Kubernetes manifests
 ```
 
 ## Commands
 - Build: `make build` (outputs `bin/watcher` and `bin/worker`)
-- Test: `make test`
-- Lint: `make lint`
-- Fmt: `make fmt`
+- Format: `make fmt`
+- Vet: `make vet`
+- Lint: `make lint` (or `make lint-fix` to auto-apply fixes)
+- Unit tests: `make test`
+- Integration tests: `make test-integration` (starts a local Hatchet via `make hatchet-up` and runs `-tags=integration`)
 - E2E tests: `make test-e2e` (requires Docker; first run downloads ~700 MB BBB fixture)
+- Benchmarks: `make benchmark`
+- Generate watcher JSON schema: `make generate-schema` (writes `schemas/watcher.schema.json`)
+- Update Go modules + sync Hatchet image tags: `make update-dependencies`
+- Local Hatchet dev stack: `make hatchet-up` / `make hatchet-down` / `make hatchet-token`
 
 ## Dev Tools
 

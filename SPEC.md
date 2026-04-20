@@ -4,7 +4,7 @@
 
 | Component | Technology |
 |-----------|------------|
-| Language | Go 1.24 |
+| Language | Go 1.26 |
 | Workflow orchestration | [Hatchet](https://hatchet.run) |
 | Database | PostgreSQL |
 | Directory scanning | `filepath.WalkDir` on a Hatchet cron schedule |
@@ -31,7 +31,7 @@ Registers workflow step handlers with Hatchet and processes jobs dispatched by t
 Responsibilities:
 - Connect to Hatchet and register all workflow step handlers
 - Invoke `pkg/ffprobe` to inspect incoming media files
-- Invoke `pkg/ffmpeg` via `pkg/medialib` to transcode or transform media
+- Invoke `pkg/ffmpeg` from `workflows/steps` to transcode or transform media
 - Report step results and errors back to the workflow engine
 
 ## Library Package Contracts
@@ -40,7 +40,7 @@ Responsibilities:
 
 Wraps `libavcodec`, `libavformat`, and related libraries via `github.com/asticode/go-astiav` for in-process media transcoding.
 
-- Exposes a builder API: `NewTranscode(in, out).VideoCodec(...).AudioCodec(...).Container(...).HardwareAccel(...).Build().Run(ctx)`
+- Exposes a builder API: `NewTranscode(in, out).ToVideoCodec(...).ToAudioCodec(...).ToContainer(...).HardwareAccel(...).Build().Run(ctx)`
 - Hardware encoder availability is determined in-process via `astiav.FindEncoderByName` — no subprocess probe
 - No external binary required; CGO must be enabled and FFmpeg 8 shared libraries must be present at runtime
 
@@ -53,18 +53,19 @@ Wraps `libavformat` and `libavcodec` via `github.com/asticode/go-astiav` for in-
 
 ### `pkg/medialib`
 
-Provides higher-level business logic over `pkg/ffmpeg` and `pkg/ffprobe`.
+Defines the shared media-library domain model used by the watcher, worker, and arr clients.
 
-- Encapsulates transcoding decisions (codec selection, resolution, bitrate)
-- Exposes operations such as `Transcode`, `ExtractAudio`, `GenerateThumbnail`
-- Callers do not interact with ffmpeg/ffprobe directly
+- Declares the `MediaType` enum (`movie`, `show`) plus the `Movie` and `Episode` types and their accessor interface
+- Subpackages `pkg/medialib/radarr` and `pkg/medialib/sonarr` wrap the Radarr and Sonarr REST APIs (lookup, library import, path translation)
+- Does not perform transcoding itself — workflow steps in `workflows/steps` invoke `pkg/ffmpeg`/`pkg/ffprobe` directly
 
 ### `pkg/webhook`
 
-Provides HTTP handler utilities for inbound webhook events.
+Provides an HTTP client for posting workflow-failure notifications to a configured outbound endpoint.
 
-- Minimal interface for receiving and dispatching webhook payloads
-- Decoupled from any specific webhook source
+- `Client.NotifyFailure` POSTs a `FailureEvent` (workflow, file path, step, error) as JSON to `Client.URL`
+- The payload shape is pluggable via `PayloadFunc`; `DefaultPayload` emits `{"workflow","file_path","step","error"}`
+- A no-op when `Client.URL` is empty
 
 ## Sonarr/Radarr Integration Flow
 
@@ -85,7 +86,7 @@ Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This
 1. **User requests media.** The user requests a movie or TV episode via Sonarr or Radarr.
 2. **Download initiated.** Sonarr/Radarr searches configured indexers, selects a release, and sends it to the configured download client.
 3. **File lands in `/downloads`.** The download client saves the completed file to the real `/downloads` directory and reports the file path back to Sonarr/Radarr.
-4. **Watcher detects the file.** The `cmd/watcher` process, which watches `/downloads` via `fsnotify`, detects the new file and submits a media-processor workflow job to Hatchet.
+4. **Watcher detects the file.** The `cmd/watcher` process, which scans `/downloads` recursively on each Hatchet cron tick using `filepath.WalkDir`, discovers the new file and submits a media-processor workflow job to Hatchet.
 5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `/processed-output`. When `MEDIA_INPUT_ROOT` is set to `/downloads`, the worker mirrors the input's relative subdirectory under `/processed-output` (e.g., `/downloads/my-media-item/video.mp4` produces `/processed-output/my-media-item/video.mkv`). **`MEDIA_INPUT_ROOT` must be configured** for nested downloads to produce matching subdirectory structure; without it, all output is written flat into `/processed-output` and the import path in step 6 will not resolve correctly for nested inputs.
 6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.ImportByFilePath` with a path derived from the original input file path: the same directory and stem as the downloaded file, but with the extension replaced by `.mkv` to match the transcoded output (e.g., if the input was `/downloads/my-media-item/video.mp4`, the import path is `/downloads/my-media-item/video.mkv`). The path is translated if necessary via `LocalPathPrefix`/`RemotePathPrefix` to produce the path as Sonarr/Radarr sees it (e.g., `/downloads/my-media-item/video.mkv`), then a `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path. The arr service scans the file at that path (which resolves to the transcoded output via the bind mount) and triggers the normal import pipeline.
 7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans its `/downloads` path (which resolves to `/processed-output` on the host) and finds the processed file, then imports it into the library.
@@ -148,10 +149,10 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `RADARR_API_KEY` | string | — | **Required** | Radarr API key. |
 | `SONARR_URL` | string (URL) | — | **Required** | Sonarr base URL (e.g. `http://sonarr:8989`). |
 | `SONARR_API_KEY` | string | — | **Required** | Sonarr API key. |
-| `RADARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Radarr path translation. When set, `RADARR_REMOTE_PATH_PREFIX` must also be set. |
-| `RADARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Radarr path translation. |
-| `SONARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Sonarr path translation. When set, `SONARR_REMOTE_PATH_PREFIX` must also be set. |
-| `SONARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Sonarr path translation. |
+| `RADARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Radarr path translation. Set together with `RADARR_REMOTE_PATH_PREFIX`; setting one without the other will produce paths Radarr cannot resolve. Not validated at startup. |
+| `RADARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Radarr path translation. Replaces `RADARR_LOCAL_PATH_PREFIX` in paths sent to Radarr. |
+| `SONARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Sonarr path translation. Set together with `SONARR_REMOTE_PATH_PREFIX`; setting one without the other will produce paths Sonarr cannot resolve. Not validated at startup. |
+| `SONARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Sonarr path translation. Replaces `SONARR_LOCAL_PATH_PREFIX` in paths sent to Sonarr. |
 | `MEDIA_WEBHOOK_URL` | string (URL) | `""` | Optional | Webhook endpoint notified on workflow failure. No notification is sent when empty. |
 | `MEDIA_INPUT_ROOT` | string (path) | `""` | Optional | Root of the watched input directories. When set, transcoded output is placed in a mirrored subdirectory under `MEDIA_OUTPUT_DIR`, preserving the original directory structure. |
 | `MEDIA_HARDWARE_DEVICE_PATH` | string (path) | `""` | Optional | Hardware device path for hardware-accelerated transcoding (e.g. `/dev/dri/renderD128`). When empty, the software encoder is used. |
@@ -159,4 +160,5 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Hatchet execution timeout for the crop-detection step (e.g. `45m`, `1h`). |
 | `MEDIA_TRANSCODE_TIMEOUT` | Go duration | `4h` | Optional | Hatchet execution timeout for the transcode step (e.g. `2h`, `8h`). |
+| `MEDIA_H265_CRF` | integer (1–51) | _(encoder default)_ | Optional | H.265 constant-quality (CRF) value. When unset or empty the encoder default is used; values outside 1–51 cause a fatal startup error. |
 | `METRICS_HIGH_CARDINALITY_LABELS` | `true` / `false` | `false` | Optional | When `true`, per-item labels (id, title, year, etc.) are attached to metric observations. |
