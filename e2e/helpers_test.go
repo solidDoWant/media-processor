@@ -158,9 +158,14 @@ func (m metricSeries) sum(name string, filter map[string]string) float64 {
 		}
 	}
 
+	family := m[baseName]
+	if family == nil {
+		return 0
+	}
+
 	var total float64
 
-	for _, metric := range m[baseName].GetMetric() {
+	for _, metric := range family.GetMetric() {
 		if labelsMatch(metric.GetLabel(), filter) {
 			total += getValue(metric)
 		}
