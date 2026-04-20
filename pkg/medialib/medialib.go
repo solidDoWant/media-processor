@@ -24,8 +24,9 @@ const (
 // JSONSchema returns a JSON Schema for MediaType restricting values to the valid types.
 func (MediaType) JSONSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{
-		Type: "string",
-		Enum: []any{string(MovieType), string(ShowType)},
+		Type:        "string",
+		Enum:        []any{string(MovieType), string(ShowType)},
+		Description: "Whether the watched directory contains movies (\"movie\") or TV show episodes (\"show\").",
 	}
 }
 
