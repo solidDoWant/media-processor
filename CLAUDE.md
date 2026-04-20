@@ -90,6 +90,12 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - Always use `t.Context()` (not `context.Background()`) when a test needs a context. It is automatically cancelled when the test finishes, preventing resource leaks.
 - Loop iteration variable names must be the full singular form of the collection name. For example, use `service` when ranging over `services`, `entry` when ranging over `entries`, `category` when ranging over `categories`. Single-letter names (`s`, `v`, `f`, `k`) and shortened names (`cat` for `category`, `svc` for `service`) are not allowed unless the collection itself uses that short name (e.g. `cat` is fine when ranging over `cats`).
 
+## Documentation
+
+- When a change affects any user-facing surface — environment variables, configuration fields, CLI flags, Prometheus metrics, webhook payloads, or operator-visible behavior — update the relevant file(s) in `docs/` as part of the same PR.
+- User-facing surfaces and their primary doc files: configuration options → `docs/configuration.md`; hardware acceleration → `docs/hardware-acceleration.md`; metrics → `docs/metrics.md`.
+- If no existing doc file covers the changed surface, create one under `docs/` and link it from `README.md`.
+
 ## Quality Rules
 
 - Run and pass all acceptance tests before declaring a task complete.
