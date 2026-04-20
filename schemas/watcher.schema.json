@@ -68,7 +68,7 @@
         },
         "retainEmptyDirectories": {
           "type": "boolean",
-          "description": "RetainEmptyDirectories controls whether empty parent directories are removed after the\nsource file is deleted. When false or omitted (the default), parent directories that\nbecome empty as a result of source-file deletion are pruned bottom-up, stopping at the\nwatch root. When true, no directory removal is performed (current behaviour)."
+          "description": "RetainEmptyDirectories controls whether empty parent directories are removed after the\nsource file is deleted. When false or omitted (the default), parent directories that\nbecome empty as a result of source-file deletion are pruned bottom-up, stopping at the\nwatch root. When true, no directory removal is performed."
         }
       },
       "additionalProperties": false,

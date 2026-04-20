@@ -92,7 +92,7 @@ type WatchEntry struct {
 	// RetainEmptyDirectories controls whether empty parent directories are removed after the
 	// source file is deleted. When false or omitted (the default), parent directories that
 	// become empty as a result of source-file deletion are pruned bottom-up, stopping at the
-	// watch root. When true, no directory removal is performed (current behaviour).
+	// watch root. When true, no directory removal is performed.
 	RetainEmptyDirectories bool `yaml:"retainEmptyDirectories,omitempty"`
 }
 
