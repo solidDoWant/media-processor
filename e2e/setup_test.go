@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -93,31 +92,8 @@ func composeUp() error {
 	return err
 }
 
-// composeUpWatcherWorker starts the watcher and worker containers (profile
-// "app"), injecting the Hatchet client token into the environment so the
-// compose interpolation of ${HATCHET_CLIENT_TOKEN} resolves correctly.
-func composeUpWatcherWorker(token string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker", composeArgs("--profile", "app", "up", "-d", "watcher", "worker")...)
-
-	cmd.Env = append(composeEnv(), "HATCHET_CLIENT_TOKEN="+token)
-	stdout := newSlogWriter(slog.LevelInfo, "docker")
-	stderr := newSlogWriter(slog.LevelWarn, "docker")
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	err := cmd.Run()
-
-	stdout.Flush()
-	stderr.Flush()
-
-	return err
-}
-
 func composeDown() {
-	cmd := exec.Command("docker", composeArgs("--profile", "app", "down", "-v", "--remove-orphans")...)
+	cmd := exec.Command("docker", composeArgs("down", "-v", "--remove-orphans")...)
 	cmd.Env = composeEnv()
 	stdout := newSlogWriter(slog.LevelInfo, "docker")
 	stderr := newSlogWriter(slog.LevelWarn, "docker")
@@ -181,37 +157,6 @@ func checkTCP(addr string) error {
 	}
 
 	return conn.Close()
-}
-
-// ---- Hatchet token ------------------------------------------------------
-
-// generateHatchetToken generates a long-lived Hatchet API token by running
-// hatchet-admin inside the setup-config container. The default tenant ID
-// (707d0855-80ab-4e1f-a156-f1c4546cbf52) seeded by the migration is used.
-func generateHatchetToken() (string, error) {
-	tokenCmd := exec.Command("docker", composeArgs(
-		"run", "--no-deps", "--rm", "-T", "setup-config",
-		"/hatchet/hatchet-admin", "token", "create",
-		"--config", "/hatchet/config",
-		"-e", "87600h",
-	)...)
-	tokenCmd.Env = composeEnv()
-
-	tokenOut, err := tokenCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
-	}
-
-	// Extract the JWT token line (starts with "eyJ") in case log lines are
-	// interleaved on stdout.
-	for _, line := range strings.Split(string(tokenOut), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "eyJ") {
-			return line, nil
-		}
-	}
-
-	return "", fmt.Errorf("no JWT token found in hatchet-admin output")
 }
 
 // ---- polling helpers ----------------------------------------------------
