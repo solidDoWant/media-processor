@@ -17,13 +17,31 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        libav-minimal = pkgs.ffmpeg-headless.overrideAttrs (old: {
+        libav-minimal = pkgs.ffmpeg-headless.overrideAttrs (old:
+          let
+            # Packages whose corresponding FFmpeg feature flag is disabled below.
+            # Filtering them out of buildInputs prevents the linker from pulling
+            # them into the shared-library RPATH even when the configure flag is
+            # set to --disable-*.
+            removedBuildInputPnames = [
+              "alsa-lib" "amf-headers" "libaom" "libass" "libbluray" "bzip2"
+              "fontconfig" "freetype" "fribidi" "gmp-with-cxx" "gnutls"
+              "harfbuzz" "xz" "lame" "openapv" "openjpeg" "libopenmpt"
+              "libopus" "librist" "soxr" "speex" "srt" "libssh" "svt-av1"
+              "libtheora" "v4l-utils" "vid.stab" "libvorbis" "libvpx"
+              "libwebp" "libxml2" "xvidcore" "zimg" "zvbi"
+            ];
+          in {
           # Drop outputs that won't be populated: programs are disabled so no
           # binaries are installed, and documentation is disabled so no man
           # pages or HTML docs are installed. Nix fails if a declared output
           # path is never created.
           outputs = builtins.filter (o: o != "bin" && o != "doc" && o != "man") (old.outputs or [ "out" ]);
-          buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.libvpl ];
+          buildInputs =
+            (builtins.filter
+              (dep: !(builtins.elem (dep.pname or dep.name or "") removedBuildInputPnames))
+              (old.buildInputs or [ ]))
+            ++ [ pkgs.libvpl ];
           # Append last so these override any earlier enable-* flags from the
           # upstream ffmpeg-headless expression.
           configureFlags = (old.configureFlags or [ ]) ++ [
@@ -31,6 +49,56 @@
             "--disable-manpages"
             "--disable-doc"
             "--enable-libvpl"
+
+            # Software codec encoders not used by any workflow (hardware paths
+            # cover H.264/H.265/VP9/AV1; built-in decoders handle the input side):
+            "--disable-libsvtav1"
+            "--disable-libaom"
+            "--disable-libvpx"
+            "--disable-libopus"
+            "--disable-libvorbis"
+            "--disable-libtheora"
+            "--disable-libspeex"
+            "--disable-libmp3lame"
+            "--disable-libopenmpt"
+            "--disable-libwebp"
+            "--disable-libopenjpeg"
+            "--disable-libxvid"
+            "--disable-libvidstab"
+            "--disable-libzvbi"
+            "--disable-liboapv"
+
+            # Text / subtitle / font rendering (drawtext filter, burn-in subs —
+            # none of which are used):
+            "--disable-libass"
+            "--disable-libfreetype"
+            "--disable-libfribidi"
+            "--disable-libharfbuzz"
+            "--disable-fontconfig"
+            "--disable-libfontconfig"
+
+            # Network protocols (local file I/O only; file:// is always built in):
+            "--disable-network"
+            "--disable-librist"
+            "--disable-libsrt"
+            "--disable-libssh"
+            "--disable-gnutls"
+            "--disable-gmp"
+            "--disable-libxml2"
+
+            # Compression formats beyond zlib (not needed for MP4/MKV):
+            "--disable-bzlib"
+            "--disable-lzma"
+
+            # Miscellaneous unused features:
+            "--disable-libzimg"   # zscale filter
+            "--disable-libsoxr"   # optional swresample backend; built-in suffices
+            "--disable-amf"       # AMD AMF (only QSV/NVENC/VAAPI implemented)
+            "--disable-alsa"      # audio device I/O (server-side processing)
+            "--disable-libv4l2"   # V4L2 camera input
+            "--disable-v4l2-m2m"  # V4L2 memory-to-memory encoding
+            "--disable-opencl"    # OpenCL compute (GPU done via VAAPI/QSV/NVENC)
+            "--disable-libbluray" # Blu-ray container support
           ];
           # make check runs fate tests that invoke the ffmpeg CLI; skip since
           # we disabled programs.
@@ -88,6 +156,7 @@
             pkgs.direnv
             pkgs.nix-direnv
             pkgs.gh
+            pkgs.dive
           ];
           buildInputs = [
             pkgs.ffmpeg-full.dev
