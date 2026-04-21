@@ -1,8 +1,8 @@
 //go:build e2e
 
 // Package e2e_test contains end-to-end tests for the media-processor pipeline.
-// It spins up Radarr, Sonarr, and Hatchet via Docker Compose, starts the
-// watcher and worker subprocesses, and verifies the full happy-path flow.
+// It spins up Radarr, Sonarr, Hatchet, the watcher, and the worker via Docker
+// Compose, and verifies the full happy-path flow.
 //
 // Run with: make test-e2e
 // Prerequisites: Docker, internet access (first run downloads the BBB fixture).
@@ -34,6 +34,11 @@ const (
 
 	bbbZipURL  = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip"
 	bbbMP4Name = "bbb_sunflower_1080p_30fps_normal.mp4"
+
+	// Fixed host-side ports for the watcher and worker Prometheus endpoints,
+	// bound by the compose services (127.0.0.1:19090 and 127.0.0.1:19091).
+	watcherMetricsAddr = "127.0.0.1:19090"
+	workerMetricsAddr  = "127.0.0.1:19091"
 )
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
@@ -42,12 +47,9 @@ var log = slog.Default().With("source", "e2e") //nolint:gochecknoglobals
 
 // Package-level state set during TestMain and shared across test functions.
 var (
-	hatchetToken       string
-	radarrMovieID      int
-	sonarrSeriesID     int
-	sonarrEpisodeID    int
-	watcherMetricsAddr string
-	workerMetricsAddr  string
+	radarrMovieID   int
+	sonarrSeriesID  int
+	sonarrEpisodeID int
 )
 
 func TestMain(m *testing.M) {
@@ -98,7 +100,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("compose pull: %w", err)
 	}
 
-	// 5. Docker Compose up.
+	// 5. Docker Compose up (infrastructure: postgres, hatchet, radarr, sonarr).
 	if err = composeUp(); err != nil {
 		composeDown()
 
@@ -119,7 +121,7 @@ func run(m *testing.M) error {
 	healthCancel()
 
 	// 7. Generate Hatchet client token.
-	hatchetToken, err = generateHatchetToken()
+	hatchetToken, err := generateHatchetToken()
 	if err != nil {
 		return fmt.Errorf("generateHatchetToken: %w", err)
 	}
@@ -148,14 +150,10 @@ func run(m *testing.M) error {
 
 	log.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
-	// 10. Build watcher and worker binaries, write watcher config, start both.
-	if err = startProcesses(); err != nil {
-		stopProcesses()
-
-		return fmt.Errorf("startProcesses: %w", err)
+	// 10. Start watcher and worker containers with the generated Hatchet token.
+	if err = composeUpWatcherWorker(hatchetToken); err != nil {
+		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
-
-	defer stopProcesses()
 
 	if code := m.Run(); code != 0 {
 		return fmt.Errorf("test suite failed (exit code %d)", code)

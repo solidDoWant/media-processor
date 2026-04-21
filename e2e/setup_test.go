@@ -16,12 +16,6 @@ import (
 	"time"
 )
 
-// Package-level state for the watcher and worker subprocesses.
-var (
-	watcherCmd *exec.Cmd
-	workerCmd  *exec.Cmd
-)
-
 // ---- directory management -----------------------------------------------
 
 func resetDirs() error {
@@ -62,10 +56,11 @@ func composeEnv() []string {
 	)
 }
 
-// composePull pulls all Docker images declared in docker-compose.yml.
-// It uses ctx to enforce a timeout for potentially large image downloads.
+// composePull pulls all Docker images declared in docker-compose.yml, skipping
+// any that are not available from a remote registry (e.g. locally-built images
+// with pull_policy: never).
 func composePull(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "docker", composeArgs("pull")...)
+	cmd := exec.CommandContext(ctx, "docker", composeArgs("pull", "--ignore-pull-failures")...)
 	cmd.Env = composeEnv()
 	stdout := newSlogWriter(slog.LevelInfo, "docker")
 	stderr := newSlogWriter(slog.LevelWarn, "docker")
@@ -99,8 +94,31 @@ func composeUp() error {
 	return err
 }
 
+// composeUpWatcherWorker starts the watcher and worker containers (profile
+// "app"), injecting the Hatchet client token into the environment so the
+// compose interpolation of ${HATCHET_CLIENT_TOKEN} resolves correctly.
+func composeUpWatcherWorker(token string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", composeArgs("--profile", "app", "up", "-d", "watcher", "worker")...)
+
+	cmd.Env = append(composeEnv(), "HATCHET_CLIENT_TOKEN="+token)
+	stdout := newSlogWriter(slog.LevelInfo, "docker")
+	stderr := newSlogWriter(slog.LevelWarn, "docker")
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	err := cmd.Run()
+
+	stdout.Flush()
+	stderr.Flush()
+
+	return err
+}
+
 func composeDown() {
-	cmd := exec.Command("docker", composeArgs("down", "-v", "--remove-orphans")...)
+	cmd := exec.Command("docker", composeArgs("--profile", "app", "down", "-v", "--remove-orphans")...)
 	cmd.Env = composeEnv()
 	stdout := newSlogWriter(slog.LevelInfo, "docker")
 	stderr := newSlogWriter(slog.LevelWarn, "docker")
@@ -168,32 +186,15 @@ func checkTCP(addr string) error {
 
 // ---- Hatchet token ------------------------------------------------------
 
+// generateHatchetToken generates a long-lived Hatchet API token by running
+// hatchet-admin inside the setup-config container. The default tenant ID
+// (707d0855-80ab-4e1f-a156-f1c4546cbf52) seeded by the migration is used.
 func generateHatchetToken() (string, error) {
-	// Query the tenant ID from the e2e postgres container.
-	tenantCmd := exec.Command("docker", composeArgs(
-		"exec", "-T", "postgres",
-		"psql", "-U", "hatchet", "-d", "hatchet", "-t", "-c",
-		`SELECT id FROM "Tenant" WHERE slug = 'default' LIMIT 1`,
-	)...)
-	tenantCmd.Env = composeEnv()
-
-	tenantOut, err := tenantCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("query tenant ID: %w", err)
-	}
-
-	tenantID := strings.TrimSpace(string(tenantOut))
-
-	if tenantID == "" {
-		return "", fmt.Errorf("empty tenant ID from postgres")
-	}
-
-	// Generate the token using the setup-config container.
 	tokenCmd := exec.Command("docker", composeArgs(
 		"run", "--no-deps", "--rm", "-T", "setup-config",
 		"/hatchet/hatchet-admin", "token", "create",
 		"--config", "/hatchet/config",
-		"--tenant-id", tenantID,
+		"-e", "87600h",
 	)...)
 	tokenCmd.Env = composeEnv()
 
@@ -202,154 +203,16 @@ func generateHatchetToken() (string, error) {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
 
-	token := strings.TrimSpace(string(tokenOut))
-
-	if token == "" {
-		return "", fmt.Errorf("empty token from hatchet-admin")
-	}
-
-	return token, nil
-}
-
-// ---- watcher + worker subprocesses --------------------------------------
-
-func startProcesses() error {
-	root := moduleRoot()
-
-	// Build watcher and worker using the Makefile target.
-	buildCmd := exec.Command("make", "build")
-	buildCmd.Dir = root
-	buildStdout := newSlogWriter(slog.LevelInfo, "make")
-	buildStderr := newSlogWriter(slog.LevelWarn, "make")
-	buildCmd.Stdout = buildStdout
-	buildCmd.Stderr = buildStderr
-
-	buildErr := buildCmd.Run()
-
-	buildStdout.Flush()
-	buildStderr.Flush()
-
-	if buildErr != nil {
-		return fmt.Errorf("make build: %w", buildErr)
-	}
-
-	watcherBin := filepath.Join(root, "bin", "watcher")
-	workerBin := filepath.Join(root, "bin", "worker")
-
-	// Write watcher YAML config.
-	watcherCfg := filepath.Join(root, "bin", "e2e-watcher.yaml")
-	cfgContent := fmt.Sprintf("watches:\n"+
-		"  - name: radarr\n    path: %s\n    mediaType: movie\n    ignorePatterns:\n      - \\.tmp$\n"+
-		"  - name: sonarr\n    path: %s\n    mediaType: show\n    ignorePatterns:\n      - \\.tmp$\n",
-		filepath.Join(downloadsDir, "radarr"),
-		filepath.Join(downloadsDir, "sonarr"),
-	)
-
-	if err := os.WriteFile(watcherCfg, []byte(cfgContent), 0o644); err != nil {
-		return fmt.Errorf("write watcher config: %w", err)
-	}
-
-	baseEnv := append(os.Environ(),
-		"HATCHET_CLIENT_TOKEN="+hatchetToken,
-		"HATCHET_CLIENT_TLS_STRATEGY=none",
-	)
-
-	// Pick free loopback ports for the Prometheus /metrics endpoints so parallel
-	// runs and local port conflicts don't interfere. The TOCTOU race is accepted
-	// per project convention.
-	var err error
-	if watcherMetricsAddr, err = reserveFreeAddr(); err != nil {
-		return fmt.Errorf("reserve watcher metrics addr: %w", err)
-	}
-
-	if workerMetricsAddr, err = reserveFreeAddr(); err != nil {
-		return fmt.Errorf("reserve worker metrics addr: %w", err)
-	}
-
-	watcherEnv := append(baseEnv, "METRICS_ADDR="+watcherMetricsAddr)
-
-	// Start watcher subprocess.
-	watcherCmd = exec.Command(watcherBin, "--config", watcherCfg)
-	watcherCmd.Env = watcherEnv
-	// These already use slog so write directly to stdout/stderr to avoid double encapsulation
-	watcherCmd.Stdout = os.Stdout
-	watcherCmd.Stderr = os.Stderr
-
-	if err := watcherCmd.Start(); err != nil {
-		return fmt.Errorf("start watcher: %w", err)
-	}
-
-	log.Info("watcher started", "pid", watcherCmd.Process.Pid)
-
-	// Start worker subprocess with path-translation env vars.
-	workerEnv := append(baseEnv,
-		"METRICS_ADDR="+workerMetricsAddr,
-		"MEDIA_OUTPUT_DIR="+processedDir,
-		"MEDIA_INPUT_ROOT="+downloadsDir,
-		"RADARR_URL="+radarrBase,
-		"RADARR_API_KEY="+radarrAPIKey,
-		"SONARR_URL="+sonarrBase,
-		"SONARR_API_KEY="+sonarrAPIKey,
-		"RADARR_LOCAL_PATH_PREFIX="+filepath.Join(downloadsDir, "radarr"),
-		"RADARR_REMOTE_PATH_PREFIX=/downloads",
-		"SONARR_LOCAL_PATH_PREFIX="+filepath.Join(downloadsDir, "sonarr"),
-		"SONARR_REMOTE_PATH_PREFIX=/downloads",
-		"MEDIA_H265_CRF=51",
-	)
-
-	workerCmd = exec.Command(workerBin)
-	workerCmd.Env = workerEnv
-	workerCmd.Stdout = os.Stdout
-	workerCmd.Stderr = os.Stderr
-
-	if err := workerCmd.Start(); err != nil {
-		return fmt.Errorf("start worker: %w", err)
-	}
-
-	log.Info("worker started", "pid", workerCmd.Process.Pid)
-
-	return nil
-}
-
-func stopProcesses() {
-	for _, cmd := range []*exec.Cmd{watcherCmd, workerCmd} {
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
-	}
-}
-
-// reserveFreeAddr binds a TCP listener on a random loopback port, closes it, and
-// returns the address string. There is an inherent TOCTOU race between close and
-// the caller's re-bind, but this matches the convention used elsewhere in the
-// codebase (see pkg/metrics/metrics_test.go freeAddr).
-func reserveFreeAddr() (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-
-	addr := listener.Addr().String()
-
-	return addr, listener.Close()
-}
-
-// moduleRoot returns the absolute path of the Go module root by invoking
-// `go env GOMOD`.
-func moduleRoot() string {
-	out, err := exec.Command("go", "env", "GOMOD").Output()
-	if err == nil {
-		mod := strings.TrimSpace(string(out))
-		if mod != "" && mod != os.DevNull {
-			return filepath.Dir(mod)
+	// Extract the JWT token line (starts with "eyJ") in case log lines are
+	// interleaved on stdout.
+	for _, line := range strings.Split(string(tokenOut), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "eyJ") {
+			return line, nil
 		}
 	}
 
-	// Fallback: test runs from e2e/, so module root is one level up.
-	abs, _ := filepath.Abs("..")
-
-	return abs
+	return "", fmt.Errorf("no JWT token found in hatchet-admin output")
 }
 
 // ---- polling helpers ----------------------------------------------------

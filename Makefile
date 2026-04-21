@@ -65,7 +65,7 @@ test-integration: hatchet-up ## Run integration tests against a local Hatchet se
 	env $$(cat $(HATCHET_ENV_FILE)) go test -v -race -count=1 -tags=integration ./...
 
 .PHONY: test-e2e
-test-e2e: ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
+test-e2e: build-images ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
 	go test -v -timeout 2h -tags=e2e -count=1 ./e2e/
 
 .PHONY: benchmark
