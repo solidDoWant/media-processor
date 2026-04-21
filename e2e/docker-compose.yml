@@ -48,11 +48,6 @@ services:
       SERVER_GRPC_BROADCAST_ADDRESS: "localhost:7079"
       SERVER_DEFAULT_ENGINE_VERSION: "V1"
       SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: "hatchet-engine:7070"
-      # Pre-generated keysets — pinned so the static HATCHET_CLIENT_TOKEN below
-      # remains valid across fresh deployments. Token expires April 2027.
-      SERVER_ENCRYPTION_MASTER_KEYSET: "eyJwcmltYXJ5S2V5SWQiOjMxNjY4MjY3NiwgImtleSI6W3sia2V5RGF0YSI6eyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuQWVzR2NtS2V5IiwgInZhbHVlIjoiR2lEQ09ZNVZwajZwelBPcjdXeTZFSytVcWRpTXV5MmUrZVFzOEpLMXR0Vm1xUT09IiwgImtleU1hdGVyaWFsVHlwZSI6IlNZTU1FVFJJQyJ9LCAic3RhdHVzIjoiRU5BQkxFRCIsICJrZXlJZCI6MzE2NjgyNjc2LCAib3V0cHV0UHJlZml4VHlwZSI6IlRJTksifV19"
-      SERVER_ENCRYPTION_JWT_PRIVATE_KEYSET: "eyJlbmNyeXB0ZWRLZXlzZXQiOiJBUkxnTWJSSlFQTHJRdGltZjQ0RHpycHdmNHhFY2xJRExoT2xyeUcxOFB5WTE2ejVybk51SGRaTXlHakplb2NPenJYNDNER0xKZVRmT1MzUHEwWFZwUTJmSkJ6THJuVHY1eXdiZjAzZHFML0p3c3UwcFhFZVRGMzhqV1dPSEwwTlV3ZUNOMDl4b0JrN3dZOUhpQjlaYVVMaGcwVDNUdE9mWWlXVXhINFhxd2xiV3dsTDYvdk1KSU5jZ3V5RXA2VGRaOVkzVUNCRDhnSHVyU3VyY0VISWVPMTFLaGZ0d2dkTysrSmNnZXkwRitUbVVjMEpuNXNUeTI5YytPZlZZZWNqUTNHWVRXWHlQb0RNR3RUVUpMRU1XWjN0MnhHdTBVM2RUbnBWZXc0OHh1MD0iLCAia2V5c2V0SW5mbyI6eyJwcmltYXJ5S2V5SWQiOjI2NDAxMjA2MzUsICJrZXlJbmZvIjpbeyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuSnd0RWNkc2FQcml2YXRlS2V5IiwgInN0YXR1cyI6IkVOQUJMRUQiLCAia2V5SWQiOjI2NDAxMjA2MzUsICJvdXRwdXRQcmVmaXhUeXBlIjoiVElOSyJ9XX19"
-      SERVER_ENCRYPTION_JWT_PUBLIC_KEYSET: "eyJlbmNyeXB0ZWRLZXlzZXQiOiJBUkxnTWJSRFBrYTgyVTFKTXhRamFIdU1SRVR6Y01JcFV6ZHFESi8vM09mazlIK00yMHNQNUVkQXUrWGtsVVdjRWQvU1hSMWoyNkJQbWRDOWpPL2FkbE1Zc2hObE1obWs4K2p3WlJwTjRpWi9YRmFxTy92d2prN2JKNklXZ0RGM0hhMThrVUpBTHJLQVBwc3U2T1hDbncrcXZ6S0paTGxvU0lJVWZwL0llbnovUnVURTlaZXhUTkRoWHBIODRuNkhYZk5NcHFBRmN1ckJOZkVYcmVrbFVxMEhvMDBnSmxBUzhHbUdoRGRvazZNRTdjR1FOYjlWNmtWVGlRPT0iLCAia2V5c2V0SW5mbyI6eyJwcmltYXJ5S2V5SWQiOjI2NDAxMjA2MzUsICJrZXlJbmZvIjpbeyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuSnd0RWNkc2FQdWJsaWNLZXkiLCAic3RhdHVzIjoiRU5BQkxFRCIsICJrZXlJZCI6MjY0MDEyMDYzNSwgIm91dHB1dFByZWZpeFR5cGUiOiJUSU5LIn1dfX0"
     volumes:
       - e2e_hatchet_certs:/hatchet/certs
       - e2e_hatchet_config:/hatchet/config
@@ -73,9 +68,6 @@ services:
       SERVER_MSGQUEUE_KIND: postgres
       SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
       SERVER_GRPC_INSECURE: "t"
-      SERVER_ENCRYPTION_MASTER_KEYSET: "eyJwcmltYXJ5S2V5SWQiOjMxNjY4MjY3NiwgImtleSI6W3sia2V5RGF0YSI6eyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuQWVzR2NtS2V5IiwgInZhbHVlIjoiR2lEQ09ZNVZwajZwelBPcjdXeTZFSytVcWRpTXV5MmUrZVFzOEpLMXR0Vm1xUT09IiwgImtleU1hdGVyaWFsVHlwZSI6IlNZTU1FVFJJQyJ9LCAic3RhdHVzIjoiRU5BQkxFRCIsICJrZXlJZCI6MzE2NjgyNjc2LCAib3V0cHV0UHJlZml4VHlwZSI6IlRJTksifV19"
-      SERVER_ENCRYPTION_JWT_PRIVATE_KEYSET: "eyJlbmNyeXB0ZWRLZXlzZXQiOiJBUkxnTWJSSlFQTHJRdGltZjQ0RHpycHdmNHhFY2xJRExoT2xyeUcxOFB5WTE2ejVybk51SGRaTXlHakplb2NPenJYNDNER0xKZVRmT1MzUHEwWFZwUTJmSkJ6THJuVHY1eXdiZjAzZHFML0p3c3UwcFhFZVRGMzhqV1dPSEwwTlV3ZUNOMDl4b0JrN3dZOUhpQjlaYVVMaGcwVDNUdE9mWWlXVXhINFhxd2xiV3dsTDYvdk1KSU5jZ3V5RXA2VGRaOVkzVUNCRDhnSHVyU3VyY0VISWVPMTFLaGZ0d2dkTysrSmNnZXkwRitUbVVjMEpuNXNUeTI5YytPZlZZZWNqUTNHWVRXWHlQb0RNR3RUVUpMRU1XWjN0MnhHdTBVM2RUbnBWZXc0OHh1MD0iLCAia2V5c2V0SW5mbyI6eyJwcmltYXJ5S2V5SWQiOjI2NDAxMjA2MzUsICJrZXlJbmZvIjpbeyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuSnd0RWNkc2FQcml2YXRlS2V5IiwgInN0YXR1cyI6IkVOQUJMRUQiLCAia2V5SWQiOjI2NDAxMjA2MzUsICJvdXRwdXRQcmVmaXhUeXBlIjoiVElOSyJ9XX19"
-      SERVER_ENCRYPTION_JWT_PUBLIC_KEYSET: "eyJlbmNyeXB0ZWRLZXlzZXQiOiJBUkxnTWJSRFBrYTgyVTFKTXhRamFIdU1SRVR6Y01JcFV6ZHFESi8vM09mazlIK00yMHNQNUVkQXUrWGtsVVdjRWQvU1hSMWoyNkJQbWRDOWpPL2FkbE1Zc2hObE1obWs4K2p3WlJwTjRpWi9YRmFxTy92d2prN2JKNklXZ0RGM0hhMThrVUpBTHJLQVBwc3U2T1hDbncrcXZ6S0paTGxvU0lJVWZwL0llbnovUnVURTlaZXhUTkRoWHBIODRuNkhYZk5NcHFBRmN1ckJOZkVYcmVrbFVxMEhvMDBnSmxBUzhHbUdoRGRvazZNRTdjR1FOYjlWNmtWVGlRPT0iLCAia2V5c2V0SW5mbyI6eyJwcmltYXJ5S2V5SWQiOjI2NDAxMjA2MzUsICJrZXlJbmZvIjpbeyJ0eXBlVXJsIjoidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbmsuSnd0RWNkc2FQdWJsaWNLZXkiLCAic3RhdHVzIjoiRU5BQkxFRCIsICJrZXlJZCI6MjY0MDEyMDYzNSwgIm91dHB1dFByZWZpeFR5cGUiOiJUSU5LIn1dfX0"
     volumes:
       - e2e_hatchet_certs:/hatchet/certs
       - e2e_hatchet_config:/hatchet/config
@@ -89,16 +81,15 @@ services:
     image: watcher:latest
     pull_policy: never
     restart: on-failure
+    profiles:
+      - app
     ports:
       - "127.0.0.1:19090:9090"
     volumes:
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
       - ./fixtures/watcher.yaml:/etc/watcher.yaml:ro
     environment:
-      # Static token signed with the pinned keysets above; expires April 2027.
-      # The embedded grpc_broadcast_address (localhost:7077) is overridden by
-      # HATCHET_CLIENT_HOST_PORT so containers reach the engine correctly.
-      HATCHET_CLIENT_TOKEN: "eyJhbGciOiJFUzI1NiIsICJraWQiOiJuVjBMT3cifQ.eyJhdWQiOiJodHRwOi8vbG9jYWxob3N0OjgwODAiLCAiZXhwIjoxODA4MzQzNTM2LCAiZ3JwY19icm9hZGNhc3RfYWRkcmVzcyI6ImxvY2FsaG9zdDo3MDc3IiwgImlhdCI6MTc3NjgwNzUzNiwgImlzcyI6Imh0dHA6Ly9sb2NhbGhvc3Q6ODA4MCIsICJzZXJ2ZXJfdXJsIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwIiwgInN1YiI6IjcwN2QwODU1LTgwYWItNGUxZi1hMTU2LWYxYzQ1NDZjYmY1MiIsICJ0b2tlbl9pZCI6IjdiMmI4YzE3LTJiNDctNGVjNC04OTkwLWMzOTJmNjE2Yjk2YyJ9.tXmY8YqFvCmLfYuGAheCQo_fmHBuKS0DM_XXttULdxq4WXjLxBknpSTkXEioHZDjXLwrVlA2ihFtUMU4WQ1UuA"
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
       HATCHET_CLIENT_TLS_STRATEGY: none
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       METRICS_ADDR: ":9090"
@@ -111,6 +102,8 @@ services:
     image: worker:latest
     pull_policy: never
     restart: on-failure
+    profiles:
+      - app
     # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
     # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
     # capability by default, producing "set_mempolicy: Operation not permitted".
@@ -122,10 +115,7 @@ services:
       - /dev:/dev
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
     environment:
-      # Static token signed with the pinned keysets above; expires April 2027.
-      # The embedded grpc_broadcast_address (localhost:7077) is overridden by
-      # HATCHET_CLIENT_HOST_PORT so containers reach the engine correctly.
-      HATCHET_CLIENT_TOKEN: "eyJhbGciOiJFUzI1NiIsICJraWQiOiJuVjBMT3cifQ.eyJhdWQiOiJodHRwOi8vbG9jYWxob3N0OjgwODAiLCAiZXhwIjoxODA4MzQzNTM2LCAiZ3JwY19icm9hZGNhc3RfYWRkcmVzcyI6ImxvY2FsaG9zdDo3MDc3IiwgImlhdCI6MTc3NjgwNzUzNiwgImlzcyI6Imh0dHA6Ly9sb2NhbGhvc3Q6ODA4MCIsICJzZXJ2ZXJfdXJsIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwIiwgInN1YiI6IjcwN2QwODU1LTgwYWItNGUxZi1hMTU2LWYxYzQ1NDZjYmY1MiIsICJ0b2tlbl9pZCI6IjdiMmI4YzE3LTJiNDctNGVjNC04OTkwLWMzOTJmNjE2Yjk2YyJ9.tXmY8YqFvCmLfYuGAheCQo_fmHBuKS0DM_XXttULdxq4WXjLxBknpSTkXEioHZDjXLwrVlA2ihFtUMU4WQ1UuA"
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
       HATCHET_CLIENT_TLS_STRATEGY: none
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       METRICS_ADDR: ":9090"
