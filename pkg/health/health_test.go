@@ -82,6 +82,6 @@ func TestReadyz_NotReadyBefore_ReadyAfterSetReady(t *testing.T) {
 }
 
 func TestNew_InvalidAddr_ReturnsError(t *testing.T) {
-	_, err := health.New(t.Context(), "invalid-addr:99999")
+	_, err := health.New(t.Context(), "127.0.0.1:99999")
 	require.Error(t, err)
 }

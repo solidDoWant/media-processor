@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
 )
 
 // Server serves /healthz (always 200) and /readyz (503 until SetReady is called).
@@ -49,7 +50,12 @@ func New(ctx context.Context, addr string) (*Server, error) {
 	go func() {
 		<-ctx.Done()
 
-		_ = srv.Shutdown(context.Background()) //nolint:contextcheck // intentional: process is exiting
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second) //nolint:contextcheck // intentional: process is exiting
+		defer cancel()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "health HTTP server shutdown error: %v\n", err)
+		}
 	}()
 
 	return s, nil
