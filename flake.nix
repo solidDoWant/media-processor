@@ -18,12 +18,23 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         libav-minimal = pkgs.ffmpeg-headless.overrideAttrs (old: {
+          # Drop outputs that won't be populated: programs are disabled so no
+          # binaries are installed, and documentation is disabled so no man
+          # pages or HTML docs are installed. Nix fails if a declared output
+          # path is never created.
+          outputs = builtins.filter (o: o != "bin" && o != "doc" && o != "man") (old.outputs or [ "out" ]);
           buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.libvpl ];
-          configureFlags =
-            (builtins.filter
-              (f: f != "--enable-ffmpeg" && f != "--enable-ffprobe" && f != "--enable-ffplay")
-              (old.configureFlags or [ ]))
-            ++ [ "--disable-programs" "--enable-libvpl" "--disable-doc" ];
+          # Append last so these override any earlier enable-* flags from the
+          # upstream ffmpeg-headless expression.
+          configureFlags = (old.configureFlags or [ ]) ++ [
+            "--disable-programs"
+            "--disable-manpages"
+            "--disable-doc"
+            "--enable-libvpl"
+          ];
+          # make check runs fate tests that invoke the ffmpeg CLI; skip since
+          # we disabled programs.
+          doCheck = false;
         });
 
         mkBin = { name, subPackage }: pkgs.buildGoModule {
