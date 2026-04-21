@@ -87,6 +87,25 @@ generate-schema: ## Generate JSON schema for the watcher config file.
 	@mkdir -p schemas
 	go run ./cmd/gen-config-schema | jq > schemas/watcher.schema.json
 
+##@ Container Images
+
+VERSION = 0.0.1-dev
+CONTAINER_REGISTRY = ghcr.io/soliddowant
+PUSH_ALL ?= false
+
+INCLUDE_LATEST = $(PUSH_ALL)
+
+WATCHER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/watcher:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/watcher:latest)
+WORKER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/worker:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/worker:latest)
+
+.PHONY: build-images
+build-images: ## Build watcher and worker OCI images and load them into the local Docker daemon.
+	$$(nix build --print-out-paths --no-link .#watcher-image) | docker load
+	$(foreach tag,$(WATCHER_IMAGE_TAGS),docker tag watcher:latest $(tag);)
+	$$(nix build --print-out-paths --no-link .#worker-image) | docker load
+	$(foreach tag,$(WORKER_IMAGE_TAGS),docker tag worker:latest $(tag);)
+	$(if $(findstring t,$(PUSH_ALL)),$(foreach tag,$(WATCHER_IMAGE_TAGS) $(WORKER_IMAGE_TAGS),docker push $(tag);))
+
 ##@ Build
 
 # Note: CGO is required. FFmpeg 8 development headers must be available via pkg-config.
