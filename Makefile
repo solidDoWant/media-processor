@@ -87,6 +87,13 @@ generate-schema: ## Generate JSON schema for the watcher config file.
 	@mkdir -p schemas
 	go run ./cmd/gen-config-schema | jq > schemas/watcher.schema.json
 
+##@ Container Images
+
+.PHONY: build-images
+build-images: ## Build watcher and worker OCI images and load them into the local Docker daemon.
+	$$(nix build --print-out-paths --no-link .#watcher-image) | docker load
+	$$(nix build --print-out-paths --no-link .#worker-image) | docker load
+
 ##@ Build
 
 # Note: CGO is required. FFmpeg 8 development headers must be available via pkg-config.

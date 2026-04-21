@@ -16,7 +16,53 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-      in {
+
+        libav-minimal = pkgs.ffmpeg-headless.overrideAttrs (old: {
+          buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.libvpl ];
+          configureFlags =
+            (builtins.filter
+              (f: f != "--enable-ffmpeg" && f != "--enable-ffprobe" && f != "--enable-ffplay")
+              (old.configureFlags or [ ]))
+            ++ [ "--disable-programs" "--enable-libvpl" "--disable-doc" ];
+        });
+
+        mkBin = { name, subPackage }: pkgs.buildGoModule {
+          inherit name;
+          src = ./.;
+          vendorHash = "sha256-8Hlizevwdoeb3IjSDuszsf/rwyoQv8Y18NiUjUA0jBo=";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ libav-minimal.dev ];
+          subPackages = [ subPackage ];
+        };
+
+        watcher-bin = mkBin { name = "watcher"; subPackage = "cmd/watcher"; };
+        worker-bin = mkBin { name = "worker"; subPackage = "cmd/worker"; };
+
+        baseContents = [ libav-minimal pkgs.cacert ];
+      in
+      {
+        packages.watcher-image = pkgs.dockerTools.streamLayeredImage {
+          name = "watcher";
+          tag = "latest";
+          contents = baseContents ++ [ watcher-bin ];
+          config = {
+            Entrypoint = [ "/bin/watcher" ];
+          };
+        };
+
+        packages.worker-image = pkgs.dockerTools.streamLayeredImage {
+          name = "worker";
+          tag = "latest";
+          contents = baseContents ++ [ pkgs.intel-media-driver pkgs.vpl-gpu-rt worker-bin ];
+          config = {
+            Entrypoint = [ "/bin/worker" ];
+            Env = [
+              "LIBVA_DRIVERS_PATH=${pkgs.intel-media-driver}/lib/dri"
+              "ONEVPL_SEARCH_PATH=${pkgs.vpl-gpu-rt}/lib"
+            ];
+          };
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.go_1_26
