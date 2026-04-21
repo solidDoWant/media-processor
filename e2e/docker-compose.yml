@@ -104,6 +104,9 @@ services:
     restart: on-failure
     profiles:
       - app
+    # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
+    # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
+    # capability by default, producing "set_mempolicy: Operation not permitted".
     cap_add:
       - SYS_NICE
     ports:
