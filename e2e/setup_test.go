@@ -39,40 +39,9 @@ func resetDirs() error {
 
 // ---- Docker Compose -----------------------------------------------------
 
-// deviceOverrideFile is a generated compose override that passes host
-// transcoding devices through to the worker container. It is written before
-// each run and removed by composeDown.
-const deviceOverrideFile = "docker-compose.devices.yml"
-
 func composeArgs(subcmd ...string) []string {
 	args := []string{"compose", "-p", "e2e-media-processor", "-f", "docker-compose.yml"}
-
-	if _, err := os.Stat(deviceOverrideFile); err == nil {
-		args = append(args, "-f", deviceOverrideFile)
-	}
-
 	return append(args, subcmd...)
-}
-
-// writeDeviceOverride probes the host for available transcoding hardware and
-// writes a docker-compose override that passes detected devices through to the
-// worker container. Covers /dev/dri (VAAPI/QSV) and /dev/nvidia0 (NVENC).
-func writeDeviceOverride() error {
-	var buf strings.Builder
-
-	buf.WriteString("services:\n  worker:\n")
-
-	if _, err := os.Stat("/dev/dri"); err == nil {
-		log.Info("hardware device detected, enabling passthrough", "device", "/dev/dri")
-		buf.WriteString("    devices:\n      - /dev/dri:/dev/dri\n")
-	}
-
-	if _, err := os.Stat("/dev/nvidia0"); err == nil {
-		log.Info("hardware device detected, enabling passthrough", "device", "/dev/nvidia0")
-		buf.WriteString("    deploy:\n      resources:\n        reservations:\n          devices:\n            - driver: nvidia\n              count: all\n              capabilities: [gpu, video]\n")
-	}
-
-	return os.WriteFile(deviceOverrideFile, []byte(buf.String()), 0o644)
 }
 
 // composeEnv returns the current process environment with UID and GID set to
@@ -159,7 +128,6 @@ func composeDown() {
 	stdout.Flush()
 	stderr.Flush()
 
-	_ = os.Remove(deviceOverrideFile)
 	_ = os.RemoveAll(baseDir)
 }
 

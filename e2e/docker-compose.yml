@@ -112,6 +112,7 @@ services:
     ports:
       - "127.0.0.1:19091:9090"
     volumes:
+      - /dev:/dev
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
     environment:
       HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
