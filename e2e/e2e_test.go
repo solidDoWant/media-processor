@@ -92,7 +92,13 @@ func run(m *testing.M) error {
 
 	log.Info("qBittorrent stub listening", "port", qbtStub.Port())
 
-	// 4. Pull Docker images (may download several hundred MB on first run).
+	// 4. Write compose device override for any hardware transcoding devices
+	// present on the host (e.g. /dev/dri for VAAPI/QSV, /dev/nvidia0 for NVENC).
+	if err = writeDeviceOverride(); err != nil {
+		return fmt.Errorf("writeDeviceOverride: %w", err)
+	}
+
+	// 5. Pull Docker images (may download several hundred MB on first run).
 	pullCtx, pullCancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer pullCancel()
 
@@ -100,7 +106,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("compose pull: %w", err)
 	}
 
-	// 5. Docker Compose up (infrastructure: postgres, hatchet, radarr, sonarr).
+	// 6. Docker Compose up (infrastructure: postgres, hatchet, radarr, sonarr).
 	if err = composeUp(); err != nil {
 		composeDown()
 
@@ -109,7 +115,7 @@ func run(m *testing.M) error {
 
 	defer composeDown()
 
-	// 6. Wait for Radarr, Sonarr, and Hatchet to be healthy.
+	// 7. Wait for Radarr, Sonarr, and Hatchet to be healthy.
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 
 	if err = waitForServices(healthCtx); err != nil {
@@ -120,13 +126,13 @@ func run(m *testing.M) error {
 
 	healthCancel()
 
-	// 7. Generate Hatchet client token.
+	// 8. Generate Hatchet client token.
 	hatchetToken, err := generateHatchetToken()
 	if err != nil {
 		return fmt.Errorf("generateHatchetToken: %w", err)
 	}
 
-	// 8. Configure Radarr (root folder, quality profile, download client, movie).
+	// 9. Configure Radarr (root folder, quality profile, download client, movie).
 	radarrMovieID, err = configureRadarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureRadarr: %w", err)
@@ -134,7 +140,7 @@ func run(m *testing.M) error {
 
 	log.Info("Radarr configured", "movieID", radarrMovieID)
 
-	// 9. Configure Sonarr (root folder, quality profile, download client, series).
+	// 10. Configure Sonarr (root folder, quality profile, download client, series).
 	sonarrSeriesID, err = configureSonarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureSonarr: %w", err)
@@ -150,7 +156,7 @@ func run(m *testing.M) error {
 
 	log.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
-	// 10. Start watcher and worker containers with the generated Hatchet token.
+	// 11. Start watcher and worker containers with the generated Hatchet token.
 	if err = composeUpWatcherWorker(hatchetToken); err != nil {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
