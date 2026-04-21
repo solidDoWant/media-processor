@@ -104,6 +104,8 @@ services:
     restart: on-failure
     profiles:
       - app
+    cap_add:
+      - SYS_NICE
     ports:
       - "127.0.0.1:19091:9090"
     volumes:
