@@ -137,6 +137,7 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 |----------|------|---------|----------|-------------|
 | `LOG_LEVEL` | string | `info` | Optional | Log verbosity: `debug`, `info`, `warn`, or `error`. An unrecognised value falls back to `info`. |
 | `HATCHET_CLIENT_TOKEN` | string | — | **Required** | Hatchet API token used by the client SDK. |
+| `HEALTH_ADDR` | string (TCP address) | `""` | Optional | TCP address for the HTTP health server (e.g. `:8080`). Exposes `/healthz` (liveness) and `/readyz` (readiness). Disabled when empty. |
 | `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | string (URL) | `""` | Optional | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty. Follows the standard OpenTelemetry convention. |
 

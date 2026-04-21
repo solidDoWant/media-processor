@@ -13,6 +13,7 @@ import (
 	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
+	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
@@ -34,6 +35,17 @@ func main() {
 
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
+
+	var healthServer *health.Server
+
+	if addr := os.Getenv("HEALTH_ADDR"); addr != "" {
+		var err error
+
+		healthServer, err = health.New(ctx, addr)
+		if err != nil {
+			return fmt.Errorf("init health server: %w", err)
+		}
+	}
 
 	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
 	if err != nil {
@@ -148,6 +160,10 @@ func run(ctx context.Context) error {
 	}
 
 	slog.Info("connected to Hatchet, starting worker")
+
+	if healthServer != nil {
+		healthServer.SetReady()
+	}
 
 	if err := worker.StartBlocking(ctx); err != nil {
 		return fmt.Errorf("worker stopped: %w", err)
