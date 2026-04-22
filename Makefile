@@ -119,11 +119,11 @@ build-images: ## Build watcher and worker OCI images and load them into the loca
 
 $(BIN_DIR)/watcher: $(GO_SOURCE_FILES)
 	@mkdir -p "$(BIN_DIR)"
-	go build -o "$@" ./cmd/watcher
+	go build -ldflags="-s -w" -o "$@" ./cmd/watcher
 
 $(BIN_DIR)/worker: $(GO_SOURCE_FILES)
 	@mkdir -p "$(BIN_DIR)"
-	go build -o "$@" ./cmd/worker
+	go build -ldflags="-s -w" -o "$@" ./cmd/worker
 
 .PHONY: build
 build: $(BIN_DIR)/watcher $(BIN_DIR)/worker ## Build all binaries.

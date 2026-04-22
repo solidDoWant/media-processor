@@ -124,6 +124,7 @@
           src = goSrc;
           vendorHash = "sha256-Hu+1P6uzQYbaApF0laZQadvhJ9t7FbZHlv8anZ91z3s=";
           subPackages = [ "cmd/watcher" ];
+          ldflags = [ "-s" "-w" ];
           env.CGO_ENABLED = "0";
         };
 
@@ -134,6 +135,7 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ libav-minimal.dev ];
           subPackages = [ "cmd/worker" ];
+          ldflags = [ "-s" "-w" ];
         };
       in
       {
