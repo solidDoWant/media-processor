@@ -36,15 +36,16 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	var healthServer *health.Server
+	const defaultHealthAddr = ":8080"
 
-	if addr := os.Getenv("HEALTH_ADDR"); addr != "" {
-		var err error
+	healthAddr := os.Getenv("HEALTH_ADDR")
+	if healthAddr == "" {
+		healthAddr = defaultHealthAddr
+	}
 
-		healthServer, err = health.New(ctx, addr)
-		if err != nil {
-			return fmt.Errorf("init health server: %w", err)
-		}
+	healthServer, err := health.New(ctx, healthAddr)
+	if err != nil {
+		return fmt.Errorf("init health server: %w", err)
 	}
 
 	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
@@ -161,9 +162,7 @@ func run(ctx context.Context) error {
 
 	slog.Info("connected to Hatchet, starting worker")
 
-	if healthServer != nil {
-		healthServer.SetReady()
-	}
+	healthServer.SetReady()
 
 	if err := worker.StartBlocking(ctx); err != nil {
 		return fmt.Errorf("worker stopped: %w", err)
