@@ -127,7 +127,11 @@ docker run --rm \
 
 ## Example: Docker Compose
 
-A minimal compose file that runs both services against an existing Hatchet engine:
+A minimal compose file that runs both services against an existing Hatchet engine. The render-node GID is supplied via the `RENDER_GID` environment variable because Docker resolves `group_add` names inside the container and the Nix-built images do not define a `render` group. Export it on the host before `docker compose up`:
+
+```sh
+export RENDER_GID=$(getent group render | cut -d: -f3)
+```
 
 ```yaml
 services:
@@ -153,7 +157,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "render"
+      - "${RENDER_GID}"
     volumes:
       - /srv/media/downloads:/downloads
       - /srv/media/processed-output:/processed-output
