@@ -16,11 +16,15 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
+	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
+// MediaWorkflowName re-exports the constant from the types package for callers that
+// import workflows/media directly.
+const MediaWorkflowName = mediatypes.MediaWorkflowName
+
 const (
-	MediaWorkflowName = "Media"
 	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
 	defaultTaskRetries = 3
 
@@ -78,15 +82,9 @@ type MediaWorkflowConfig struct {
 	H265CRF int
 }
 
-// MediaInput is the workflow's trigger payload.
-type MediaInput struct {
-	FilePath               string             `json:"file_path"`
-	MediaType              medialib.MediaType `json:"media_type"`
-	MappingName            string             `json:"mapping_name"`
-	PreserveSource         bool               `json:"preserve_source,omitempty"`
-	WatchRoot              string             `json:"watch_root,omitempty"`
-	RetainEmptyDirectories bool               `json:"retain_empty_directories,omitempty"`
-}
+// MediaInput is an alias for the shared input type so existing callers within this
+// package do not need to be updated.
+type MediaInput = mediatypes.MediaInput
 
 // NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV
 // episode) to the standard format, moves it to the output directory, and notifies the

@@ -15,7 +15,7 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
-	"github.com/solidDoWant/media-processor/workflows/media"
+	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
 func mappingNameAttr(name string) attribute.KeyValue {
@@ -128,8 +128,8 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
-					media.MediaWorkflowName,
-					media.MediaInput{
+					mediatypes.MediaWorkflowName,
+					mediatypes.MediaInput{
 						FilePath:               filePath,
 						MediaType:              mediaType,
 						MappingName:            mappingName,
