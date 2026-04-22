@@ -29,18 +29,18 @@ The watcher scans one or more download directories on a cron schedule and submit
 
 ### Required volume mounts
 
-| Host path                  | Container path      | Notes                                                                                          |
-| -------------------------- | ------------------- | ---------------------------------------------------------------------------------------------- |
-| watcher config YAML        | any path you choose | Mount read-only. Pass the container path via `--config`. Can also be supplied as a ConfigMap under Kubernetes. |
-| download root              | `/downloads`        | Same tree the download client writes to. Read-only access is sufficient — the watcher does not modify this tree. |
+| Host path           | Container path      | Notes                                                                                                            |
+| ------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| watcher config YAML | any path you choose | Mount read-only. Pass the container path via `--config`. Can also be supplied as a ConfigMap under Kubernetes.   |
+| download root       | `/downloads`        | Same tree the download client writes to. Read-only access is sufficient — the watcher does not modify this tree. |
 
 ### Required environment variables
 
-| Variable                      | Description                                                                                                                  |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `HATCHET_CLIENT_TOKEN`        | Hatchet API token. Issue one via your Hatchet server.                                                                        |
-| `HATCHET_CLIENT_HOST_PORT`    | `host:port` of your Hatchet engine's gRPC endpoint (e.g. `hatchet-engine:7070`).                                             |
-| `HATCHET_CLIENT_TLS_STRATEGY` | Set to `none` when talking to an insecure Hatchet engine. Omit when using TLS.                                               |
+| Variable                      | Description                                                                      |
+| ----------------------------- | -------------------------------------------------------------------------------- |
+| `HATCHET_CLIENT_TOKEN`        | Hatchet API token. Issue one via your Hatchet server.                            |
+| `HATCHET_CLIENT_HOST_PORT`    | `host:port` of your Hatchet engine's gRPC endpoint (e.g. `hatchet-engine:7070`). |
+| `HATCHET_CLIENT_TLS_STRATEGY` | Set to `none` when talking to an insecure Hatchet engine. Omit when using TLS.   |
 
 Useful optional variables: `HEALTH_ADDR` (e.g. `:9091`) exposes `/healthz` and `/readyz` for liveness/readiness probes; `METRICS_ADDR` (e.g. `:9090`) exposes a Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher environment variables.
 
@@ -62,21 +62,21 @@ The worker pulls jobs from Hatchet, transcodes each file, writes the output to `
 
 ### Required volume mounts
 
-| Host path                  | Container path                      | Notes                                                                                          |
-| -------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| download root              | `/downloads`                        | Same tree the watcher sees. Must be writable — the worker removes the source file after a successful transcode unless `preserveSource: true` is set in the watcher config. |
-| processed-output root      | `/processed-output`                 | Where transcoded files are written. Must match `MEDIA_OUTPUT_DIR`. See the [bind-mount arrangement](../README.md#the-bind-mount-arrangement) in the README for how this directory is exposed to Sonarr/Radarr. |
+| Host path             | Container path      | Notes                                                                                                                                                                                                          |
+| --------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| download root         | `/downloads`        | Same tree the watcher sees. Must be writable — the worker removes the source file after a successful transcode unless `preserveSource: true` is set in the watcher config.                                     |
+| processed-output root | `/processed-output` | Where transcoded files are written. Must match `MEDIA_OUTPUT_DIR`. See the [bind-mount arrangement](../README.md#the-bind-mount-arrangement) in the README for how this directory is exposed to Sonarr/Radarr. |
 
 ### Required environment variables
 
-| Variable                      | Description                                                                                                                  |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `HATCHET_CLIENT_TOKEN`        | Hatchet API token.                                                                                                           |
-| `HATCHET_CLIENT_HOST_PORT`    | `host:port` of your Hatchet engine's gRPC endpoint.                                                                          |
-| `HATCHET_CLIENT_TLS_STRATEGY` | Set to `none` for insecure Hatchet; omit otherwise.                                                                          |
-| `MEDIA_OUTPUT_DIR`            | Directory where transcoded output is written. Should match the container-side processed-output mount (e.g. `/processed-output`). |
-| `RADARR_URL`, `RADARR_API_KEY`| Radarr base URL and API key.                                                                                                 |
-| `SONARR_URL`, `SONARR_API_KEY`| Sonarr base URL and API key.                                                                                                 |
+| Variable                       | Description                                                                                                                      |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `HATCHET_CLIENT_TOKEN`         | Hatchet API token.                                                                                                               |
+| `HATCHET_CLIENT_HOST_PORT`     | `host:port` of your Hatchet engine's gRPC endpoint.                                                                              |
+| `HATCHET_CLIENT_TLS_STRATEGY`  | Set to `none` for insecure Hatchet; omit otherwise.                                                                              |
+| `MEDIA_OUTPUT_DIR`             | Directory where transcoded output is written. Should match the container-side processed-output mount (e.g. `/processed-output`). |
+| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                                                                     |
+| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                                                                     |
 
 See [configuration.md](configuration.md) for the full list of worker environment variables, including path-translation prefixes (`RADARR_LOCAL_PATH_PREFIX` / `RADARR_REMOTE_PATH_PREFIX` and the Sonarr equivalents), crop-detection tuning, webhook notifications, and quality settings.
 
