@@ -126,6 +126,7 @@
           contents = baseContents ++ [ watcher-bin ];
           config = {
             Entrypoint = [ "/bin/watcher" ];
+            User = "1000:1000";
           };
         };
 
@@ -135,6 +136,7 @@
           contents = baseContents ++ [ pkgs.intel-media-driver pkgs.vpl-gpu-rt worker-bin ];
           config = {
             Entrypoint = [ "/bin/worker" ];
+            User = "1000:1000";
             Env = [
               "LIBVA_DRIVERS_PATH=${pkgs.intel-media-driver}/lib/dri"
               "ONEVPL_SEARCH_PATH=${pkgs.vpl-gpu-rt}/lib"

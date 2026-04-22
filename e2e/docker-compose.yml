@@ -77,6 +77,73 @@ services:
       migration:
         condition: service_completed_successfully
 
+  watcher:
+    image: watcher:latest
+    pull_policy: never
+    restart: on-failure
+    profiles:
+      - app
+    # Run as the host user so bind-mounted /tmp directories are writable by
+    # the container regardless of the image's baked-in UID.
+    user: "${UID}:${GID}"
+    ports:
+      - "127.0.0.1:19090:9090"
+      - "127.0.0.1:19092:9091"
+    volumes:
+      - /tmp/e2e-media-processor:/tmp/e2e-media-processor
+      - ./fixtures/watcher.yaml:/etc/watcher.yaml:ro
+    environment:
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
+      HATCHET_CLIENT_TLS_STRATEGY: none
+      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
+      METRICS_ADDR: ":9090"
+      HEALTH_ADDR: ":9091"
+    command: ["--config", "/etc/watcher.yaml"]
+    depends_on:
+      hatchet-engine:
+        condition: service_started
+
+  worker:
+    image: worker:latest
+    pull_policy: never
+    restart: on-failure
+    profiles:
+      - app
+    # Run as the host user so bind-mounted /tmp directories are writable by
+    # the container regardless of the image's baked-in UID.
+    user: "${UID}:${GID}"
+    # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
+    # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
+    # capability by default, producing "set_mempolicy: Operation not permitted".
+    cap_add:
+      - SYS_NICE
+    ports:
+      - "127.0.0.1:19091:9090"
+      - "127.0.0.1:19093:9091"
+    volumes:
+      - /dev:/dev
+      - /tmp/e2e-media-processor:/tmp/e2e-media-processor
+    environment:
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
+      HATCHET_CLIENT_TLS_STRATEGY: none
+      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
+      METRICS_ADDR: ":9090"
+      HEALTH_ADDR: ":9091"
+      MEDIA_OUTPUT_DIR: /tmp/e2e-media-processor/processed-output
+      MEDIA_INPUT_ROOT: /tmp/e2e-media-processor/downloads
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: e2e-radarr-api-key-e2e
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: e2e-sonarr-api-key-e2e
+      RADARR_LOCAL_PATH_PREFIX: /tmp/e2e-media-processor/downloads/radarr
+      RADARR_REMOTE_PATH_PREFIX: /downloads
+      SONARR_LOCAL_PATH_PREFIX: /tmp/e2e-media-processor/downloads/sonarr
+      SONARR_REMOTE_PATH_PREFIX: /downloads
+      MEDIA_H265_CRF: "51"
+    depends_on:
+      hatchet-engine:
+        condition: service_started
+
   radarr:
     image: ghcr.io/home-operations/radarr:6.1.2
     # Run as the host user so volume-mounted directories are owned by the
