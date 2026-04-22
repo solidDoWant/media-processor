@@ -121,8 +121,6 @@
           buildInputs = [ libav-minimal.dev ];
           subPackages = [ "cmd/worker" ];
         };
-
-        baseContents = [ libav-minimal pkgs.cacert ];
       in
       {
         packages.watcher-bin = watcher-bin;
@@ -142,7 +140,7 @@
         packages.worker-image = pkgs.dockerTools.streamLayeredImage {
           name = "worker";
           tag = "latest";
-          contents = baseContents ++ [ pkgs.intel-media-driver pkgs.vpl-gpu-rt worker-bin ];
+          contents = [ libav-minimal pkgs.cacert pkgs.intel-media-driver pkgs.vpl-gpu-rt worker-bin ];
           config = {
             Entrypoint = [ "/bin/worker" ];
             User = "1000:1000";
