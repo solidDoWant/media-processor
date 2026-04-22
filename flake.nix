@@ -108,7 +108,7 @@
         watcher-bin = pkgs.buildGoModule {
           name = "watcher";
           src = ./.;
-          vendorHash = "sha256-8Hlizevwdoeb3IjSDuszsf/rwyoQv8Y18NiUjUA0jBo=";
+          vendorHash = "sha256-bIcg9bW4kBQ2FjS5WdKouk7IyLnN1cU7xLUMBNL2nRc=";
           subPackages = [ "cmd/watcher" ];
           env.CGO_ENABLED = "0";
         };
@@ -116,7 +116,7 @@
         worker-bin = pkgs.buildGoModule {
           name = "worker";
           src = ./.;
-          vendorHash = "sha256-8Hlizevwdoeb3IjSDuszsf/rwyoQv8Y18NiUjUA0jBo=";
+          vendorHash = "sha256-bIcg9bW4kBQ2FjS5WdKouk7IyLnN1cU7xLUMBNL2nRc=";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ libav-minimal.dev ];
           subPackages = [ "cmd/worker" ];
