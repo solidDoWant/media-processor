@@ -127,6 +127,7 @@
           config = {
             Entrypoint = [ "/bin/watcher" ];
             User = "1000:1000";
+            ExposedPorts = { "8081/tcp" = {}; };
           };
         };
 
@@ -137,6 +138,7 @@
           config = {
             Entrypoint = [ "/bin/worker" ];
             User = "1000:1000";
+            ExposedPorts = { "8080/tcp" = {}; };
             Env = [
               "LIBVA_DRIVERS_PATH=${pkgs.intel-media-driver}/lib/dri"
               "ONEVPL_SEARCH_PATH=${pkgs.vpl-gpu-rt}/lib"
