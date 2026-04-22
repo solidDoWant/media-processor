@@ -36,9 +36,11 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
+	const defaultHealthAddr = ":8080"
+
 	healthAddr := os.Getenv("HEALTH_ADDR")
 	if healthAddr == "" {
-		healthAddr = ":8080"
+		healthAddr = defaultHealthAddr
 	}
 
 	healthServer, err := health.New(ctx, healthAddr)

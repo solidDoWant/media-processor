@@ -42,7 +42,7 @@ The watcher scans one or more download directories on a cron schedule and submit
 
 Other Hatchet client settings (engine address, TLS mode, etc.) are configured via the standard `HATCHET_CLIENT_*` environment variables read by the Hatchet Go SDK — set `HATCHET_CLIENT_HOST_PORT` to `host:port` of your engine's gRPC endpoint (for example `hatchet-engine:7070`) when it is not running on the default `127.0.0.1:7077`, and set `HATCHET_CLIENT_TLS_STRATEGY=none` when talking to an insecure engine.
 
-The health server (`/healthz` liveness, `/readyz` readiness) always runs — on `:8080` by default for the worker and `:8081` for the watcher; set `HEALTH_ADDR` to override the listen address. `METRICS_ADDR` (e.g. `:9090`) enables an optional Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher environment variables.
+For the watcher, the health server (`/healthz` liveness, `/readyz` readiness) always runs on `:8081` by default; set `HEALTH_ADDR` to override the listen address. `METRICS_ADDR` (for example `:9090`) enables an optional Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher and worker environment variables.
 
 ### Example invocation
 
