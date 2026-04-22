@@ -25,7 +25,7 @@ Assess whether the issue is large before doing anything else. It is large if any
 1. If the scope is ambiguous, save current state to `.claude/tasks/$ISSUE_NUMBER.md`, post a focused clarifying question as an issue comment, and stop. Do not continue until answered.
 2. Determine how to split the issue into sub-issues. Each sub-issue must be atomic (one concern, one service/module, ≤~10 files).
 3. For each sub-issue, write a high-level plan: what it does, its acceptance criteria (Given/When/Then), and any dependencies on other sub-issues.
-4. Create the sub-issues: `gh issue create -t "<type>(<scope>): <title>" -b "<body>"` using the standard template. Link each to the parent in its Technical Context section.
+4. Create the sub-issues: `gh issue create -t "<type>(<scope>): <title>" -b "<body>"` using the standard template. Link each to the parent in its Technical Context section. After creating each sub-issue, attach it as a GitHub sub-issue of the parent: `gh api repos/{owner}/{repo}/issues/$ISSUE_NUMBER/sub_issues --method POST --field sub_issue_id=<child_issue_number>`.
 5. Post a decomposition summary as a comment on the parent issue listing the sub-issues created and their dependency order.
 6. Label the parent: `gh issue edit $ISSUE_NUMBER --add-label "status:decomposed"`
 7. **Stop.** Present the decomposition to the user for review. Do not implement.
