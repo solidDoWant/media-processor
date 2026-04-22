@@ -105,9 +105,23 @@
           doCheck = false;
         });
 
+        # Only hash Go source files, go.mod, and go.sum so that changes to
+        # documentation, Nix files, etc. don't bust the build cache.
+        goSrc = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            let baseName = builtins.baseNameOf path; in
+            (type == "directory" && baseName != "e2e") ||
+            (type != "directory" && (
+              (pkgs.lib.hasSuffix ".go" path && !(pkgs.lib.hasSuffix "_test.go" path)) ||
+              baseName == "go.mod" ||
+              baseName == "go.sum"
+            ));
+        };
+
         watcher-bin = pkgs.buildGoModule {
           name = "watcher";
-          src = ./.;
+          src = goSrc;
           vendorHash = "sha256-Hu+1P6uzQYbaApF0laZQadvhJ9t7FbZHlv8anZ91z3s=";
           subPackages = [ "cmd/watcher" ];
           env.CGO_ENABLED = "0";
@@ -115,7 +129,7 @@
 
         worker-bin = pkgs.buildGoModule {
           name = "worker";
-          src = ./.;
+          src = goSrc;
           vendorHash = "sha256-Hu+1P6uzQYbaApF0laZQadvhJ9t7FbZHlv8anZ91z3s=";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ libav-minimal.dev ];
