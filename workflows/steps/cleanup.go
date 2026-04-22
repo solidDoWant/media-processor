@@ -39,7 +39,8 @@ func pruneEmptyParents(filePath, watchRoot string) {
 		slog.Warn("prune empty parent: failed to open watch root", "watchRoot", watchRoot, "error", err)
 		return
 	}
-	defer root.Close()
+
+	defer func() { _ = root.Close() }()
 
 	dir := filepath.Dir(filePath)
 
@@ -70,6 +71,7 @@ func pruneEmptyParents(filePath, watchRoot string) {
 		// directory is empty without loading the full listing.
 		entries, err := d.ReadDir(1)
 		_ = d.Close()
+
 		if len(entries) > 0 || (err != nil && !errors.Is(err, io.EOF)) {
 			return
 		}

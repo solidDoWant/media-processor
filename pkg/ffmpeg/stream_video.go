@@ -624,6 +624,7 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 	}
 
 	var openDict *astiav.Dictionary
+
 	defer func() {
 		if openDict != nil {
 			openDict.Free()
@@ -637,9 +638,11 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 		// so that x265 info-level noise is suppressed unless debug logging is on.
 		openDict = astiav.NewDictionary()
 		x265Params := "log-level=" + x265LogLevel()
+
 		if vss.h265CRF > 0 {
 			x265Params += fmt.Sprintf(":crf=%d", vss.h265CRF)
 		}
+
 		if err := openDict.Set("x265-params", x265Params, astiav.NewDictionaryFlags()); err != nil {
 			return fmt.Errorf("setting x265-params: %w", err)
 		}

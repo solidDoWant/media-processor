@@ -206,6 +206,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		if err != nil {
 			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for watch directory %q: %w", w.Path, err))
 			errs = append(errs, mappingErrs...)
+
 			continue
 		}
 
