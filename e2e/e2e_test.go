@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,6 +61,18 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Tear down containers if the process is terminated early (e.g. SIGTERM
+	// from a CI timeout or Ctrl-C) before the deferred composeDown in run()
+	// has a chance to execute.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		log.Warn("received signal, tearing down containers", "signal", sig)
+		composeDown()
+		os.Exit(1)
+	}()
+
 	if err := run(m); err != nil {
 		log.Error("e2e run failed", "error", err)
 		os.Exit(1)
