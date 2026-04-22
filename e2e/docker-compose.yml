@@ -86,12 +86,6 @@ services:
     ports:
       - "127.0.0.1:19090:9090"
       - "127.0.0.1:19092:9091"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9091/readyz"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
     volumes:
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
       - ./fixtures/watcher.yaml:/etc/watcher.yaml:ro
@@ -120,12 +114,6 @@ services:
     ports:
       - "127.0.0.1:19091:9090"
       - "127.0.0.1:19093:9091"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9091/readyz"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
     volumes:
       - /dev:/dev
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor

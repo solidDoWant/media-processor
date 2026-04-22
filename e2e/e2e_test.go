@@ -160,18 +160,37 @@ func run(m *testing.M) error {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
 
-	// 11. Wait for watcher and worker to report ready.
-	appCtx, appCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// 11. Start the health monitor goroutine and wait for both services to
+	// report /readyz before running any tests.
+	monCtx, monCancel := context.WithCancel(context.Background())
+	readyCh, failCh := startHealthMonitor(monCtx)
 
-	if err = waitForAppServices(appCtx); err != nil {
-		appCancel()
+	readyTimer := time.NewTimer(2 * time.Minute)
+	select {
+	case <-readyCh:
+		readyTimer.Stop()
+		log.Info("app services healthy")
+	case <-readyTimer.C:
+		monCancel()
 
-		return fmt.Errorf("waitForAppServices: %w", err)
+		return fmt.Errorf("app services did not become healthy within 2 minutes")
 	}
 
-	appCancel()
+	code := m.Run()
+	monCancel()
 
-	if code := m.Run(); code != 0 {
+	// Propagate any health degradation observed during the test run.
+	select {
+	case healthErr := <-failCh:
+		log.Error("app health degraded during test run", "error", healthErr)
+
+		if code == 0 {
+			return healthErr
+		}
+	default:
+	}
+
+	if code != 0 {
 		return fmt.Errorf("test suite failed (exit code %d)", code)
 	}
 

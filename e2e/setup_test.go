@@ -131,29 +131,65 @@ func composeDown() {
 	_ = os.RemoveAll(baseDir)
 }
 
-// waitForAppServices polls until the watcher and worker report ready via /readyz.
-func waitForAppServices(ctx context.Context) error {
-	type svc struct {
-		name string
-		fn   func() error
-	}
+// startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
+// The returned readyCh is closed once both services are seen healthy in the same
+// poll. The returned failCh receives at most one error if health subsequently
+// degrades after the initial ready signal. Cancel ctx to stop the goroutine.
+func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-chan error) {
+	ready := make(chan struct{})
+	fail := make(chan error, 1)
 
-	services := []svc{
-		{"watcher", func() error { return checkHTTP(watcherHealthBase + "/readyz") }},
-		{"worker", func() error { return checkHTTP(workerHealthBase + "/readyz") }},
-	}
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
 
-	for _, service := range services {
-		log.Info("waiting for app service", "name", service.name)
+		everReady := false
 
-		if err := pollUntil(ctx, 5*time.Second, service.fn); err != nil {
-			return fmt.Errorf("%s not ready: %w", service.name, err)
+		poll := func() {
+			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
+			workerErr := checkHTTP(workerHealthBase + "/readyz")
+
+			if watcherErr == nil && workerErr == nil {
+				if !everReady {
+					everReady = true
+					close(ready)
+				}
+
+				return
+			}
+
+			if !everReady {
+				return
+			}
+
+			// Health degraded after the initial ready signal — report once.
+			var msgs []string
+			if watcherErr != nil {
+				msgs = append(msgs, "watcher: "+watcherErr.Error())
+			}
+
+			if workerErr != nil {
+				msgs = append(msgs, "worker: "+workerErr.Error())
+			}
+
+			select {
+			case fail <- fmt.Errorf("app health degraded: %s", strings.Join(msgs, "; ")):
+			default:
+			}
 		}
 
-		log.Info("app service ready", "name", service.name)
-	}
+		poll() // check immediately before the first tick
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				poll()
+			}
+		}
+	}()
 
-	return nil
+	return ready, fail
 }
 
 // waitForServices polls until Radarr, Sonarr, and the Hatchet gRPC port are up.

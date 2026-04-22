@@ -117,9 +117,7 @@
         watcher-bin = mkBin { name = "watcher"; subPackage = "cmd/watcher"; };
         worker-bin = mkBin { name = "worker"; subPackage = "cmd/worker"; };
 
-        # wget is included for Docker health checks (CMD ["wget", "-qO-", "http://localhost:9091/readyz"]).
-        # The images have no shell, so only the exec-form CMD is usable.
-        baseContents = [ libav-minimal pkgs.cacert pkgs.wget ];
+        baseContents = [ libav-minimal pkgs.cacert ];
       in
       {
         packages.watcher-image = pkgs.dockerTools.streamLayeredImage {
