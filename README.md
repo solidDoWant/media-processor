@@ -44,6 +44,10 @@ make build
 
 Binaries are written to `bin/watcher` and `bin/worker`.
 
+## Container deployment
+
+Container images for the watcher and worker can be built locally via `make build-images`. See [docs/container-deployment.md](docs/container-deployment.md) for volume mounts, environment variables, and hardware device passthrough.
+
 ## Configuration
 
 ### Watcher
