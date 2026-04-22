@@ -3,3 +3,4 @@
 .env.hatchet
 .direnv
 e2e/testdata/cache/
+result
