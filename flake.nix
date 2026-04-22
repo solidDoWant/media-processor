@@ -105,17 +105,22 @@
           doCheck = false;
         });
 
-        mkBin = { name, subPackage }: pkgs.buildGoModule {
-          inherit name;
+        watcher-bin = pkgs.buildGoModule {
+          name = "watcher";
+          src = ./.;
+          vendorHash = "sha256-8Hlizevwdoeb3IjSDuszsf/rwyoQv8Y18NiUjUA0jBo=";
+          subPackages = [ "cmd/watcher" ];
+          env.CGO_ENABLED = "0";
+        };
+
+        worker-bin = pkgs.buildGoModule {
+          name = "worker";
           src = ./.;
           vendorHash = "sha256-8Hlizevwdoeb3IjSDuszsf/rwyoQv8Y18NiUjUA0jBo=";
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ libav-minimal.dev ];
-          subPackages = [ subPackage ];
+          subPackages = [ "cmd/worker" ];
         };
-
-        watcher-bin = mkBin { name = "watcher"; subPackage = "cmd/watcher"; };
-        worker-bin = mkBin { name = "worker"; subPackage = "cmd/worker"; };
 
         baseContents = [ libav-minimal pkgs.cacert ];
       in
@@ -123,7 +128,7 @@
         packages.watcher-image = pkgs.dockerTools.streamLayeredImage {
           name = "watcher";
           tag = "latest";
-          contents = baseContents ++ [ watcher-bin ];
+          contents = [ pkgs.cacert watcher-bin ];
           config = {
             Entrypoint = [ "/bin/watcher" ];
             User = "1000:1000";
