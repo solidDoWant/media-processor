@@ -131,6 +131,31 @@ func composeDown() {
 	_ = os.RemoveAll(baseDir)
 }
 
+// waitForAppServices polls until the watcher and worker report ready via /readyz.
+func waitForAppServices(ctx context.Context) error {
+	type svc struct {
+		name string
+		fn   func() error
+	}
+
+	services := []svc{
+		{"watcher", func() error { return checkHTTP(watcherHealthBase + "/readyz") }},
+		{"worker", func() error { return checkHTTP(workerHealthBase + "/readyz") }},
+	}
+
+	for _, service := range services {
+		log.Info("waiting for app service", "name", service.name)
+
+		if err := pollUntil(ctx, 5*time.Second, service.fn); err != nil {
+			return fmt.Errorf("%s not ready: %w", service.name, err)
+		}
+
+		log.Info("app service ready", "name", service.name)
+	}
+
+	return nil
+}
+
 // waitForServices polls until Radarr, Sonarr, and the Hatchet gRPC port are up.
 func waitForServices(ctx context.Context) error {
 	type svc struct {

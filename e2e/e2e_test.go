@@ -39,6 +39,11 @@ const (
 	// bound by the compose services (127.0.0.1:19090 and 127.0.0.1:19091).
 	watcherMetricsAddr = "127.0.0.1:19090"
 	workerMetricsAddr  = "127.0.0.1:19091"
+
+	// Fixed host-side ports for the watcher and worker HTTP health endpoints,
+	// bound by the compose services (127.0.0.1:19092 and 127.0.0.1:19093).
+	watcherHealthBase = "http://127.0.0.1:19092"
+	workerHealthBase  = "http://127.0.0.1:19093"
 )
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
@@ -154,6 +159,17 @@ func run(m *testing.M) error {
 	if err = composeUpWatcherWorker(hatchetToken); err != nil {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
+
+	// 11. Wait for watcher and worker to report ready.
+	appCtx, appCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+
+	if err = waitForAppServices(appCtx); err != nil {
+		appCancel()
+
+		return fmt.Errorf("waitForAppServices: %w", err)
+	}
+
+	appCancel()
 
 	if code := m.Run(); code != 0 {
 		return fmt.Errorf("test suite failed (exit code %d)", code)
