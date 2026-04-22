@@ -93,7 +93,7 @@ services:
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
       - ./fixtures/watcher.yaml:/etc/watcher.yaml:ro
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
       HATCHET_CLIENT_TLS_STRATEGY: none
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       METRICS_ADDR: ":9090"
@@ -124,7 +124,7 @@ services:
       - /dev:/dev
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
+      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
       HATCHET_CLIENT_TLS_STRATEGY: none
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       METRICS_ADDR: ":9090"

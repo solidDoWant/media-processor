@@ -269,7 +269,10 @@ func checkTCP(addr string) error {
 // hatchet-admin inside the setup-config container. The default tenant ID
 // (707d0855-80ab-4e1f-a156-f1c4546cbf52) seeded by the migration is used.
 func generateHatchetToken() (string, error) {
-	tokenCmd := exec.Command("docker", composeArgs(
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	tokenCmd := exec.CommandContext(ctx, "docker", composeArgs(
 		"run", "--no-deps", "--rm", "-T", "setup-config",
 		"/hatchet/hatchet-admin", "token", "create",
 		"--config", "/hatchet/config",
@@ -277,9 +280,9 @@ func generateHatchetToken() (string, error) {
 	)...)
 	tokenCmd.Env = composeEnv()
 
-	tokenOut, err := tokenCmd.Output()
+	tokenOut, err := tokenCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
+		return "", fmt.Errorf("generate token: %w\noutput: %s", err, tokenOut)
 	}
 
 	// Extract the JWT token line (starts with "eyJ") in case log lines are
