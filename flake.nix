@@ -125,6 +125,9 @@
         baseContents = [ libav-minimal pkgs.cacert ];
       in
       {
+        packages.watcher-bin = watcher-bin;
+        packages.worker-bin = worker-bin;
+
         packages.watcher-image = pkgs.dockerTools.streamLayeredImage {
           name = "watcher";
           tag = "latest";
@@ -166,6 +169,7 @@
             pkgs.nix-direnv
             pkgs.gh
             pkgs.dive
+            pkgs.nix-prefetch
           ];
           buildInputs = [
             pkgs.ffmpeg-full.dev
