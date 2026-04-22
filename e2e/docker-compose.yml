@@ -83,6 +83,9 @@ services:
     restart: on-failure
     profiles:
       - app
+    # Run as the host user so bind-mounted /tmp directories are writable by
+    # the container regardless of the image's baked-in UID.
+    user: "${UID}:${GID}"
     ports:
       - "127.0.0.1:19090:9090"
       - "127.0.0.1:19092:9091"
@@ -106,6 +109,9 @@ services:
     restart: on-failure
     profiles:
       - app
+    # Run as the host user so bind-mounted /tmp directories are writable by
+    # the container regardless of the image's baked-in UID.
+    user: "${UID}:${GID}"
     # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
     # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
     # capability by default, producing "set_mempolicy: Operation not permitted".
