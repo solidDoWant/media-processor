@@ -10,6 +10,7 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -156,7 +157,7 @@ func run(m *testing.M) error {
 	log.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
 	// 10. Start watcher and worker containers with the generated Hatchet token.
-	if err = composeUpWatcherWorker(hatchetToken); err != nil {
+	if err = composeUpWatcherWorker(context.Background(), hatchetToken); err != nil {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
 
@@ -178,22 +179,21 @@ func run(m *testing.M) error {
 	}
 
 	code := m.Run()
+
 	monCancel()
 
 	// Propagate any health degradation observed during the test run.
-	select {
-	case healthErr := <-failCh:
-		log.Error("app health degraded during test run", "error", healthErr)
+	var healthErr error
 
-		if code == 0 {
-			return healthErr
-		}
+	select {
+	case healthErr = <-failCh:
+		log.Error("app health degraded during test run", "error", healthErr)
 	default:
 	}
 
 	if code != 0 {
-		return fmt.Errorf("test suite failed (exit code %d)", code)
+		return errors.Join(fmt.Errorf("test suite failed (exit code %d)", code), healthErr)
 	}
 
-	return nil
+	return healthErr
 }

@@ -96,8 +96,8 @@ func composeUp() error {
 // composeUpWatcherWorker starts the watcher and worker containers (profile
 // "app"), injecting the Hatchet client token into the environment so the
 // compose interpolation of ${HATCHET_CLIENT_TOKEN} resolves correctly.
-func composeUpWatcherWorker(token string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+func composeUpWatcherWorker(ctx context.Context, token string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "docker", composeArgs("--profile", "app", "up", "-d", "watcher", "worker")...)
@@ -169,6 +169,7 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 			if watcherErr == nil && workerErr == nil {
 				if !everReady {
 					everReady = true
+
 					close(ready)
 				}
 
@@ -196,6 +197,7 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		}
 
 		poll() // check immediately before the first tick
+
 		for {
 			select {
 			case <-ctx.Done():
