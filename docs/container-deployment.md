@@ -12,10 +12,10 @@ make build-images
 
 After a successful build, both images are available locally:
 
-- `watcher:latest` — also tagged as `ghcr.io/soliddowant/watcher:0.0.1-dev`
-- `worker:latest` — also tagged as `ghcr.io/soliddowant/worker:0.0.1-dev`
+- `watcher:latest` — also tagged under `ghcr.io/soliddowant/watcher`
+- `worker:latest` — also tagged under `ghcr.io/soliddowant/worker`
 
-The registry prefix and version default are defined at the top of the `Makefile` (`CONTAINER_REGISTRY`, `VERSION`). To push to a registry, override those and set `PUSH_ALL=true`:
+The registry prefix and version used for the additional tags are defined at the top of the `Makefile` (`CONTAINER_REGISTRY`, `VERSION`). To push to a registry, override those and set `PUSH_ALL=true`:
 
 ```sh
 make build-images CONTAINER_REGISTRY=ghcr.io/your-org VERSION=1.2.3 PUSH_ALL=true
@@ -36,11 +36,11 @@ The watcher scans one or more download directories on a cron schedule and submit
 
 ### Required environment variables
 
-| Variable                      | Description                                                                      |
-| ----------------------------- | -------------------------------------------------------------------------------- |
-| `HATCHET_CLIENT_TOKEN`        | Hatchet API token. Issue one via your Hatchet server.                            |
-| `HATCHET_CLIENT_HOST_PORT`    | `host:port` of your Hatchet engine's gRPC endpoint (e.g. `hatchet-engine:7070`). |
-| `HATCHET_CLIENT_TLS_STRATEGY` | Set to `none` when talking to an insecure Hatchet engine. Omit when using TLS.   |
+| Variable               | Description                                           |
+| ---------------------- | ----------------------------------------------------- |
+| `HATCHET_CLIENT_TOKEN` | Hatchet API token. Issue one via your Hatchet server. |
+
+Other Hatchet client settings (engine address, TLS mode, etc.) are configured via the standard `HATCHET_CLIENT_*` environment variables read by the Hatchet Go SDK — set `HATCHET_CLIENT_HOST_PORT` to `host:port` of your engine's gRPC endpoint (for example `hatchet-engine:7070`) when it is not running on the default `127.0.0.1:7077`, and set `HATCHET_CLIENT_TLS_STRATEGY=none` when talking to an insecure engine.
 
 Useful optional variables: `HEALTH_ADDR` (e.g. `:9091`) exposes `/healthz` and `/readyz` for liveness/readiness probes; `METRICS_ADDR` (e.g. `:9090`) exposes a Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher environment variables.
 
@@ -72,11 +72,11 @@ The worker pulls jobs from Hatchet, transcodes each file, writes the output to `
 | Variable                       | Description                                                                                                                      |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `HATCHET_CLIENT_TOKEN`         | Hatchet API token.                                                                                                               |
-| `HATCHET_CLIENT_HOST_PORT`     | `host:port` of your Hatchet engine's gRPC endpoint.                                                                              |
-| `HATCHET_CLIENT_TLS_STRATEGY`  | Set to `none` for insecure Hatchet; omit otherwise.                                                                              |
 | `MEDIA_OUTPUT_DIR`             | Directory where transcoded output is written. Should match the container-side processed-output mount (e.g. `/processed-output`). |
 | `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                                                                     |
 | `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                                                                     |
+
+As with the watcher, non-default Hatchet engines are reached by setting the standard `HATCHET_CLIENT_HOST_PORT` and (optionally) `HATCHET_CLIENT_TLS_STRATEGY=none` environment variables.
 
 See [configuration.md](configuration.md) for the full list of worker environment variables, including path-translation prefixes (`RADARR_LOCAL_PATH_PREFIX` / `RADARR_REMOTE_PATH_PREFIX` and the Sonarr equivalents), crop-detection tuning, webhook notifications, and quality settings.
 
