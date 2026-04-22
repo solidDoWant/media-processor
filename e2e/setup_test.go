@@ -131,6 +131,23 @@ func composeDown() {
 	_ = os.RemoveAll(baseDir)
 }
 
+// streamAppLogs starts a goroutine that runs "docker compose logs --follow
+// watcher worker" and pipes the output directly to stdout. The goroutine exits
+// when ctx is cancelled. Output lines are already prefixed with the service
+// name by Docker Compose (e.g. "watcher-1  | ...").
+func streamAppLogs(ctx context.Context) {
+	go func() {
+		cmd := exec.CommandContext(ctx, "docker", composeArgs("logs", "--follow", "watcher", "worker")...)
+		cmd.Env = composeEnv()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil && ctx.Err() == nil {
+			log.Warn("app log streaming ended unexpectedly", "error", err)
+		}
+	}()
+}
+
 // startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
 // The returned readyCh is closed once both services are seen healthy in the same
 // poll. The returned failCh receives at most one error if health subsequently

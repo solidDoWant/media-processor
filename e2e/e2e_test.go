@@ -160,9 +160,10 @@ func run(m *testing.M) error {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
 
-	// 11. Start the health monitor goroutine and wait for both services to
-	// report /readyz before running any tests.
+	// 11. Stream watcher/worker logs to stdout and monitor health until both
+	// services report /readyz before running any tests.
 	monCtx, monCancel := context.WithCancel(context.Background())
+	streamAppLogs(monCtx)
 	readyCh, failCh := startHealthMonitor(monCtx)
 
 	readyTimer := time.NewTimer(2 * time.Minute)
