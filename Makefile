@@ -118,7 +118,7 @@ build-images: ## Build watcher and worker OCI images and load them into the loca
 
 ##@ Helm
 
-HELM_CHART_DIR := $(PROJECT_DIR)/deploy/charts/dr-job
+HELM_CHART_DIR := $(PROJECT_DIR)/deploy/charts/media-processor
 HELM_CHART_FILES := $(shell find $(HELM_CHART_DIR) -type f ! -path "*/charts/*")
 HELM_REGISTRY := $(CONTAINER_REGISTRY)/charts
 HELM_PACKAGE := $(BIN_DIR)/helm/media-processor-$(VERSION).tgz
