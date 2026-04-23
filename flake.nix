@@ -140,6 +140,22 @@
           subPackages = [ "cmd/worker" ];
           ldflags = [ "-s" "-w" ];
         };
+        ccusage = pkgs.stdenv.mkDerivation {
+          pname = "ccusage";
+          version = "18.0.11";
+          src = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/ccusage/-/ccusage-18.0.11.tgz";
+            hash = "sha256-YlNliyF278xmc08ZZlwx0Ma4FIw/NtbXLsFdFocbVaQ=";
+          };
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          dontBuild = true;
+          installPhase = ''
+            mkdir -p $out/lib/ccusage $out/bin
+            cp -r . $out/lib/ccusage/
+            makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/ccusage \
+              --add-flags "$out/lib/ccusage/dist/index.js"
+          '';
+        };
       in
       {
         packages.watcher-bin = watcher-bin;
@@ -188,6 +204,7 @@
             pkgs.dive
             pkgs.nix-prefetch
             pkgs.kubernetes-helm
+            ccusage
           ];
           buildInputs = [
             pkgs.ffmpeg-full.dev
