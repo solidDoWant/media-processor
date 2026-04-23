@@ -358,13 +358,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 
 			hasUpdate := false
 			lastLogFrames := int64(0)
-			lastLogTime := transcodeStart
 
-			logLatest := func() {
-				if !hasUpdate {
-					return
-				}
+			var lastLogTime time.Time
 
+			logProgress := func() {
 				now := time.Now()
 				interval := now.Sub(lastLogTime)
 
@@ -387,12 +384,18 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 			for {
 				select {
 				case p := <-progressCh:
+					if !hasUpdate {
+						lastLogTime = time.Now()
+					}
+
 					latest = p
 					hasUpdate = true
 				case <-ticker.C:
-					logLatest()
+					if hasUpdate {
+						logProgress()
+					}
 				case <-done:
-					logLatest()
+					logProgress()
 					return
 				}
 			}
