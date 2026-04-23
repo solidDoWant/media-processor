@@ -46,8 +46,7 @@ media-processor/
 │   ├── placeholder.go         # No-op standalone task registered with the worker to verify Hatchet connectivity
 │   ├── media/                 # Top-level media workflow
 │   └── steps/                 # Individual workflow step handlers (probe, detectcrop, transcode, etc.)
-└── deploy/
-    └── k8s/                   # Kubernetes manifests
+└── deploy/                    # Deployment configs (Helm charts)
 ```
 
 ## Commands
