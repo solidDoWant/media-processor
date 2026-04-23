@@ -160,7 +160,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
-	slog.Info("connected to Hatchet, starting worker")
+	slog.InfoContext(ctx, "connected to Hatchet, starting worker", slog.String("output_dir", mediaOutputDir))
 
 	healthServer.SetReady()
 
