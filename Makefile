@@ -128,7 +128,7 @@ $(HELM_PACKAGE): PUSH_CHECK = $(if $(findstring t,$(HELM_PUSH)),true,false)
 $(HELM_PACKAGE): $(HELM_CHART_FILES)
 	@mkdir -p "$(@D)"
 	helm package "$(HELM_CHART_DIR)" --dependency-update --version "$(VERSION)" --app-version "$(VERSION)" --destination "$(@D)"
-	@$(PUSH_CHECK) && helm push "$(HELM_PACKAGE)" oci://$(HELM_REGISTRY) || true
+	@$(PUSH_CHECK) && helm push "$(HELM_PACKAGE)" oci://$(HELM_REGISTRY)
 
 .PHONY: helm
 helm: $(HELM_PACKAGE) ## Package (and optionally push) the Helm chart.

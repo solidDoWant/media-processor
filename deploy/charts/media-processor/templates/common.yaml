@@ -16,20 +16,6 @@
 {{- $workerTag  := (.Values.resources | dig "controllers" "worker"  "containers" "worker"  "image" "tag" "") | default .Chart.AppVersion -}}
 
 {{/* ============================================================ */}}
-{{/* Helper: build a credential env entry                         */}}
-{{/*   - uses valueFrom.secretKeyRef when secretKeyRef.name set   */}}
-{{/*   - falls back to literal value                              */}}
-{{/* ============================================================ */}}
-{{- define "media-processor.credentialEnv" -}}
-  {{- $cred := .cred -}}
-  {{- if $cred.secretKeyRef.name -}}
-    {{- dict "valueFrom" (dict "secretKeyRef" (dict "name" $cred.secretKeyRef.name "key" $cred.secretKeyRef.key)) | toYaml -}}
-  {{- else -}}
-    {{- $cred.value -}}
-  {{- end -}}
-{{- end -}}
-
-{{/* ============================================================ */}}
 {{/* Watcher env vars                                             */}}
 {{/* ============================================================ */}}
 {{- $watcherEnv := dict -}}

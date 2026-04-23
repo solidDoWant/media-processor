@@ -7,7 +7,7 @@ The `media-processor` Helm chart deploys the watcher and worker as separate Kube
 The chart is published to GHCR as an OCI artifact:
 
 ```sh
-helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --version 0.0.1 -f values.yaml
+helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --version CHART_VERSION -f values.yaml
 ```
 
 ## Required values
