@@ -135,6 +135,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	progressLogInterval, err := parseTimeout("MEDIA_PROGRESS_LOG_INTERVAL", 30*time.Second)
+	if err != nil {
+		return err
+	}
+
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
@@ -147,6 +152,7 @@ func run(ctx context.Context) error {
 		DetectCropTimeout:     detectCropTimeout,
 		TranscodeTimeout:      transcodeTimeout,
 		H265CRF:               h265CRF,
+		ProgressLogInterval:   progressLogInterval,
 	}, radarrClient, sonarrClient, webhookClient)
 
 	workerLogger := logging.NewZerologLogger("worker")

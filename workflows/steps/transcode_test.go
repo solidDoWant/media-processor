@@ -572,7 +572,7 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			out, err := RunTranscode(t.Context(), inputPath, tt.probe, nil, outputDir, "", "", 0, nil)
+			out, err := RunTranscode(t.Context(), inputPath, tt.probe, nil, outputDir, "", "", 0, 0, nil)
 
 			tt.errFunc(t, err)
 
@@ -607,7 +607,7 @@ func TestRunTranscode_WatcherRoot_SubdirIsPreservedInOutput(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.NoError(t, err)
 
 	expectedPath := filepath.Join(outputDir, "my-media-item", "video.mkv")
@@ -638,7 +638,7 @@ func TestRunTranscode_WatcherRoot_FlatInputProducesFlatOutput(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.NoError(t, err)
 
 	expectedPath := filepath.Join(outputDir, "video.mkv")
@@ -667,7 +667,7 @@ func TestRunTranscode_WatcherRoot_InputOutsideWatcherRootReturnsError(t *testing
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	_, err = RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	_, err = RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.Error(t, err, "input outside watcherRoot should return an error")
 
 	entries, readErr := os.ReadDir(outputDir)

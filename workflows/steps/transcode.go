@@ -168,12 +168,14 @@ func codecName(c ffmpeg.Codec) string {
 // quality). For libx265 this is the CRF; for hevc_nvenc it is the CQ value;
 // for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value. Values
 // outside 1–51 are silently ignored and the encoder default is used.
+// progressLogInterval controls how often a progress log line is emitted during
+// transcoding. Zero disables progress logging.
 // library is the arr library used to fetch poster artwork. When nil, no fetch
 // is attempted and transcoding proceeds without an embedded attachment, and
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, progressLogInterval time.Duration, library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -340,6 +342,63 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		}
 	}
 
+	var progressCh chan ffmpeg.Progress
+
+	if progressLogInterval > 0 {
+		progressCh = make(chan ffmpeg.Progress, 64)
+
+		done := make(chan struct{})
+		defer close(done)
+
+		go func() {
+			ticker := time.NewTicker(progressLogInterval)
+			defer ticker.Stop()
+
+			var latest ffmpeg.Progress
+
+			hasUpdate := false
+			lastLogFrames := int64(0)
+			lastLogTime := transcodeStart
+
+			logLatest := func() {
+				if !hasUpdate {
+					return
+				}
+
+				now := time.Now()
+				interval := now.Sub(lastLogTime)
+
+				var fps float64
+				if interval > 0 {
+					fps = float64(latest.FramesProcessed-lastLogFrames) / interval.Seconds()
+				}
+
+				lastLogFrames = latest.FramesProcessed
+				lastLogTime = now
+
+				slog.InfoContext(ctx, "transcode progress",
+					slog.Float64("percent_complete", latest.PercentComplete),
+					slog.Duration("elapsed", time.Since(transcodeStart)),
+					slog.Int64("frames_processed", latest.FramesProcessed),
+					slog.Float64("fps", fps),
+				)
+			}
+
+			for {
+				select {
+				case p := <-progressCh:
+					latest = p
+					hasUpdate = true
+				case <-ticker.C:
+					logLatest()
+				case <-done:
+					logLatest()
+					return
+				}
+			}
+		}()
+	}
+
 	var (
 		artworkSkipped bool
 		artBytes       []byte
@@ -377,6 +436,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		WithH265CRF(h265CRF).
 		WithCoverArt(artBytes, artMime).
 		WithCrop(cropParams).
+		WithProgressChan(progressCh).
 		Build()
 
 	if err := transcoder.Run(ctx); err != nil {
