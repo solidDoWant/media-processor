@@ -116,6 +116,22 @@ build-images: ## Build watcher and worker OCI images and load them into the loca
 	$(foreach tag,$(WORKER_IMAGE_TAGS),docker tag worker:latest $(tag);)
 	$(if $(findstring t,$(PUSH_ALL)),$(foreach tag,$(WATCHER_IMAGE_TAGS) $(WORKER_IMAGE_TAGS),docker push $(tag);))
 
+##@ Helm
+
+HELM_CHART_DIR := $(PROJECT_DIR)/deploy/charts/media-processor
+HELM_CHART_FILES := $(shell find $(HELM_CHART_DIR) -type f ! -path "*/charts/*")
+HELM_REGISTRY := $(CONTAINER_REGISTRY)/charts
+HELM_PACKAGE := $(BIN_DIR)/helm/media-processor-$(VERSION).tgz
+HELM_PUSH ?= $(PUSH_ALL)
+
+$(HELM_PACKAGE): $(HELM_CHART_FILES)
+	@mkdir -p "$(@D)"
+	helm package "$(HELM_CHART_DIR)" --dependency-update --version "$(VERSION)" --app-version "$(VERSION)" --destination "$(@D)"
+	$(if $(findstring t,$(HELM_PUSH)),helm push "$(HELM_PACKAGE)" oci://$(HELM_REGISTRY))
+
+.PHONY: helm
+helm: $(HELM_PACKAGE) ## Package (and optionally push) the Helm chart.
+
 ##@ Build
 
 # Note: CGO is required. FFmpeg 8 development headers must be available via pkg-config.
