@@ -65,8 +65,17 @@ func (css *copyStreamState) setOutputStream(out *astiav.Stream) { css.outStream 
 func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
 func (css *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
 
-func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, _ chan<- Progress, _ int64) error {
-	return remuxPacket(packet, css.inStream, css.outStream, outputFmt)
+func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if err := remuxPacket(packet, css.inStream, css.outStream, outputFmt); err != nil {
+		return err
+	}
+
+	css.frames++
+	if progressCh != nil {
+		sendProgress(progressCh, css.frames, packet, css.outStream, totalDuration)
+	}
+
+	return nil
 }
 
 func (css *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ int64) error {
