@@ -81,6 +81,10 @@ type MediaWorkflowConfig struct {
 	// global_quality (ICQ) value. Set by the caller (e.g. cmd/worker via
 	// MEDIA_H265_CRF).
 	H265CRF int
+	// ProgressLogInterval controls how often a progress log line is emitted
+	// during transcoding. Zero disables progress logging. Set by the caller
+	// (e.g. cmd/worker via MEDIA_PROGRESS_LOG_INTERVAL).
+	ProgressLogInterval time.Duration
 }
 
 // MediaInput is an alias for the shared input type so existing callers within this
@@ -219,7 +223,7 @@ func NewMediaWorkflow(
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
-		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, cfg.H265CRF, library)
+		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, cfg.H265CRF, cfg.ProgressLogInterval, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}

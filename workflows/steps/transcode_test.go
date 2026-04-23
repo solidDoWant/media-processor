@@ -1,10 +1,14 @@
 package steps
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +16,41 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
+
+// recordingHandler is a slog.Handler that captures log records for inspection in tests.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *recordingHandler) progressRecords() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var out []slog.Record
+
+	for _, record := range h.records {
+		if record.Message == "transcode progress" {
+			out = append(out, record)
+		}
+	}
+
+	return out
+}
 
 // mkvOutputName returns the expected output filename for a given input path:
 // the input stem with ".mkv" extension.
@@ -572,7 +611,7 @@ func TestRunTranscode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inputPath, outputDir := tt.setup(t)
 
-			out, err := RunTranscode(t.Context(), inputPath, tt.probe, nil, outputDir, "", "", 0, nil)
+			out, err := RunTranscode(t.Context(), inputPath, tt.probe, nil, outputDir, "", "", 0, 0, nil)
 
 			tt.errFunc(t, err)
 
@@ -607,7 +646,7 @@ func TestRunTranscode_WatcherRoot_SubdirIsPreservedInOutput(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.NoError(t, err)
 
 	expectedPath := filepath.Join(outputDir, "my-media-item", "video.mkv")
@@ -638,7 +677,7 @@ func TestRunTranscode_WatcherRoot_FlatInputProducesFlatOutput(t *testing.T) {
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	out, err := RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.NoError(t, err)
 
 	expectedPath := filepath.Join(outputDir, "video.mkv")
@@ -667,10 +706,123 @@ func TestRunTranscode_WatcherRoot_InputOutsideWatcherRootReturnsError(t *testing
 		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
 	}
 
-	_, err = RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, nil)
+	_, err = RunTranscode(t.Context(), inputPath, probe, nil, outputDir, watcherRoot, "", 0, 0, nil)
 	require.Error(t, err, "input outside watcherRoot should return an error")
 
 	entries, readErr := os.ReadDir(outputDir)
 	require.NoError(t, readErr)
 	assert.Empty(t, entries, "no output files or subdirs should be created when input is outside watcherRoot")
+}
+
+// progressProbe returns a minimal ProbeOutput suitable for progress logging tests.
+func progressProbe() ProbeOutput {
+	return ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+}
+
+// withRecordingLogger replaces the default slog logger for the duration of the test
+// and returns the recording handler. The original logger is restored by t.Cleanup.
+func withRecordingLogger(t *testing.T) *recordingHandler {
+	t.Helper()
+
+	handler := &recordingHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	return handler
+}
+
+func TestRunTranscode_ProgressLogging_EmitsLinesAtInterval(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, 50*time.Millisecond, nil)
+	require.NoError(t, err)
+
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 1 },
+		time.Second, time.Millisecond,
+		"expected multiple progress log lines with a 50ms interval, not just the final completion log",
+	)
+
+	records := handler.progressRecords()
+	require.NotEmpty(t, records)
+
+	first := records[0]
+	keys := map[string]struct{}{}
+
+	first.Attrs(func(a slog.Attr) bool {
+		keys[a.Key] = struct{}{}
+		return true
+	})
+
+	assert.Contains(t, keys, "percent_complete")
+	assert.Contains(t, keys, "elapsed")
+	assert.Contains(t, keys, "frames_processed")
+	assert.Contains(t, keys, "fps")
+}
+
+func TestRunTranscode_ProgressLogging_NoLinesWhenDisabled(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, 0, nil)
+	require.NoError(t, err)
+
+	assert.Empty(t, handler.progressRecords(), "expected no progress log lines when interval is zero")
+}
+
+func TestRunTranscode_ProgressLogging_FinalLineEmittedOnCompletion(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	// Interval longer than the transcode so no tick fires; the final log on done must appear.
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, time.Hour, nil)
+	require.NoError(t, err)
+
+	// The goroutine emits its final log after RunTranscode returns; poll briefly for it.
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 0 },
+		time.Second, time.Millisecond,
+		"expected one final progress log line even when no tick fired during the transcode",
+	)
+}
+
+func TestRunTranscode_ProgressLogging_CopyPathReports100Percent(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	// H.264 in MKV causes SelectVideoCodec to return CodecCopy: no re-encode, so ffmpeg
+	// never sends progress updates. The final log must still report 100% completion.
+	copyProbe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "matroska,webm",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), copyProbe, nil, t.TempDir(), "", "", 0, time.Hour, nil)
+	require.NoError(t, err)
+
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 0 },
+		time.Second, time.Millisecond,
+		"expected a final progress log line on copy/remux path",
+	)
+
+	records := handler.progressRecords()
+	require.Len(t, records, 1, "expected exactly one log line on copy/remux path (final only, no ticks)")
+
+	var percentComplete float64
+
+	records[0].Attrs(func(a slog.Attr) bool {
+		if a.Key == "percent_complete" {
+			percentComplete = a.Value.Float64()
+		}
+
+		return true
+	})
+
+	assert.InDelta(t, 100.0, percentComplete, 0.001, "copy/remux final log must report 100%% completion")
 }
