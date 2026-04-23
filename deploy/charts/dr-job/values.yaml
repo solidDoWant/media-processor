@@ -1,0 +1,92 @@
+---
+config:
+  hatchetToken:
+    value: ""
+    secretKeyRef:
+      name: ""
+      key: ""
+
+  # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
+  # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
+  # field controls the volume mount subPath. When empty, no input volume is created.
+  inputVolume: {}
+
+  metrics:
+    otel:
+      endpoint: ""
+    highCardinalityLabels: false
+
+  watcher:
+    # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
+    configType: ConfigMap
+    # schedule is the 6-field Hatchet cron expression (seconds-leading) for the watcher scan.
+    schedule: ""
+    watches: []
+    logLevel: info
+    metrics:
+      enabled: false
+
+  worker:
+    logLevel: info
+    metrics:
+      enabled: false
+    media:
+      output:
+        # volume is a bjw-s persistence item without globalMounts or advancedMounts; the chart
+        # manages mounts at /media/output. An optional subPath field controls the mount subPath.
+        # When empty, no output volume is created.
+        volume: {}
+        # radarrRemoteMountPath is how Radarr sees the output directory. When non-empty,
+        # RADARR_LOCAL_PATH_PREFIX and RADARR_REMOTE_PATH_PREFIX are set on the worker.
+        radarrRemoteMountPath: ""
+        # sonarrRemoteMountPath is how Sonarr sees the output directory. When non-empty,
+        # SONARR_LOCAL_PATH_PREFIX and SONARR_REMOTE_PATH_PREFIX are set on the worker.
+        sonarrRemoteMountPath: ""
+      webhookUrl: ""
+      hardware:
+        # devicePath is the host path to the hardware encoding device (e.g. /dev/dri/renderD128).
+        # When non-empty, MEDIA_HARDWARE_DEVICE_PATH is set on the worker.
+        devicePath: ""
+        # mountHostDevice, when true and devicePath is set, creates a hostPath volume mounting
+        # the device inside the container at the same path. Set to false when using a device
+        # plugin or DRA.
+        mountHostDevice: true
+      blackBarRemoval:
+        minimumPixels:
+          horizontal: 10
+          vertical: 10
+        detectTimeout: "30m"
+      transcode:
+        timeout: "4h"
+        videoQuality: ""
+    radarr:
+      url: ""
+      apiKey:
+        value: ""
+        secretKeyRef:
+          name: ""
+          key: ""
+    sonarr:
+      url: ""
+      apiKey:
+        value: ""
+        secretKeyRef:
+          name: ""
+          key: ""
+
+# resources follows the bjw-s app-template schema. Values here are deep-merged with the
+# chart-computed resources; user-supplied values take precedence.
+resources:
+  controllers:
+    watcher:
+      containers:
+        watcher:
+          image:
+            repository: ghcr.io/soliddowant/watcher
+            tag: ""
+    worker:
+      containers:
+        worker:
+          image:
+            repository: ghcr.io/soliddowant/worker
+            tag: ""

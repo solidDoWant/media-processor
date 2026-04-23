@@ -1,0 +1,310 @@
+---
+{{/* ============================================================ */}}
+{{/* Hard-coded chart internals (not exposed in values)           */}}
+{{/* ============================================================ */}}
+{{- $inputMountPath   := "/media/input" -}}
+{{- $outputMountPath  := "/media/output" -}}
+{{- $configMountPath  := "/etc/media-processor" -}}
+{{- $watcherHealthPort := 8081 -}}
+{{- $workerHealthPort  := 8080 -}}
+{{- $metricsPort       := 9090 -}}
+
+{{/* ============================================================ */}}
+{{/* Image tag defaults: use AppVersion when tag is empty         */}}
+{{/* ============================================================ */}}
+{{- $watcherTag := (.Values.resources | dig "controllers" "watcher" "containers" "watcher" "image" "tag" "") | default .Chart.AppVersion -}}
+{{- $workerTag  := (.Values.resources | dig "controllers" "worker"  "containers" "worker"  "image" "tag" "") | default .Chart.AppVersion -}}
+
+{{/* ============================================================ */}}
+{{/* Helper: build a credential env entry                         */}}
+{{/*   - uses valueFrom.secretKeyRef when secretKeyRef.name set   */}}
+{{/*   - falls back to literal value                              */}}
+{{/* ============================================================ */}}
+{{- define "media-processor.credentialEnv" -}}
+  {{- $cred := .cred -}}
+  {{- if $cred.secretKeyRef.name -}}
+    {{- dict "valueFrom" (dict "secretKeyRef" (dict "name" $cred.secretKeyRef.name "key" $cred.secretKeyRef.key)) | toYaml -}}
+  {{- else -}}
+    {{- $cred.value -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Watcher env vars                                             */}}
+{{/* ============================================================ */}}
+{{- $watcherEnv := dict -}}
+
+{{/* HATCHET_CLIENT_TOKEN */}}
+{{- if .Values.config.hatchetToken.secretKeyRef.name -}}
+  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.hatchetToken.secretKeyRef.name "key" .Values.config.hatchetToken.secretKeyRef.key))) -}}
+{{- else if .Values.config.hatchetToken.value -}}
+  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
+{{- end -}}
+
+{{/* LOG_LEVEL */}}
+{{- $_ := set $watcherEnv "LOG_LEVEL" .Values.config.watcher.logLevel -}}
+
+{{/* METRICS_ADDR */}}
+{{- if .Values.config.watcher.metrics.enabled -}}
+  {{- $_ := set $watcherEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
+{{- end -}}
+
+{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
+{{- if .Values.config.metrics.otel.endpoint -}}
+  {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.metrics.otel.endpoint -}}
+{{- end -}}
+
+{{/* METRICS_HIGH_CARDINALITY_LABELS */}}
+{{- if .Values.config.metrics.highCardinalityLabels -}}
+  {{- $_ := set $watcherEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Worker env vars                                              */}}
+{{/* ============================================================ */}}
+{{- $workerEnv := dict -}}
+
+{{/* HATCHET_CLIENT_TOKEN */}}
+{{- if .Values.config.hatchetToken.secretKeyRef.name -}}
+  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.hatchetToken.secretKeyRef.name "key" .Values.config.hatchetToken.secretKeyRef.key))) -}}
+{{- else if .Values.config.hatchetToken.value -}}
+  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
+{{- end -}}
+
+{{/* LOG_LEVEL */}}
+{{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
+
+{{/* MEDIA_INPUT_ROOT */}}
+{{- $_ := set $workerEnv "MEDIA_INPUT_ROOT" $inputMountPath -}}
+
+{{/* MEDIA_OUTPUT_DIR */}}
+{{- $_ := set $workerEnv "MEDIA_OUTPUT_DIR" $outputMountPath -}}
+
+{{/* MEDIA_WEBHOOK_URL */}}
+{{- if .Values.config.worker.media.webhookUrl -}}
+  {{- $_ := set $workerEnv "MEDIA_WEBHOOK_URL" .Values.config.worker.media.webhookUrl -}}
+{{- end -}}
+
+{{/* MEDIA_HARDWARE_DEVICE_PATH */}}
+{{- if .Values.config.worker.media.hardware.devicePath -}}
+  {{- $_ := set $workerEnv "MEDIA_HARDWARE_DEVICE_PATH" .Values.config.worker.media.hardware.devicePath -}}
+{{- end -}}
+
+{{/* RADARR path vars (conditional on radarrRemoteMountPath) */}}
+{{- if .Values.config.worker.media.output.radarrRemoteMountPath -}}
+  {{- $_ := set $workerEnv "RADARR_LOCAL_PATH_PREFIX"  $outputMountPath -}}
+  {{- $_ := set $workerEnv "RADARR_REMOTE_PATH_PREFIX" .Values.config.worker.media.output.radarrRemoteMountPath -}}
+{{- end -}}
+
+{{/* SONARR path vars (conditional on sonarrRemoteMountPath) */}}
+{{- if .Values.config.worker.media.output.sonarrRemoteMountPath -}}
+  {{- $_ := set $workerEnv "SONARR_LOCAL_PATH_PREFIX"  $outputMountPath -}}
+  {{- $_ := set $workerEnv "SONARR_REMOTE_PATH_PREFIX" .Values.config.worker.media.output.sonarrRemoteMountPath -}}
+{{- end -}}
+
+{{/* RADARR_URL */}}
+{{- if .Values.config.worker.radarr.url -}}
+  {{- $_ := set $workerEnv "RADARR_URL" .Values.config.worker.radarr.url -}}
+{{- end -}}
+
+{{/* RADARR_API_KEY */}}
+{{- if .Values.config.worker.radarr.apiKey.secretKeyRef.name -}}
+  {{- $_ := set $workerEnv "RADARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.worker.radarr.apiKey.secretKeyRef.name "key" .Values.config.worker.radarr.apiKey.secretKeyRef.key))) -}}
+{{- else if .Values.config.worker.radarr.apiKey.value -}}
+  {{- $_ := set $workerEnv "RADARR_API_KEY" .Values.config.worker.radarr.apiKey.value -}}
+{{- end -}}
+
+{{/* SONARR_URL */}}
+{{- if .Values.config.worker.sonarr.url -}}
+  {{- $_ := set $workerEnv "SONARR_URL" .Values.config.worker.sonarr.url -}}
+{{- end -}}
+
+{{/* SONARR_API_KEY */}}
+{{- if .Values.config.worker.sonarr.apiKey.secretKeyRef.name -}}
+  {{- $_ := set $workerEnv "SONARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.worker.sonarr.apiKey.secretKeyRef.name "key" .Values.config.worker.sonarr.apiKey.secretKeyRef.key))) -}}
+{{- else if .Values.config.worker.sonarr.apiKey.value -}}
+  {{- $_ := set $workerEnv "SONARR_API_KEY" .Values.config.worker.sonarr.apiKey.value -}}
+{{- end -}}
+
+{{/* MEDIA_MIN_CROP_X / MEDIA_MIN_CROP_Y */}}
+{{- $_ := set $workerEnv "MEDIA_MIN_CROP_X" (.Values.config.worker.media.blackBarRemoval.minimumPixels.horizontal | toString) -}}
+{{- $_ := set $workerEnv "MEDIA_MIN_CROP_Y" (.Values.config.worker.media.blackBarRemoval.minimumPixels.vertical | toString) -}}
+
+{{/* MEDIA_DETECT_CROP_TIMEOUT */}}
+{{- if .Values.config.worker.media.blackBarRemoval.detectTimeout -}}
+  {{- $_ := set $workerEnv "MEDIA_DETECT_CROP_TIMEOUT" .Values.config.worker.media.blackBarRemoval.detectTimeout -}}
+{{- end -}}
+
+{{/* MEDIA_TRANSCODE_TIMEOUT */}}
+{{- if .Values.config.worker.media.transcode.timeout -}}
+  {{- $_ := set $workerEnv "MEDIA_TRANSCODE_TIMEOUT" .Values.config.worker.media.transcode.timeout -}}
+{{- end -}}
+
+{{/* MEDIA_H265_CRF */}}
+{{- if .Values.config.worker.media.transcode.videoQuality -}}
+  {{- $_ := set $workerEnv "MEDIA_H265_CRF" (.Values.config.worker.media.transcode.videoQuality | toString) -}}
+{{- end -}}
+
+{{/* METRICS_ADDR */}}
+{{- if .Values.config.worker.metrics.enabled -}}
+  {{- $_ := set $workerEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
+{{- end -}}
+
+{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
+{{- if .Values.config.metrics.otel.endpoint -}}
+  {{- $_ := set $workerEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.metrics.otel.endpoint -}}
+{{- end -}}
+
+{{/* METRICS_HIGH_CARDINALITY_LABELS */}}
+{{- if .Values.config.metrics.highCardinalityLabels -}}
+  {{- $_ := set $workerEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Probe specs                                                   */}}
+{{/* ============================================================ */}}
+{{- $watcherLivenessSpec  := dict "httpGet" (dict "path" "/healthz" "port" $watcherHealthPort) "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
+{{- $watcherReadinessSpec := dict "httpGet" (dict "path" "/readyz"  "port" $watcherHealthPort) "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
+{{- $workerLivenessSpec   := dict "httpGet" (dict "path" "/healthz" "port" $workerHealthPort)  "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
+{{- $workerReadinessSpec  := dict "httpGet" (dict "path" "/readyz"  "port" $workerHealthPort)  "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
+
+{{- $watcherProbes := dict
+  "liveness"  (dict "enabled" true "custom" true "spec" $watcherLivenessSpec)
+  "readiness" (dict "enabled" true "custom" true "spec" $watcherReadinessSpec)
+-}}
+{{- $workerProbes := dict
+  "liveness"  (dict "enabled" true "custom" true "spec" $workerLivenessSpec)
+  "readiness" (dict "enabled" true "custom" true "spec" $workerReadinessSpec)
+-}}
+
+{{/* ============================================================ */}}
+{{/* Computed controllers                                          */}}
+{{/* ============================================================ */}}
+{{- $watcherController := dict
+  "containers" (dict
+    "watcher" (dict
+      "image"  (dict "repository" "ghcr.io/soliddowant/watcher" "tag" $watcherTag)
+      "args"   (list "--config" (printf "%s/watcher.yaml" $configMountPath))
+      "env"    $watcherEnv
+      "probes" $watcherProbes
+    )
+  )
+-}}
+
+{{- $workerController := dict
+  "containers" (dict
+    "worker" (dict
+      "image"  (dict "repository" "ghcr.io/soliddowant/worker" "tag" $workerTag)
+      "env"    $workerEnv
+      "probes" $workerProbes
+    )
+  )
+-}}
+
+{{/* ============================================================ */}}
+{{/* Computed persistence                                          */}}
+{{/* ============================================================ */}}
+{{- $computedPersistence := dict -}}
+
+{{/* Input volume (RO in watcher, RW in worker) */}}
+{{- $inputVolBase := omit .Values.config.inputVolume "subPath" -}}
+{{- if $inputVolBase -}}
+  {{- $watcherMount := dict "path" $inputMountPath "readOnly" true -}}
+  {{- $workerMount  := dict "path" $inputMountPath -}}
+  {{- if .Values.config.inputVolume.subPath -}}
+    {{- $watcherMount = dict "path" $inputMountPath "readOnly" true "subPath" .Values.config.inputVolume.subPath -}}
+    {{- $workerMount  = dict "path" $inputMountPath "subPath"  .Values.config.inputVolume.subPath -}}
+  {{- end -}}
+  {{- $_ := set $inputVolBase "advancedMounts" (dict
+    "watcher" (dict "watcher" (list $watcherMount))
+    "worker"  (dict "worker"  (list $workerMount))
+  ) -}}
+  {{- $_ := set $computedPersistence "input" $inputVolBase -}}
+{{- end -}}
+
+{{/* Output volume (worker only) */}}
+{{- $outputVolBase := omit .Values.config.worker.media.output.volume "subPath" -}}
+{{- if $outputVolBase -}}
+  {{- $outputMount := dict "path" $outputMountPath -}}
+  {{- if .Values.config.worker.media.output.volume.subPath -}}
+    {{- $outputMount = dict "path" $outputMountPath "subPath" .Values.config.worker.media.output.volume.subPath -}}
+  {{- end -}}
+  {{- $_ := set $outputVolBase "advancedMounts" (dict
+    "worker" (dict "worker" (list $outputMount))
+  ) -}}
+  {{- $_ := set $computedPersistence "output" $outputVolBase -}}
+{{- end -}}
+
+{{/* Hardware device hostPath (conditional) */}}
+{{- if and .Values.config.worker.media.hardware.devicePath .Values.config.worker.media.hardware.mountHostDevice -}}
+  {{- $hwMount := dict "path" .Values.config.worker.media.hardware.devicePath -}}
+  {{- $_ := set $computedPersistence "hardware-device" (dict
+    "type"     "hostPath"
+    "hostPath" .Values.config.worker.media.hardware.devicePath
+    "advancedMounts" (dict "worker" (dict "worker" (list $hwMount)))
+  ) -}}
+{{- end -}}
+
+{{/* Watcher config ConfigMap / Secret + persistence */}}
+{{- $watcherConfigContent := dict "cronSchedule" .Values.config.watcher.schedule "watches" .Values.config.watcher.watches -}}
+{{- $watcherConfigYaml := toYaml $watcherConfigContent -}}
+
+{{- $watcherConfigMount := dict "path" $configMountPath "readOnly" true -}}
+{{- $watcherConfigPersistenceBase := dict
+  "advancedMounts" (dict "watcher" (dict "watcher" (list $watcherConfigMount)))
+-}}
+
+{{- $computedConfigMaps := dict -}}
+{{- $computedSecrets    := dict -}}
+
+{{- if eq .Values.config.watcher.configType "Secret" -}}
+  {{- $_ := set $computedSecrets "watcher-config" (dict "stringData" (dict "watcher.yaml" $watcherConfigYaml)) -}}
+  {{- $configPersistence := mustMergeOverwrite (dict "type" "secret" "identifier" "watcher-config") $watcherConfigPersistenceBase -}}
+  {{- $_ := set $computedPersistence "watcher-config" $configPersistence -}}
+{{- else if eq .Values.config.watcher.configType "ConfigMap" -}}
+  {{- $_ := set $computedConfigMaps "watcher-config" (dict "data" (dict "watcher.yaml" $watcherConfigYaml)) -}}
+  {{- $configPersistence := mustMergeOverwrite (dict "type" "configMap" "identifier" "watcher-config") $watcherConfigPersistenceBase -}}
+  {{- $_ := set $computedPersistence "watcher-config" $configPersistence -}}
+{{- else -}}
+  {{- fail (printf "config.watcher.configType must be ConfigMap or Secret, got %q" .Values.config.watcher.configType) -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Build computed resources dict                                 */}}
+{{/* ============================================================ */}}
+{{- $computedResources := dict
+  "controllers" (dict "watcher" $watcherController "worker" $workerController)
+  "persistence" $computedPersistence
+-}}
+{{- if $computedConfigMaps -}}
+  {{- $_ := set $computedResources "configMaps" $computedConfigMaps -}}
+{{- end -}}
+{{- if $computedSecrets -}}
+  {{- $_ := set $computedResources "secrets" $computedSecrets -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Deep-merge user resources over computed defaults             */}}
+{{/* ============================================================ */}}
+{{- $mergedResources := mustMergeOverwrite $computedResources (mustDeepCopy .Values.resources) -}}
+
+{{/* Re-apply image tag defaults in case user left tags as empty string */}}
+{{- $wc := index $mergedResources "controllers" "watcher" "containers" "watcher" -}}
+{{- if not (index $wc "image" "tag") -}}
+  {{- $_ := set (index $wc "image") "tag" .Chart.AppVersion -}}
+{{- end -}}
+{{- $wkc := index $mergedResources "controllers" "worker" "containers" "worker" -}}
+{{- if not (index $wkc "image" "tag") -}}
+  {{- $_ := set (index $wkc "image") "tag" .Chart.AppVersion -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Inject into .Values; strip chart-specific keys               */}}
+{{/* ============================================================ */}}
+{{- $mergedValues := mustDeepCopy .Values -}}
+{{- $mergedValues = omit $mergedValues "config" "resources" -}}
+{{- $mergedValues = mustMergeOverwrite $mergedValues $mergedResources -}}
+{{- $_ := set . "Values" $mergedValues -}}
+
+{{/* Hand off to the bjw-s common library */}}
+{{- include "bjw-s.common.loader.all" . }}

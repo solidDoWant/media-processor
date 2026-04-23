@@ -85,6 +85,10 @@ See [docs/configuration.md](docs/configuration.md) for all variables including o
 
 Both binaries support Prometheus pull and OTLP push metrics. See [docs/metrics.md](docs/metrics.md).
 
+## Kubernetes deployment
+
+A Helm chart is available for deploying the watcher and worker to Kubernetes. See [docs/helm.md](docs/helm.md) for installation instructions, a full values reference, and a worked example.
+
 ## Hardware acceleration
 
 NVIDIA NVENC, Intel QSV, and VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
