@@ -1,10 +1,14 @@
 package steps
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +16,41 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
+
+// recordingHandler is a slog.Handler that captures log records for inspection in tests.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r)
+
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *recordingHandler) progressRecords() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var out []slog.Record
+
+	for _, record := range h.records {
+		if record.Message == "transcode progress" {
+			out = append(out, record)
+		}
+	}
+
+	return out
+}
 
 // mkvOutputName returns the expected output filename for a given input path:
 // the input stem with ".mkv" extension.
@@ -673,4 +712,74 @@ func TestRunTranscode_WatcherRoot_InputOutsideWatcherRootReturnsError(t *testing
 	entries, readErr := os.ReadDir(outputDir)
 	require.NoError(t, readErr)
 	assert.Empty(t, entries, "no output files or subdirs should be created when input is outside watcherRoot")
+}
+
+// progressProbe returns a minimal ProbeOutput suitable for progress logging tests.
+func progressProbe() ProbeOutput {
+	return ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "mov,mp4,m4a,3gp,3g2,mj2",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+}
+
+// withRecordingLogger replaces the default slog logger for the duration of the test
+// and returns the recording handler. The original logger is restored by t.Cleanup.
+func withRecordingLogger(t *testing.T) *recordingHandler {
+	t.Helper()
+
+	handler := &recordingHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	return handler
+}
+
+func TestRunTranscode_ProgressLogging_EmitsLinesAtInterval(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, 50*time.Millisecond, nil)
+	require.NoError(t, err)
+
+	records := handler.progressRecords()
+	require.NotEmpty(t, records, "expected at least one progress log line with a 50ms interval")
+
+	first := records[0]
+	keys := map[string]struct{}{}
+
+	first.Attrs(func(a slog.Attr) bool {
+		keys[a.Key] = struct{}{}
+		return true
+	})
+
+	assert.Contains(t, keys, "percent_complete")
+	assert.Contains(t, keys, "elapsed")
+	assert.Contains(t, keys, "frames_processed")
+	assert.Contains(t, keys, "fps")
+}
+
+func TestRunTranscode_ProgressLogging_NoLinesWhenDisabled(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, 0, nil)
+	require.NoError(t, err)
+
+	assert.Empty(t, handler.progressRecords(), "expected no progress log lines when interval is zero")
+}
+
+func TestRunTranscode_ProgressLogging_FinalLineEmittedOnCompletion(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	// Interval longer than the transcode so no tick fires; the final log on done must appear.
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, time.Hour, nil)
+	require.NoError(t, err)
+
+	// The goroutine emits its final log after RunTranscode returns; poll briefly for it.
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 0 },
+		time.Second, time.Millisecond,
+		"expected one final progress log line even when no tick fired during the transcode",
+	)
 }
