@@ -135,11 +135,13 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	hardwareDevicePath := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
+
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
 		WebhookURL:            webhookClient.URL,
-		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
+		HardwareDevicePath:    hardwareDevicePath,
 		MeterProvider:         metricsProvider.MeterProvider(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 		MinCropX:              minCropX,
@@ -160,11 +162,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
-	startupAttrs := []any{slog.String("output_dir", mediaOutputDir)}
-	if hwDevice := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"); hwDevice != "" {
-		startupAttrs = append(startupAttrs, slog.String("hardware_device", hwDevice))
-	}
-	slog.Info("connected to Hatchet, starting worker", startupAttrs...)
+	slog.InfoContext(ctx, "connected to Hatchet, starting worker", slog.String("output_dir", mediaOutputDir))
 
 	healthServer.SetReady()
 

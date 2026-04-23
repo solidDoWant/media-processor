@@ -349,9 +349,9 @@ func NewMediaWorkflow(
 func logStepResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {
 	if err != nil {
 		slog.ErrorContext(ctx, "step failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
-	} else {
-		slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
+		return
 	}
+	slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
 }
 
 // getArrLibrary returns the LibraryClient corresponding to mediaType, using

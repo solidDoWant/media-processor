@@ -191,9 +191,9 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 		videoCodec = ffmpeg.CodecH265
 	}
 
-	slog.DebugContext(ctx, "encoder selected",
+	slog.DebugContext(ctx, "video codec selected",
 		slog.String("video_codec", codecName(videoCodec)),
-		slog.Bool("hardware_accel_configured", hardwareDevicePath != ""),
+		slog.Bool("hardware_device_configured", hardwareDevicePath != ""),
 	)
 
 	audioExclude := nonEnglishAudioIndices(probe.AudioStreams)
