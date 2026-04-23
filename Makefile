@@ -32,12 +32,16 @@ update-dependencies: ## Update Go module dependencies and sync Hatchet Docker im
 	sed -i "s|ghcr\.io/hatchet-dev/hatchet/\([^:]*\):v[0-9][0-9.]*|ghcr.io/hatchet-dev/hatchet/\1:$${HATCHET_VERSION}|g" \
 		docker-compose.yml \
 		e2e/docker-compose.yml
-	@FAKE="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; \
-	sed -i "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$$FAKE\"|g" flake.nix; \
-	NEW_HASH=$$(nix build .#watcher-bin 2>&1 | awk '/got:/{print $$NF}' | head -1); \
-	[ -n "$$NEW_HASH" ] || { echo "error: could not determine new vendorHash; restore flake.nix from git" >&2; exit 1; }; \
-	sed -i "s|vendorHash = \"$$FAKE\"|vendorHash = \"$$NEW_HASH\"|g" flake.nix; \
-	echo "Updated nix vendorHash to $$NEW_HASH"
+	@update_vendor_hash() { \
+	    var=$${1}VendorHash fake="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; \
+	    sed -i "s|$$var[[:space:]]*=[[:space:]]*\"sha256-[^\"]*\"|$$var = \"$$fake\"|" flake.nix; \
+	    hash=$$(nix build .#$${1}-bin 2>&1 | awk '/got:/{print $$NF}' | head -1) || true; \
+	    [ -n "$$hash" ] || { echo "error: could not determine $$var; restore flake.nix from git" >&2; return 1; }; \
+	    sed -i "s|$$var = \"$$fake\"|$$var = \"$$hash\"|" flake.nix; \
+	    echo "Updated $$var to $$hash"; \
+	}; \
+	update_vendor_hash watcher; \
+	update_vendor_hash worker
 
 # Detect hardware encoders via ffmpeg CLI — independent of our DetectHardwareEncoders() logic.
 # This ensures hardware-specific build tags are set even if our detection has bugs, allowing

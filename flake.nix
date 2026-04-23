@@ -119,10 +119,13 @@
             ));
         };
 
+        watcherVendorHash = "sha256-xJuiqnbIaMTAQ4QquSmW7R/5XLxdeIL1wq90FO0Paa8=";
+        workerVendorHash = "sha256-xJuiqnbIaMTAQ4QquSmW7R/5XLxdeIL1wq90FO0Paa8=";
+
         watcher-bin = pkgs.buildGoModule {
           name = "watcher";
           src = goSrc;
-          vendorHash = "sha256-Hu+1P6uzQYbaApF0laZQadvhJ9t7FbZHlv8anZ91z3s=";
+          vendorHash = watcherVendorHash;
           subPackages = [ "cmd/watcher" ];
           ldflags = [ "-s" "-w" ];
           env.CGO_ENABLED = "0";
@@ -131,7 +134,7 @@
         worker-bin = pkgs.buildGoModule {
           name = "worker";
           src = goSrc;
-          vendorHash = "sha256-Hu+1P6uzQYbaApF0laZQadvhJ9t7FbZHlv8anZ91z3s=";
+          vendorHash = workerVendorHash;
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ libav-minimal.dev ];
           subPackages = [ "cmd/worker" ];
