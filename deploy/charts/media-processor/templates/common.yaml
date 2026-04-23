@@ -16,13 +16,34 @@
 {{- $workerTag  := (.Values.resources | dig "controllers" "worker"  "containers" "worker"  "image" "tag" "") | default .Chart.AppVersion -}}
 
 {{/* ============================================================ */}}
+{{/* Credential secretKeyRef validation                           */}}
+{{/* ============================================================ */}}
+{{- $hatchetSecretName := .Values.config.hatchetToken.secretKeyRef.name | default "" -}}
+{{- $hatchetSecretKey  := .Values.config.hatchetToken.secretKeyRef.key  | default "" -}}
+{{- if or (and $hatchetSecretName (not $hatchetSecretKey)) (and $hatchetSecretKey (not $hatchetSecretName)) -}}
+  {{- fail "config.hatchetToken.secretKeyRef.name and config.hatchetToken.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
+
+{{- $radarrSecretName := .Values.config.worker.radarr.apiKey.secretKeyRef.name | default "" -}}
+{{- $radarrSecretKey  := .Values.config.worker.radarr.apiKey.secretKeyRef.key  | default "" -}}
+{{- if or (and $radarrSecretName (not $radarrSecretKey)) (and $radarrSecretKey (not $radarrSecretName)) -}}
+  {{- fail "config.worker.radarr.apiKey.secretKeyRef.name and config.worker.radarr.apiKey.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
+
+{{- $sonarrSecretName := .Values.config.worker.sonarr.apiKey.secretKeyRef.name | default "" -}}
+{{- $sonarrSecretKey  := .Values.config.worker.sonarr.apiKey.secretKeyRef.key  | default "" -}}
+{{- if or (and $sonarrSecretName (not $sonarrSecretKey)) (and $sonarrSecretKey (not $sonarrSecretName)) -}}
+  {{- fail "config.worker.sonarr.apiKey.secretKeyRef.name and config.worker.sonarr.apiKey.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
 {{/* Watcher env vars                                             */}}
 {{/* ============================================================ */}}
 {{- $watcherEnv := dict -}}
 
 {{/* HATCHET_CLIENT_TOKEN */}}
-{{- if .Values.config.hatchetToken.secretKeyRef.name -}}
-  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.hatchetToken.secretKeyRef.name "key" .Values.config.hatchetToken.secretKeyRef.key))) -}}
+{{- if $hatchetSecretName -}}
+  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
 {{- else if .Values.config.hatchetToken.value -}}
   {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
 {{- end -}}
@@ -51,8 +72,8 @@
 {{- $workerEnv := dict -}}
 
 {{/* HATCHET_CLIENT_TOKEN */}}
-{{- if .Values.config.hatchetToken.secretKeyRef.name -}}
-  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.hatchetToken.secretKeyRef.name "key" .Values.config.hatchetToken.secretKeyRef.key))) -}}
+{{- if $hatchetSecretName -}}
+  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
 {{- else if .Values.config.hatchetToken.value -}}
   {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
 {{- end -}}
@@ -94,8 +115,8 @@
 {{- end -}}
 
 {{/* RADARR_API_KEY */}}
-{{- if .Values.config.worker.radarr.apiKey.secretKeyRef.name -}}
-  {{- $_ := set $workerEnv "RADARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.worker.radarr.apiKey.secretKeyRef.name "key" .Values.config.worker.radarr.apiKey.secretKeyRef.key))) -}}
+{{- if $radarrSecretName -}}
+  {{- $_ := set $workerEnv "RADARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $radarrSecretName "key" $radarrSecretKey))) -}}
 {{- else if .Values.config.worker.radarr.apiKey.value -}}
   {{- $_ := set $workerEnv "RADARR_API_KEY" .Values.config.worker.radarr.apiKey.value -}}
 {{- end -}}
@@ -106,8 +127,8 @@
 {{- end -}}
 
 {{/* SONARR_API_KEY */}}
-{{- if .Values.config.worker.sonarr.apiKey.secretKeyRef.name -}}
-  {{- $_ := set $workerEnv "SONARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.config.worker.sonarr.apiKey.secretKeyRef.name "key" .Values.config.worker.sonarr.apiKey.secretKeyRef.key))) -}}
+{{- if $sonarrSecretName -}}
+  {{- $_ := set $workerEnv "SONARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $sonarrSecretName "key" $sonarrSecretKey))) -}}
 {{- else if .Values.config.worker.sonarr.apiKey.value -}}
   {{- $_ := set $workerEnv "SONARR_API_KEY" .Values.config.worker.sonarr.apiKey.value -}}
 {{- end -}}
