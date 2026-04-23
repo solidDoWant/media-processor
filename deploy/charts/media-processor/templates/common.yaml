@@ -2,18 +2,18 @@
 {{/* ============================================================ */}}
 {{/* Hard-coded chart internals (not exposed in values)           */}}
 {{/* ============================================================ */}}
-{{- $inputMountPath   := "/media/input" -}}
-{{- $outputMountPath  := "/media/output" -}}
-{{- $configMountPath  := "/etc/media-processor" -}}
-{{- $watcherHealthPort := 8081 -}}
-{{- $workerHealthPort  := 8080 -}}
-{{- $metricsPort       := 9090 -}}
+{{- $inputMountPath  := "/media/input" -}}
+{{- $outputMountPath := "/media/output" -}}
+{{- $configMountPath := "/etc/media-processor" -}}
+{{- $metricsPort     := 9090 -}}
 
 {{/* ============================================================ */}}
-{{/* Image tag defaults: use AppVersion when tag is empty         */}}
+{{/* Image tag: evaluate tpl strings (e.g. {{ .Chart.AppVersion }}) */}}
 {{/* ============================================================ */}}
-{{- $watcherTag := (.Values.resources | dig "controllers" "watcher" "containers" "watcher" "image" "tag" "") | default .Chart.AppVersion -}}
-{{- $workerTag  := (.Values.resources | dig "controllers" "worker"  "containers" "worker"  "image" "tag" "") | default .Chart.AppVersion -}}
+{{- $wc := index .Values "resources" "controllers" "watcher" "containers" "watcher" -}}
+{{- $_ := set (index $wc "image") "tag" (tpl ((index $wc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
+{{- $wkc := index .Values "resources" "controllers" "worker" "containers" "worker" -}}
+{{- $_ := set (index $wkc "image") "tag" (tpl ((index $wkc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
 
 {{/* ============================================================ */}}
 {{/* Credential secretKeyRef validation                           */}}
@@ -168,47 +168,6 @@
 {{- end -}}
 
 {{/* ============================================================ */}}
-{{/* Probe specs                                                   */}}
-{{/* ============================================================ */}}
-{{- $watcherLivenessSpec  := dict "httpGet" (dict "path" "/healthz" "port" $watcherHealthPort) "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
-{{- $watcherReadinessSpec := dict "httpGet" (dict "path" "/readyz"  "port" $watcherHealthPort) "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
-{{- $workerLivenessSpec   := dict "httpGet" (dict "path" "/healthz" "port" $workerHealthPort)  "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
-{{- $workerReadinessSpec  := dict "httpGet" (dict "path" "/readyz"  "port" $workerHealthPort)  "initialDelaySeconds" 0 "periodSeconds" 10 "failureThreshold" 3 -}}
-
-{{- $watcherProbes := dict
-  "liveness"  (dict "enabled" true "custom" true "spec" $watcherLivenessSpec)
-  "readiness" (dict "enabled" true "custom" true "spec" $watcherReadinessSpec)
--}}
-{{- $workerProbes := dict
-  "liveness"  (dict "enabled" true "custom" true "spec" $workerLivenessSpec)
-  "readiness" (dict "enabled" true "custom" true "spec" $workerReadinessSpec)
--}}
-
-{{/* ============================================================ */}}
-{{/* Computed controllers                                          */}}
-{{/* ============================================================ */}}
-{{- $watcherController := dict
-  "containers" (dict
-    "watcher" (dict
-      "image"  (dict "repository" "ghcr.io/soliddowant/watcher" "tag" $watcherTag)
-      "args"   (list "--config" (printf "%s/watcher.yaml" $configMountPath))
-      "env"    $watcherEnv
-      "probes" $watcherProbes
-    )
-  )
--}}
-
-{{- $workerController := dict
-  "containers" (dict
-    "worker" (dict
-      "image"  (dict "repository" "ghcr.io/soliddowant/worker" "tag" $workerTag)
-      "env"    $workerEnv
-      "probes" $workerProbes
-    )
-  )
--}}
-
-{{/* ============================================================ */}}
 {{/* Computed persistence                                          */}}
 {{/* ============================================================ */}}
 {{- $computedPersistence := dict -}}
@@ -277,33 +236,26 @@
 {{- end -}}
 
 {{/* ============================================================ */}}
-{{/* Build computed resources dict                                 */}}
+{{/* Build computed additions (env + persistence only)            */}}
 {{/* ============================================================ */}}
-{{- $computedResources := dict
-  "controllers" (dict "watcher" $watcherController "worker" $workerController)
+{{- $computedAdditions := dict
+  "controllers" (dict
+    "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv)))
+    "worker"  (dict "containers" (dict "worker"  (dict "env" $workerEnv)))
+  )
   "persistence" $computedPersistence
 -}}
 {{- if $computedConfigMaps -}}
-  {{- $_ := set $computedResources "configMaps" $computedConfigMaps -}}
+  {{- $_ := set $computedAdditions "configMaps" $computedConfigMaps -}}
 {{- end -}}
 {{- if $computedSecrets -}}
-  {{- $_ := set $computedResources "secrets" $computedSecrets -}}
+  {{- $_ := set $computedAdditions "secrets" $computedSecrets -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
-{{/* Deep-merge user resources over computed defaults             */}}
+{{/* Deep-merge user resources over computed additions            */}}
 {{/* ============================================================ */}}
-{{- $mergedResources := mustMergeOverwrite $computedResources (mustDeepCopy .Values.resources) -}}
-
-{{/* Re-apply image tag defaults in case user left tags as empty string */}}
-{{- $wc := index $mergedResources "controllers" "watcher" "containers" "watcher" -}}
-{{- if not (index $wc "image" "tag") -}}
-  {{- $_ := set (index $wc "image") "tag" .Chart.AppVersion -}}
-{{- end -}}
-{{- $wkc := index $mergedResources "controllers" "worker" "containers" "worker" -}}
-{{- if not (index $wkc "image" "tag") -}}
-  {{- $_ := set (index $wkc "image") "tag" .Chart.AppVersion -}}
-{{- end -}}
+{{- $mergedResources := mustMergeOverwrite $computedAdditions (mustDeepCopy .Values.resources) -}}
 
 {{/* ============================================================ */}}
 {{/* Inject into .Values; strip chart-specific keys               */}}

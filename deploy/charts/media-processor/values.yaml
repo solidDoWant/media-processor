@@ -74,8 +74,8 @@ config:
           name: ""
           key: ""
 
-# resources follows the bjw-s app-template schema. Values here are deep-merged with the
-# chart-computed resources; user-supplied values take precedence.
+# resources follows the bjw-s app-template schema. Values here are deep-merged over the
+# chart-computed env vars and persistence; user-supplied values take precedence.
 resources:
   controllers:
     watcher:
@@ -83,10 +83,55 @@ resources:
         watcher:
           image:
             repository: ghcr.io/soliddowant/watcher
-            tag: ""
+            tag: "{{ .Chart.AppVersion }}"
+          args:
+            - --config
+            - /etc/media-processor/watcher.yaml
+          probes:
+            liveness:
+              enabled: true
+              custom: true
+              spec:
+                httpGet:
+                  path: /healthz
+                  port: 8081
+                initialDelaySeconds: 0
+                periodSeconds: 10
+                failureThreshold: 3
+            readiness:
+              enabled: true
+              custom: true
+              spec:
+                httpGet:
+                  path: /readyz
+                  port: 8081
+                initialDelaySeconds: 0
+                periodSeconds: 10
+                failureThreshold: 3
     worker:
       containers:
         worker:
           image:
             repository: ghcr.io/soliddowant/worker
-            tag: ""
+            tag: "{{ .Chart.AppVersion }}"
+          probes:
+            liveness:
+              enabled: true
+              custom: true
+              spec:
+                httpGet:
+                  path: /healthz
+                  port: 8080
+                initialDelaySeconds: 0
+                periodSeconds: 10
+                failureThreshold: 3
+            readiness:
+              enabled: true
+              custom: true
+              spec:
+                httpGet:
+                  path: /readyz
+                  port: 8080
+                initialDelaySeconds: 0
+                periodSeconds: 10
+                failureThreshold: 3
