@@ -789,3 +789,40 @@ func TestRunTranscode_ProgressLogging_FinalLineEmittedOnCompletion(t *testing.T)
 		"expected one final progress log line even when no tick fired during the transcode",
 	)
 }
+
+func TestRunTranscode_ProgressLogging_CopyPathReports100Percent(t *testing.T) {
+	handler := withRecordingLogger(t)
+
+	// H.264 in MKV causes SelectVideoCodec to return CodecCopy: no re-encode, so ffmpeg
+	// never sends progress updates. The final log must still report 100% completion.
+	copyProbe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "matroska,webm",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), copyProbe, nil, t.TempDir(), "", "", 0, time.Hour, nil)
+	require.NoError(t, err)
+
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 0 },
+		time.Second, time.Millisecond,
+		"expected a final progress log line on copy/remux path",
+	)
+
+	records := handler.progressRecords()
+	require.Len(t, records, 1, "expected exactly one log line on copy/remux path (final only, no ticks)")
+
+	var percentComplete float64
+
+	records[0].Attrs(func(a slog.Attr) bool {
+		if a.Key == "percent_complete" {
+			percentComplete = a.Value.Float64()
+		}
+
+		return true
+	})
+
+	assert.InDelta(t, 100.0, percentComplete, 0.001, "copy/remux final log must report 100%% completion")
+}
