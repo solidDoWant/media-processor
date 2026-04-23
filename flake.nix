@@ -187,6 +187,7 @@
             pkgs.gh
             pkgs.dive
             pkgs.nix-prefetch
+            pkgs.kubernetes-helm
           ];
           buildInputs = [
             pkgs.ffmpeg-full.dev
