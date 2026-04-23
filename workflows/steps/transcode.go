@@ -344,6 +344,8 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 
 	var progressCh chan ffmpeg.Progress
 
+	var transcodeSucceeded bool
+
 	if progressLogInterval > 0 {
 		progressCh = make(chan ffmpeg.Progress, 64)
 
@@ -363,11 +365,15 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 
 			logProgress := func() {
 				now := time.Now()
-				interval := now.Sub(lastLogTime)
 
 				var fps float64
-				if interval > 0 {
-					fps = float64(latest.FramesProcessed-lastLogFrames) / interval.Seconds()
+
+				if !lastLogTime.IsZero() {
+					interval := now.Sub(lastLogTime)
+
+					if interval > 0 {
+						fps = float64(latest.FramesProcessed-lastLogFrames) / interval.Seconds()
+					}
 				}
 
 				lastLogFrames = latest.FramesProcessed
@@ -395,7 +401,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 						logProgress()
 					}
 				case <-done:
-					logProgress()
+					if transcodeSucceeded {
+						logProgress()
+					}
+
 					return
 				}
 			}
@@ -468,6 +477,8 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 	if err != nil {
 		return TranscodeOutput{}, fmt.Errorf("stat output file: %w", err)
 	}
+
+	transcodeSucceeded = true
 
 	return TranscodeOutput{
 		DestCodec:                codecName(videoCodec),

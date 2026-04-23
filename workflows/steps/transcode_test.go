@@ -29,7 +29,7 @@ func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.records = append(h.records, r)
+	h.records = append(h.records, r.Clone())
 
 	return nil
 }
@@ -743,8 +743,14 @@ func TestRunTranscode_ProgressLogging_EmitsLinesAtInterval(t *testing.T) {
 	_, err := RunTranscode(t.Context(), copyTestVideo(t), progressProbe(), nil, t.TempDir(), "", "", 0, 50*time.Millisecond, nil)
 	require.NoError(t, err)
 
+	assert.Eventually(t,
+		func() bool { return len(handler.progressRecords()) > 1 },
+		time.Second, time.Millisecond,
+		"expected multiple progress log lines with a 50ms interval, not just the final completion log",
+	)
+
 	records := handler.progressRecords()
-	require.NotEmpty(t, records, "expected at least one progress log line with a 50ms interval")
+	require.NotEmpty(t, records)
 
 	first := records[0]
 	keys := map[string]struct{}{}
