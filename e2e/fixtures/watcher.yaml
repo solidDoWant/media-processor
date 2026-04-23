@@ -9,3 +9,9 @@ watches:
     mediaType: show
     ignorePatterns:
       - \.tmp$
+  - name: preserve-source
+    path: /tmp/e2e-media-processor/downloads/preserve-source
+    mediaType: movie
+    preserveSource: true
+    ignorePatterns:
+      - \.tmp$

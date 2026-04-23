@@ -403,6 +403,7 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 				case <-done:
 					if transcodeSucceeded {
 						latest.PercentComplete = 100
+
 						logProgress()
 					}
 

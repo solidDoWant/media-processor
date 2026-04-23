@@ -9,6 +9,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteSentinel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		fileName     string
+		wantSentinel string
+	}{
+		{
+			name:         "standard file name",
+			fileName:     "movie.mkv",
+			wantSentinel: ".movie.mkv.done",
+		},
+		{
+			name:         "file without extension",
+			fileName:     "movie",
+			wantSentinel: ".movie.done",
+		},
+		{
+			name:         "file with multiple dots",
+			fileName:     "movie.2024.mkv",
+			wantSentinel: ".movie.2024.mkv.done",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			filePath := filepath.Join(dir, tt.fileName)
+			expectedSentinel := filepath.Join(dir, tt.wantSentinel)
+
+			require.NoError(t, WriteSentinel(filePath))
+
+			_, statErr := os.Stat(expectedSentinel)
+			assert.NoError(t, statErr, "sentinel file should exist at %s", expectedSentinel)
+		})
+	}
+}
+
+func TestWriteSentinel_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "movie.mkv")
+
+	require.NoError(t, WriteSentinel(filePath))
+	require.NoError(t, WriteSentinel(filePath), "second call should not error")
+
+	_, statErr := os.Stat(filepath.Join(dir, ".movie.mkv.done"))
+	assert.NoError(t, statErr, "sentinel should still exist after second write")
+}
+
 func TestRunCleanup(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -47,6 +47,7 @@ func RunDetectCrop(ctx context.Context, filePath string, inputW, inputH, minCrop
 	if result == nil {
 		logAttrs = append(logAttrs, slog.String("skip_reason", "below pixel threshold"))
 	}
+
 	slog.DebugContext(ctx, "crop detection complete", logAttrs...)
 
 	return result, nil

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hatchet-dev/hatchet/pkg/client/types"
@@ -241,7 +242,20 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
+			// Skip sentinel files (hidden .BASENAME.done markers).
+			base := filepath.Base(path)
+			if strings.HasPrefix(base, ".") && strings.HasSuffix(base, ".done") {
+				return nil
+			}
+
+			// Skip files whose processing sentinel already exists on disk.
+			sentinelPath := filepath.Join(filepath.Dir(path), "."+base+".done")
+			if _, statErr := os.Stat(sentinelPath); statErr == nil {
+				return nil
+			}
+
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
+
 			filesDiscovered++
 
 			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
@@ -250,7 +264,9 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			} else {
 				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
+
 				jobsSubmitted++
+
 				slog.InfoContext(ctx, "dispatched workflow", slog.String("file", path), slog.String("watch", w.Name))
 			}
 
