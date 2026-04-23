@@ -773,3 +773,54 @@ func TestScan_RetainEmptyDirsForwardedToDispatch(t *testing.T) {
 		})
 	}
 }
+
+// TestScan_SkipsSentinelledFile verifies that a file is not dispatched when its
+// corresponding sentinel (.BASENAME.done) already exists in the same directory.
+func TestScan_SkipsSentinelledFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".movie.mkv.done"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+		},
+	}
+
+	var dispatched []string
+
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+		dispatched = append(dispatched, fp)
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	assert.Empty(t, dispatched, "file with sentinel should not be dispatched")
+}
+
+// TestScan_SkipsSentinelFileItself verifies that a hidden .BASENAME.done sentinel file
+// is not dispatched as a media file even when no ignore patterns are configured.
+func TestScan_SkipsSentinelFileItself(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".movie.mkv.done"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+		},
+	}
+
+	var dispatched []string
+
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+		dispatched = append(dispatched, fp)
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	assert.Empty(t, dispatched, "sentinel file itself should not be dispatched")
+}

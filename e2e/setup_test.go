@@ -22,6 +22,7 @@ func resetDirs() error {
 	for _, dir := range []string{
 		filepath.Join(downloadsDir, "radarr"),
 		filepath.Join(downloadsDir, "sonarr"),
+		filepath.Join(downloadsDir, "preserve-source"),
 		filepath.Join(processedDir, "radarr"),
 		filepath.Join(processedDir, "radarr-library"),
 		filepath.Join(processedDir, "sonarr"),

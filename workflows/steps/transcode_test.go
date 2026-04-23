@@ -731,6 +731,7 @@ func withRecordingLogger(t *testing.T) *recordingHandler {
 
 	handler := &recordingHandler{}
 	orig := slog.Default()
+
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 

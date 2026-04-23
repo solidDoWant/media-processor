@@ -153,10 +153,12 @@ func NewMediaWorkflow(
 	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (steps.ProbeOutput, error) {
 		start := time.Now()
+
 		slog.InfoContext(ctx, "processing file", slog.String("file", input.FilePath))
 
 		out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 		logStepResult(ctx, "probe", input.FilePath, start, err)
+
 		if err != nil {
 			return out, err
 		}
@@ -183,11 +185,13 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			wrappedErr := fmt.Errorf("get probe output: %w", err)
 			logStepResult(ctx, "detectcrop", input.FilePath, start, wrappedErr)
+
 			return steps.DetectCropOutput{}, wrappedErr
 		}
 
 		crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
 		logStepResult(ctx, "detectcrop", input.FilePath, start, err)
+
 		if err != nil {
 			return steps.DetectCropOutput{}, err
 		}
@@ -206,6 +210,7 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			wrappedErr := fmt.Errorf("get probe output: %w", err)
 			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
@@ -213,6 +218,7 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(detectcropTask, &detectcrop); err != nil {
 			wrappedErr := fmt.Errorf("get detectcrop output: %w", err)
 			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
@@ -220,6 +226,7 @@ func NewMediaWorkflow(
 		if err != nil {
 			wrappedErr := fmt.Errorf("get arr library for artwork: %w", err)
 			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
@@ -229,6 +236,7 @@ func NewMediaWorkflow(
 		}
 
 		logStepResult(ctx, "transcode", input.FilePath, start, err)
+
 		return out, err
 	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.TranscodeTimeout))
 
@@ -244,6 +252,7 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
 			wrappedErr := fmt.Errorf("get transcode output: %w", err)
 			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+
 			return struct{}{}, wrappedErr
 		}
 
@@ -263,30 +272,35 @@ func NewMediaWorkflow(
 		if err := library.ImportByFilePath(ctx, importPath); err != nil {
 			wrappedErr := fmt.Errorf("notify library: %w", err)
 			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+
 			return struct{}{}, wrappedErr
 		}
 
 		logStepResult(ctx, "notify", input.FilePath, start, nil)
+
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
-	// cleanup: delete the original source file after successful processing, unless
-	// PreserveSource is set on the originating watch entry.
-	cleanupTask := wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+	// finalize: write a sentinel or delete the source file after successful processing.
+	// When PreserveSource is true, writes a .BASENAME.done sentinel so the watcher
+	// skips the file on subsequent scans. When false, deletes the source file.
+	finalizeTask := wf.NewTask("finalize", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		start := time.Now()
 
+		var err error
 		if input.PreserveSource {
-			logStepResult(ctx, "cleanup", input.FilePath, start, nil)
-			return struct{}{}, nil
+			err = steps.WriteSentinel(input.FilePath)
+		} else {
+			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 		}
 
-		err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-		logStepResult(ctx, "cleanup", input.FilePath, start, err)
+		logStepResult(ctx, "finalize", input.FilePath, start, err)
+
 		return struct{}{}, err
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// record_metrics: record per-run OTel observations for valid-media completions.
-	// Runs after cleanup so total_duration_seconds covers the full probe→cleanup span.
+	// Runs after finalize so total_duration_seconds covers the full probe→finalize span.
 	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		start := time.Now()
 
@@ -294,6 +308,7 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
 			wrappedErr := fmt.Errorf("get probe output for metrics: %w", err)
 			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
+
 			return struct{}{}, wrappedErr
 		}
 
@@ -301,6 +316,7 @@ func NewMediaWorkflow(
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
 			wrappedErr := fmt.Errorf("get transcode output for metrics: %w", err)
 			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
+
 			return struct{}{}, wrappedErr
 		}
 
@@ -326,16 +342,28 @@ func NewMediaWorkflow(
 		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
 
 		logStepResult(ctx, "record_metrics", input.FilePath, start, nil)
-		return struct{}{}, nil
-	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, cleanupTask), skipIfInvalid)
 
-	// record_invalid: increment the invalid-files counter when probe determines the file
-	// is not valid media. Skipped when the file is valid (i.e. the inverse of skipIfInvalid).
+		return struct{}{}, nil
+	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, finalizeTask), skipIfInvalid)
+
+	// record_invalid: increment the invalid-files counter and then write a sentinel or
+	// delete the source file when probe determines the file is not valid media.
+	// Skipped when the file is valid (i.e. the inverse of skipIfInvalid).
 	_ = wf.NewTask("record_invalid", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		start := time.Now()
+
 		recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
-		logStepResult(ctx, "record_invalid", input.FilePath, start, nil)
-		return struct{}{}, nil
+
+		var err error
+		if input.PreserveSource {
+			err = steps.WriteSentinel(input.FilePath)
+		} else {
+			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		}
+
+		logStepResult(ctx, "record_invalid", input.FilePath, start, err)
+
+		return struct{}{}, err
 	}, hatchet.WithParents(probeTask),
 		hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == true")))
 
@@ -344,6 +372,7 @@ func NewMediaWorkflow(
 		start := time.Now()
 		err := steps.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
 		logStepResult(ctx, "onfailure", input.FilePath, start, err)
+
 		return struct{}{}, err
 	})
 
@@ -355,6 +384,7 @@ func logStepResult(ctx context.Context, stepName, filePath string, start time.Ti
 		slog.ErrorContext(ctx, "step failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
 		return
 	}
+
 	slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
 }
 

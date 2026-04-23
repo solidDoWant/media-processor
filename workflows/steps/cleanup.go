@@ -9,6 +9,19 @@ import (
 	"path/filepath"
 )
 
+// WriteSentinel creates a zero-byte hidden sentinel file alongside filePath to
+// mark it as processed, preventing the watcher from re-dispatching it.
+// The sentinel path is .BASENAME.done in the same directory (e.g. /dl/movie.mkv
+// → /dl/.movie.mkv.done). The write is idempotent.
+func WriteSentinel(filePath string) error {
+	sentinelPath := filepath.Join(filepath.Dir(filePath), "."+filepath.Base(filePath)+".done")
+	if err := os.WriteFile(sentinelPath, nil, 0o644); err != nil {
+		return fmt.Errorf("write sentinel: %w", err)
+	}
+
+	return nil
+}
+
 // RunCleanup deletes the original source file after successful processing and,
 // unless retainEmptyDirs is true, removes any parent directories that become
 // empty as a result, stopping at watchRoot.
