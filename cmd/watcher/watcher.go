@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -198,7 +199,11 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		successOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusSuccess))
 		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
 
-		var mappingErrs []error
+		var (
+			mappingErrs     []error
+			filesDiscovered int
+			jobsSubmitted   int
+		)
 
 		// Normalise the watch path to an absolute path once per entry so that watchRoot
 		// is always comparable to the absolute file paths produced inside the walk callback.
@@ -237,6 +242,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			}
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
+			filesDiscovered++
 
 			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
@@ -244,6 +250,8 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			} else {
 				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
+				jobsSubmitted++
+				slog.InfoContext(ctx, "dispatched workflow", slog.String("file", path), slog.String("watch", w.Name))
 			}
 
 			return nil
@@ -254,6 +262,12 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			mappingErrs = append(mappingErrs, fmt.Errorf("walk directory %q: %w", w.Path, err))
 		}
+
+		slog.InfoContext(ctx, "scan complete",
+			slog.String("watch", w.Name),
+			slog.Int("files_discovered", filesDiscovered),
+			slog.Int("jobs_submitted", jobsSubmitted),
+		)
 
 		duration := time.Since(start).Seconds()
 		instruments.scanDuration.Record(ctx, duration, mappingOpt)

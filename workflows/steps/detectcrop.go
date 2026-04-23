@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 )
@@ -26,6 +27,7 @@ type DetectCropOutput struct {
 // each axis.
 func RunDetectCrop(ctx context.Context, filePath string, inputW, inputH, minCropX, minCropY int) (*ffmpeg.CropParams, error) {
 	if minCropX == -1 && minCropY == -1 {
+		slog.DebugContext(ctx, "crop detection skipped", slog.String("file", filePath), slog.String("reason", "both axes disabled"))
 		return nil, nil
 	}
 
@@ -34,7 +36,20 @@ func RunDetectCrop(ctx context.Context, filePath string, inputW, inputH, minCrop
 		return nil, err
 	}
 
-	return applyCropThresholds(detected, inputW, inputH, minCropX, minCropY), nil
+	result := applyCropThresholds(detected, inputW, inputH, minCropX, minCropY)
+
+	logAttrs := []any{
+		slog.String("file", filePath),
+		slog.Int("detected_w", detected.W), slog.Int("detected_h", detected.H),
+		slog.Int("detected_x", detected.X), slog.Int("detected_y", detected.Y),
+		slog.Bool("applied", result != nil),
+	}
+	if result == nil {
+		logAttrs = append(logAttrs, slog.String("skip_reason", "below pixel threshold"))
+	}
+	slog.DebugContext(ctx, "crop detection complete", logAttrs...)
+
+	return result, nil
 }
 
 // applyCropThresholds returns a pointer to detected when the crop exceeds the

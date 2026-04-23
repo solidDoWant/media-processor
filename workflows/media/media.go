@@ -3,6 +3,7 @@
 package media
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -148,8 +149,10 @@ func NewMediaWorkflow(
 	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
 	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (steps.ProbeOutput, error) {
 		start := time.Now()
+		slog.InfoContext(ctx, "processing file", slog.String("file", input.FilePath))
 
 		out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		logStepResult(ctx, "probe", input.FilePath, start, err)
 		if err != nil {
 			return out, err
 		}
@@ -170,12 +173,17 @@ func NewMediaWorkflow(
 	// cfg.MinCropX and cfg.MinCropY are passed directly; defaults are applied by the
 	// caller (cmd/worker) via parseCropThreshold before constructing MediaWorkflowConfig.
 	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (steps.DetectCropOutput, error) {
+		start := time.Now()
+
 		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return steps.DetectCropOutput{}, fmt.Errorf("get probe output: %w", err)
+			wrappedErr := fmt.Errorf("get probe output: %w", err)
+			logStepResult(ctx, "detectcrop", input.FilePath, start, wrappedErr)
+			return steps.DetectCropOutput{}, wrappedErr
 		}
 
 		crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
+		logStepResult(ctx, "detectcrop", input.FilePath, start, err)
 		if err != nil {
 			return steps.DetectCropOutput{}, err
 		}
@@ -188,19 +196,27 @@ func NewMediaWorkflow(
 	// directory (rather than the system temp dir) means the rename is always within the
 	// same filesystem, so it is guaranteed to be atomic on Linux.
 	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (steps.TranscodeOutput, error) {
+		start := time.Now()
+
 		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return steps.TranscodeOutput{}, fmt.Errorf("get probe output: %w", err)
+			wrappedErr := fmt.Errorf("get probe output: %w", err)
+			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+			return steps.TranscodeOutput{}, wrappedErr
 		}
 
 		var detectcrop steps.DetectCropOutput
 		if err := ctx.ParentOutput(detectcropTask, &detectcrop); err != nil {
-			return steps.TranscodeOutput{}, fmt.Errorf("get detectcrop output: %w", err)
+			wrappedErr := fmt.Errorf("get detectcrop output: %w", err)
+			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+			return steps.TranscodeOutput{}, wrappedErr
 		}
 
 		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
-			return steps.TranscodeOutput{}, fmt.Errorf("get arr library for artwork: %w", err)
+			wrappedErr := fmt.Errorf("get arr library for artwork: %w", err)
+			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+			return steps.TranscodeOutput{}, wrappedErr
 		}
 
 		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, cfg.H265CRF, library)
@@ -208,6 +224,7 @@ func NewMediaWorkflow(
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
 
+		logStepResult(ctx, "transcode", input.FilePath, start, err)
 		return out, err
 	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.TranscodeTimeout))
 
@@ -217,13 +234,18 @@ func NewMediaWorkflow(
 	// by .mkv, so that the path points to the actual transcoded file as seen by the arr
 	// service (via the LocalPathPrefix/RemotePathPrefix translation in ImportByFilePath).
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		start := time.Now()
+
 		var transcode steps.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
-			return struct{}{}, fmt.Errorf("get transcode output: %w", err)
+			wrappedErr := fmt.Errorf("get transcode output: %w", err)
+			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+			return struct{}{}, wrappedErr
 		}
 
 		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
 		if err != nil {
+			logStepResult(ctx, "notify", input.FilePath, start, err)
 			return struct{}{}, err
 		}
 
@@ -235,33 +257,47 @@ func NewMediaWorkflow(
 		importPath := filepath.Join(filepath.Dir(input.FilePath), mkvBase)
 
 		if err := library.ImportByFilePath(ctx, importPath); err != nil {
-			return struct{}{}, fmt.Errorf("notify library: %w", err)
+			wrappedErr := fmt.Errorf("notify library: %w", err)
+			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+			return struct{}{}, wrappedErr
 		}
 
+		logStepResult(ctx, "notify", input.FilePath, start, nil)
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// cleanup: delete the original source file after successful processing, unless
 	// PreserveSource is set on the originating watch entry.
 	cleanupTask := wf.NewTask("cleanup", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		start := time.Now()
+
 		if input.PreserveSource {
+			logStepResult(ctx, "cleanup", input.FilePath, start, nil)
 			return struct{}{}, nil
 		}
 
-		return struct{}{}, steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		logStepResult(ctx, "cleanup", input.FilePath, start, err)
+		return struct{}{}, err
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// record_metrics: record per-run OTel observations for valid-media completions.
 	// Runs after cleanup so total_duration_seconds covers the full probe→cleanup span.
 	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		start := time.Now()
+
 		var probe steps.ProbeOutput
 		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			return struct{}{}, fmt.Errorf("get probe output for metrics: %w", err)
+			wrappedErr := fmt.Errorf("get probe output for metrics: %w", err)
+			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
+			return struct{}{}, wrappedErr
 		}
 
 		var transcode steps.TranscodeOutput
 		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
-			return struct{}{}, fmt.Errorf("get transcode output for metrics: %w", err)
+			wrappedErr := fmt.Errorf("get transcode output for metrics: %w", err)
+			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
+			return struct{}{}, wrappedErr
 		}
 
 		var mediaInfo medialib.MediaInfo
@@ -285,23 +321,37 @@ func NewMediaWorkflow(
 		totalElapsed := time.Since(probe.StartedAt)
 		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
 
+		logStepResult(ctx, "record_metrics", input.FilePath, start, nil)
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, cleanupTask), skipIfInvalid)
 
 	// record_invalid: increment the invalid-files counter when probe determines the file
 	// is not valid media. Skipped when the file is valid (i.e. the inverse of skipIfInvalid).
 	_ = wf.NewTask("record_invalid", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
+		start := time.Now()
 		recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
+		logStepResult(ctx, "record_invalid", input.FilePath, start, nil)
 		return struct{}{}, nil
 	}, hatchet.WithParents(probeTask),
 		hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == true")))
 
 	// OnFailure: send a single aggregated failure notification to the configured webhook.
 	wf.OnFailure(func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		return struct{}{}, steps.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
+		start := time.Now()
+		err := steps.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
+		logStepResult(ctx, "onfailure", input.FilePath, start, err)
+		return struct{}{}, err
 	})
 
 	return wf
+}
+
+func logStepResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {
+	if err != nil {
+		slog.ErrorContext(ctx, "step failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
+	} else {
+		slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
+	}
 }
 
 // getArrLibrary returns the LibraryClient corresponding to mediaType, using

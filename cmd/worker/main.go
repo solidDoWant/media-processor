@@ -160,7 +160,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
-	slog.Info("connected to Hatchet, starting worker")
+	startupAttrs := []any{slog.String("output_dir", mediaOutputDir)}
+	if hwDevice := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"); hwDevice != "" {
+		startupAttrs = append(startupAttrs, slog.String("hardware_device", hwDevice))
+	}
+	slog.Info("connected to Hatchet, starting worker", startupAttrs...)
 
 	healthServer.SetReady()
 

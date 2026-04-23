@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 // Returns nil (no-op) when stepErrors is empty.
 func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, workflowName, filePath string, webhookClient *webhook.Client) error {
 	if len(stepErrors) == 0 {
+		slog.InfoContext(ctx, "no step errors, skipping failure notification", slog.String("file", filePath))
 		return nil
 	}
 
@@ -31,6 +33,11 @@ func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, wo
 		errs = append(errs, fmt.Errorf("%s: %s", stepName, stepErrors[stepName]))
 	}
 
+	if webhookClient.URL == "" {
+		slog.InfoContext(ctx, "no webhook URL configured, skipping failure notification", slog.String("file", filePath))
+		return nil
+	}
+
 	if err := webhookClient.NotifyFailure(ctx, webhook.FailureEvent{
 		Workflow: workflowName,
 		FilePath: filePath,
@@ -39,6 +46,8 @@ func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, wo
 	}); err != nil {
 		return fmt.Errorf("notify failure: %w", err)
 	}
+
+	slog.InfoContext(ctx, "failure notification sent", slog.String("file", filePath))
 
 	return nil
 }
