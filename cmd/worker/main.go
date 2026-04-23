@@ -135,13 +135,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	hardwareDevicePath := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
-
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
 		OutputDir:             mediaOutputDir,
 		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
 		WebhookURL:            webhookClient.URL,
-		HardwareDevicePath:    hardwareDevicePath,
+		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 		MinCropX:              minCropX,
