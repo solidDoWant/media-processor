@@ -252,6 +252,10 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			sentinelPath := filepath.Join(filepath.Dir(path), "."+base+".done")
 			if _, statErr := os.Stat(sentinelPath); statErr == nil {
 				return nil
+			} else if !os.IsNotExist(statErr) {
+				mappingErrs = append(mappingErrs, fmt.Errorf("scan sentinel %q for %q: %w", sentinelPath, path, statErr))
+
+				return nil
 			}
 
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)

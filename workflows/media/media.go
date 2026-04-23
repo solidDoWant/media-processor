@@ -300,7 +300,7 @@ func NewMediaWorkflow(
 	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
 
 	// record_metrics: record per-run OTel observations for valid-media completions.
-	// Runs after cleanup so total_duration_seconds covers the full probe→cleanup span.
+	// Runs after finalize so total_duration_seconds covers the full probe→finalize span.
 	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		start := time.Now()
 
