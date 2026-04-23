@@ -67,7 +67,7 @@ Shared observability settings applied to both watcher and worker.
 | Field                            | Type   | Default     | Description                                                                                                                 |
 | -------------------------------- | ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                      |
-| `config.watcher.schedule`        | string | `""`        | 6-field Hatchet cron expression for the scan schedule (e.g. `*/30 * * * * *`). Written to `cronSchedule` in the config file |
+| `config.watcher.schedule`        | string | `""`        | 6-field Hatchet cron expression for the scan schedule (e.g. `*/30 * * * * *`). When empty, the watcher uses the built-in default (`*/5 * * * * *`, every 5 seconds). Written to `cronSchedule` in the config file |
 | `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file                                                              |
 | `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                   |
 | `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                               |
