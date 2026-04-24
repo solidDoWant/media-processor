@@ -148,6 +148,27 @@ $(BIN_DIR)/worker: $(GO_SOURCE_FILES)
 .PHONY: build
 build: $(BIN_DIR)/watcher $(BIN_DIR)/worker ## Build all binaries.
 
+##@ Release
+
+.PHONY: build-all
+build-all: build-images helm ## Build all release artifacts (and push images/chart when PUSH_ALL=true).
+
+.PHONY: release
+release: TAG = v$(VERSION)
+release: SAFETY_PREFIX = $(if $(findstring t,$(PUSH_ALL)),,echo)
+release: build-all ## Create a GitHub release. Set PUSH_ALL=true to tag, push, and publish. Requires the GitHub CLI (gh).
+	@gh auth status
+	@$(SAFETY_PREFIX) git tag -a $(TAG) -m "Release $(TAG)"
+	@$(SAFETY_PREFIX) git push origin
+	@$(SAFETY_PREFIX) git push origin --tags
+	@$(SAFETY_PREFIX) gh release create $(TAG) --generate-notes --latest --verify-tag
+
+.PHONY: clean
+clean: INCLUDE_LATEST = true
+clean: ## Clean up all build artifacts and loaded container images.
+	@rm -rf $(BIN_DIR) $(HELM_CHART_DIR)/charts
+	@docker image rm -f $(WATCHER_IMAGE_TAGS) $(WORKER_IMAGE_TAGS) 2>/dev/null >/dev/null || true
+
 ##@ Local Dev
 
 HATCHET_ENV_FILE := .env.hatchet
