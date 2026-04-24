@@ -57,14 +57,10 @@
 {{- end -}}
 
 {{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.metrics.otel.endpoint -}}
-  {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.metrics.otel.endpoint -}}
+{{- if .Values.config.watcher.metrics.otel.endpoint -}}
+  {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.watcher.metrics.otel.endpoint -}}
 {{- end -}}
 
-{{/* METRICS_HIGH_CARDINALITY_LABELS */}}
-{{- if .Values.config.metrics.highCardinalityLabels -}}
-  {{- $_ := set $watcherEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
-{{- end -}}
 
 {{/* ============================================================ */}}
 {{/* Worker env vars                                              */}}
@@ -158,12 +154,12 @@
 {{- end -}}
 
 {{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.metrics.otel.endpoint -}}
-  {{- $_ := set $workerEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.metrics.otel.endpoint -}}
+{{- if .Values.config.worker.metrics.otel.endpoint -}}
+  {{- $_ := set $workerEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.worker.metrics.otel.endpoint -}}
 {{- end -}}
 
 {{/* METRICS_HIGH_CARDINALITY_LABELS */}}
-{{- if .Values.config.metrics.highCardinalityLabels -}}
+{{- if .Values.config.worker.metrics.highCardinalityLabels -}}
   {{- $_ := set $workerEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
 {{- end -}}
 
@@ -258,7 +254,9 @@
 {{- $mergedResources := mustMergeOverwrite $computedAdditions (mustDeepCopy .Values.resources) -}}
 
 {{/* ============================================================ */}}
-{{/* Evaluate podDisruptionBudget.enabled template strings        */}}
+{{/* Evaluate enabled template strings                            */}}
+{{/* podDisruptionBudget: remove key when disabled                */}}
+{{/* service / serviceMonitor: convert string to bool for bjw-s  */}}
 {{/* ============================================================ */}}
 {{- range $ctrl := values (index $mergedResources "controllers") -}}
   {{- $pdb := index $ctrl "podDisruptionBudget" -}}
@@ -267,6 +265,14 @@
       {{- $_ := unset $pdb "enabled" -}}
     {{- else -}}
       {{- $_ := unset $ctrl "podDisruptionBudget" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- range $key := list "service" "serviceMonitor" -}}
+  {{- range $obj := values (index $mergedResources $key) -}}
+    {{- if and (kindIs "map" $obj) (hasKey $obj "enabled") -}}
+      {{- $_ := set $obj "enabled" (eq (tpl (get $obj "enabled" | toString) $) "true") -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

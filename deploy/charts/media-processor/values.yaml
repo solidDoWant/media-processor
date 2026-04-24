@@ -11,11 +11,6 @@ config:
   # field controls the volume mount subPath. When empty, no input volume is created.
   inputVolume: {}
 
-  metrics:
-    otel:
-      endpoint: ""
-    highCardinalityLabels: false
-
   watcher:
     # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
     configType: ConfigMap
@@ -25,11 +20,16 @@ config:
     logLevel: info
     metrics:
       enabled: false
+      otel:
+        endpoint: ""
 
   worker:
     logLevel: info
     metrics:
       enabled: false
+      otel:
+        endpoint: ""
+      highCardinalityLabels: false
     media:
       output:
         # volume is a bjw-s persistence item without globalMounts or advancedMounts; the chart
@@ -168,3 +168,39 @@ resources:
       runAsGroup: 1000
       seccompProfile:
         type: RuntimeDefault
+  service:
+    watcher-metrics:
+      enabled: '{{ .Values.config.watcher.metrics.enabled }}'
+      controller: watcher
+      ports:
+        metrics:
+          port: 9090
+          protocol: TCP
+    worker-metrics:
+      enabled: '{{ .Values.config.worker.metrics.enabled }}'
+      controller: worker
+      ports:
+        metrics:
+          port: 9090
+          protocol: TCP
+  serviceMonitor:
+    watcher:
+      enabled: '{{ .Values.config.watcher.metrics.enabled }}'
+      service:
+        identifier: watcher-metrics
+      endpoints:
+        - port: metrics
+          scheme: http
+          path: /metrics
+          interval: 1m
+          scrapeTimeout: 10s
+    worker:
+      enabled: '{{ .Values.config.worker.metrics.enabled }}'
+      service:
+        identifier: worker-metrics
+      endpoints:
+        - port: metrics
+          scheme: http
+          path: /metrics
+          interval: 1m
+          scrapeTimeout: 10s
