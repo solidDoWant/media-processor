@@ -79,6 +79,14 @@ config:
 resources:
   controllers:
     watcher:
+      strategy: RollingUpdate
+      pod:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
       containers:
         watcher:
           image:
@@ -108,7 +116,24 @@ resources:
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
     worker:
+      strategy: RollingUpdate
+      pod:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
       containers:
         worker:
           image:
@@ -135,3 +160,12 @@ resources:
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
