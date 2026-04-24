@@ -258,6 +258,20 @@
 {{- $mergedResources := mustMergeOverwrite $computedAdditions (mustDeepCopy .Values.resources) -}}
 
 {{/* ============================================================ */}}
+{{/* Evaluate podDisruptionBudget.enabled template strings        */}}
+{{/* ============================================================ */}}
+{{- range $ctrl := values (index $mergedResources "controllers") -}}
+  {{- $pdb := index $ctrl "podDisruptionBudget" -}}
+  {{- if and $pdb (hasKey $pdb "enabled") -}}
+    {{- if eq (tpl (get $pdb "enabled" | toString) $) "true" -}}
+      {{- $_ := unset $pdb "enabled" -}}
+    {{- else -}}
+      {{- $_ := unset $ctrl "podDisruptionBudget" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
 {{/* Inject into .Values; strip chart-specific keys               */}}
 {{/* ============================================================ */}}
 {{- $mergedValues := mustDeepCopy .Values -}}

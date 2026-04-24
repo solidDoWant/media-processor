@@ -118,6 +118,9 @@ resources:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
+      podDisruptionBudget:
+        enabled: '{{ gt ((index .Values "resources" "controllers" "watcher" "replicas" | default 1) | int) 1 }}'
+        minAvailable: 1
     worker:
       strategy: RollingUpdate
       containers:
@@ -155,6 +158,9 @@ resources:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
+      podDisruptionBudget:
+        enabled: '{{ gt ((index .Values "resources" "controllers" "worker" "replicas" | default 1) | int) 1 }}'
+        minAvailable: 1
   defaultPodOptions:
     securityContext:
       runAsNonRoot: true
