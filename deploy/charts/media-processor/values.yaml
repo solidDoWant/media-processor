@@ -10,6 +10,11 @@ config:
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
   # field controls the volume mount subPath. When empty, no input volume is created.
   inputVolume: {}
+  # inputVolume:
+  #   type: nfs
+  #   server: nas.example.com
+  #   path: /volume1/media
+  #   subPath: input
 
   watcher:
     # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
@@ -36,6 +41,11 @@ config:
         # manages mounts at /media/output. An optional subPath field controls the mount subPath.
         # When empty, no output volume is created.
         volume: {}
+        # volume:
+        #   type: nfs
+        #   server: nas.example.com
+        #   path: /volume1/media
+        #   subPath: output
         # radarrRemoteMountPath is how Radarr sees the output directory. When non-empty,
         # RADARR_LOCAL_PATH_PREFIX and RADARR_REMOTE_PATH_PREFIX are set on the worker.
         radarrRemoteMountPath: ""
