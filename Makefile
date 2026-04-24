@@ -105,8 +105,8 @@ PUSH_ALL ?= false
 
 INCLUDE_LATEST = $(PUSH_ALL)
 
-WATCHER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/watcher:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/watcher:latest)
-WORKER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/worker:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/worker:latest)
+WATCHER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/media-processor/watcher:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/media-processor/watcher:latest)
+WORKER_IMAGE_TAGS = $(CONTAINER_REGISTRY)/media-processor/worker:$(VERSION) $(if $(filter true,$(INCLUDE_LATEST)),$(CONTAINER_REGISTRY)/media-processor/worker:latest)
 
 .PHONY: build-images
 build-images: ## Build watcher and worker OCI images and load them into the local Docker daemon.
