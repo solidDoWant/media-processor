@@ -171,6 +171,16 @@ resources:
       podDisruptionBudget:
         enabled: '{{ gt ((index .Values "resources" "controllers" "worker" "replicas" | default 1) | int) 1 }}'
         minAvailable: 1
+      # DRA GPU example (requires config.worker.media.hardware.mountHostDevice: false):
+      # pod:
+      #   resourceClaims:
+      #     - name: gpu
+      #       resourceClaimName: my-gpu-claim
+      # containers:
+      #   worker:
+      #     resources:
+      #       claims:
+      #         - name: gpu
   defaultPodOptions:
     securityContext:
       runAsNonRoot: true
