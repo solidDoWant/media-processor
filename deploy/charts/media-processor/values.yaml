@@ -1,10 +1,12 @@
 ---
 config:
-  hatchetToken:
-    value: ""
-    secretKeyRef:
-      name: ""
-      key: ""
+  hatchet:
+    token:
+      value: ""
+      secretKeyRef:
+        name: ""
+        key: ""
+    namespace: ""
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath

@@ -18,10 +18,10 @@
 {{/* ============================================================ */}}
 {{/* Credential secretKeyRef validation                           */}}
 {{/* ============================================================ */}}
-{{- $hatchetSecretName := .Values.config.hatchetToken.secretKeyRef.name | default "" -}}
-{{- $hatchetSecretKey  := .Values.config.hatchetToken.secretKeyRef.key  | default "" -}}
+{{- $hatchetSecretName := .Values.config.hatchet.token.secretKeyRef.name | default "" -}}
+{{- $hatchetSecretKey  := .Values.config.hatchet.token.secretKeyRef.key  | default "" -}}
 {{- if or (and $hatchetSecretName (not $hatchetSecretKey)) (and $hatchetSecretKey (not $hatchetSecretName)) -}}
-  {{- fail "config.hatchetToken.secretKeyRef.name and config.hatchetToken.secretKeyRef.key must both be set when using secretKeyRef" -}}
+  {{- fail "config.hatchet.token.secretKeyRef.name and config.hatchet.token.secretKeyRef.key must both be set when using secretKeyRef" -}}
 {{- end -}}
 
 {{- $radarrSecretName := .Values.config.worker.radarr.apiKey.secretKeyRef.name | default "" -}}
@@ -44,8 +44,13 @@
 {{/* HATCHET_CLIENT_TOKEN */}}
 {{- if $hatchetSecretName -}}
   {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
-{{- else if .Values.config.hatchetToken.value -}}
-  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
+{{- else if .Values.config.hatchet.token.value -}}
+  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchet.token.value -}}
+{{- end -}}
+
+{{/* HATCHET_CLIENT_NAMESPACE */}}
+{{- if .Values.config.hatchet.namespace -}}
+  {{- $_ := set $watcherEnv "HATCHET_CLIENT_NAMESPACE" .Values.config.hatchet.namespace -}}
 {{- end -}}
 
 {{/* LOG_LEVEL */}}
@@ -70,8 +75,13 @@
 {{/* HATCHET_CLIENT_TOKEN */}}
 {{- if $hatchetSecretName -}}
   {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
-{{- else if .Values.config.hatchetToken.value -}}
-  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchetToken.value -}}
+{{- else if .Values.config.hatchet.token.value -}}
+  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchet.token.value -}}
+{{- end -}}
+
+{{/* HATCHET_CLIENT_NAMESPACE */}}
+{{- if .Values.config.hatchet.namespace -}}
+  {{- $_ := set $workerEnv "HATCHET_CLIENT_NAMESPACE" .Values.config.hatchet.namespace -}}
 {{- end -}}
 
 {{/* LOG_LEVEL */}}
