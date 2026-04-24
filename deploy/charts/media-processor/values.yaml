@@ -80,13 +80,6 @@ resources:
   controllers:
     watcher:
       strategy: RollingUpdate
-      pod:
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
-          seccompProfile:
-            type: RuntimeDefault
       containers:
         watcher:
           image:
@@ -127,13 +120,6 @@ resources:
             runAsGroup: 1000
     worker:
       strategy: RollingUpdate
-      pod:
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
-          seccompProfile:
-            type: RuntimeDefault
       containers:
         worker:
           image:
@@ -169,3 +155,10 @@ resources:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
+  defaultPodOptions:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      seccompProfile:
+        type: RuntimeDefault
