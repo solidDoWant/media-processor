@@ -23,7 +23,6 @@ func TestWorkerConnectsToHatchet(t *testing.T) {
 
 	// Provide the env vars required by run(). Neither Radarr nor Sonarr is exercised
 	// by this test — dummy values are sufficient.
-	t.Setenv("MEDIA_OUTPUT_DIR", t.TempDir())
 	t.Setenv("RADARR_URL", "http://localhost:9999")
 	t.Setenv("RADARR_API_KEY", "test-key")
 	t.Setenv("SONARR_URL", "http://localhost:9998")

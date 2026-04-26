@@ -58,27 +58,26 @@ docker run --rm \
 
 ## Running the worker
 
-The worker pulls jobs from Hatchet, transcodes each file, writes the output to `MEDIA_OUTPUT_DIR`, and notifies Radarr or Sonarr.
+The worker pulls jobs from Hatchet, transcodes each file, writes the output to the directory specified by `output.path` in the watcher config, and notifies Radarr or Sonarr.
 
 ### Required volume mounts
 
 | Host path             | Container path      | Notes                                                                                                                                                                                                          |
 | --------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | download root         | `/downloads`        | Same tree the watcher sees. Must be writable — the worker removes the source file after a successful transcode unless `preserveSource: true` is set in the watcher config.                                     |
-| processed-output root | `/processed-output` | Where transcoded files are written. Must match `MEDIA_OUTPUT_DIR`. See the [bind-mount arrangement](../README.md#the-bind-mount-arrangement) in the README for how this directory is exposed to Sonarr/Radarr. |
+| processed-output root | `/processed-output` | Where transcoded files are written. Must match the `output.path` values in the watcher config. See the [bind-mount arrangement](../README.md#the-bind-mount-arrangement) in the README for how this directory is exposed to Sonarr/Radarr. |
 
 ### Required environment variables
 
-| Variable                       | Description                                                                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `HATCHET_CLIENT_TOKEN`         | Hatchet API token.                                                                                                               |
-| `MEDIA_OUTPUT_DIR`             | Directory where transcoded output is written. Should match the container-side processed-output mount (e.g. `/processed-output`). |
-| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                                                                     |
-| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                                                                     |
+| Variable                       | Description                  |
+| ------------------------------ | ---------------------------- |
+| `HATCHET_CLIENT_TOKEN`         | Hatchet API token.           |
+| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key. |
+| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key. |
 
 As with the watcher, non-default Hatchet engines are reached by setting the standard `HATCHET_CLIENT_HOST_PORT` and (optionally) `HATCHET_CLIENT_TLS_STRATEGY=none` environment variables.
 
-See [configuration.md](configuration.md) for the full list of worker environment variables, including path-translation prefixes (`RADARR_LOCAL_PATH_PREFIX` / `RADARR_REMOTE_PATH_PREFIX` and the Sonarr equivalents), crop-detection tuning, webhook notifications, and quality settings.
+See [configuration.md](configuration.md) for the full list of worker environment variables, including crop-detection tuning, webhook notifications, and quality settings.
 
 ### Hardware device passthrough
 
@@ -117,7 +116,6 @@ docker run --rm \
   -e HATCHET_CLIENT_TOKEN=... \
   -e HATCHET_CLIENT_HOST_PORT=hatchet-engine:7070 \
   -e HATCHET_CLIENT_TLS_STRATEGY=none \
-  -e MEDIA_OUTPUT_DIR=/processed-output \
   -e RADARR_URL=http://radarr:7878 \
   -e RADARR_API_KEY=... \
   -e SONARR_URL=http://sonarr:8989 \
@@ -165,7 +163,6 @@ services:
       HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       HATCHET_CLIENT_TLS_STRATEGY: none
-      MEDIA_OUTPUT_DIR: /processed-output
       RADARR_URL: http://radarr:7878
       RADARR_API_KEY: "${RADARR_API_KEY}"
       SONARR_URL: http://sonarr:8989
