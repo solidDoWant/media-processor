@@ -219,7 +219,15 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			continue
 		}
 
-		absOutputPath, err := filepath.Abs(w.Output.Path)
+		trimmedOutputPath := strings.TrimSpace(w.Output.Path)
+		if trimmedOutputPath == "" {
+			mappingErrs = append(mappingErrs, fmt.Errorf("output.path is blank or whitespace-only"))
+			errs = append(errs, mappingErrs...)
+
+			continue
+		}
+
+		absOutputPath, err := filepath.Abs(trimmedOutputPath)
 		if err != nil {
 			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for output directory %q: %w", w.Output.Path, err))
 			errs = append(errs, mappingErrs...)
