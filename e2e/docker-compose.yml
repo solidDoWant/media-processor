@@ -129,16 +129,10 @@ services:
       HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
-      MEDIA_OUTPUT_DIR: /tmp/e2e-media-processor/processed-output
-      MEDIA_INPUT_ROOT: /tmp/e2e-media-processor/downloads
       RADARR_URL: http://radarr:7878
       RADARR_API_KEY: e2e-radarr-api-key-e2e
       SONARR_URL: http://sonarr:8989
       SONARR_API_KEY: e2e-sonarr-api-key-e2e
-      RADARR_LOCAL_PATH_PREFIX: /tmp/e2e-media-processor/downloads/radarr
-      RADARR_REMOTE_PATH_PREFIX: /downloads
-      SONARR_LOCAL_PATH_PREFIX: /tmp/e2e-media-processor/downloads/sonarr
-      SONARR_REMOTE_PATH_PREFIX: /downloads
       MEDIA_H265_CRF: "51"
     depends_on:
       hatchet-engine:
