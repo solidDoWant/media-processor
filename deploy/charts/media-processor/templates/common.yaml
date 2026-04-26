@@ -218,7 +218,11 @@
     {{- fail (printf "config.watcher.watches: output.volumeName %q not found in config.watcher.volumes" $volName) -}}
   {{- end -}}
   {{- $volBase := mustDeepCopy (index $watcherVolumes $volName) -}}
-  {{- $_ := set $volBase "advancedMounts" (dict "worker" (dict "worker" (values $volMounts))) -}}
+  {{- $sortedMounts := list -}}
+  {{- range $mp := keys $volMounts | sortAlpha -}}
+    {{- $sortedMounts = append $sortedMounts (index $volMounts $mp) -}}
+  {{- end -}}
+  {{- $_ := set $volBase "advancedMounts" (dict "worker" (dict "worker" $sortedMounts)) -}}
   {{- $_ := set $computedPersistence $volName $volBase -}}
 {{- end -}}
 

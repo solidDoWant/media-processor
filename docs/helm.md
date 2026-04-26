@@ -14,7 +14,7 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 The chart has no required values at `helm template` time — the manifests render without error with all defaults. However, the pods will fail to start at runtime without the following values. You will need at a minimum:
 
-- `config.hatchetToken` — Hatchet API token
+- `config.hatchet.token` — Hatchet API token
 - `config.watcher.watches` — at least one watch entry
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
@@ -23,15 +23,15 @@ The chart has no required values at `helm template` time — the manifests rende
 
 ## Values reference
 
-### `config.hatchetToken`
+### `config.hatchet.token`
 
 The Hatchet API token for both watcher and worker. Sets `HATCHET_CLIENT_TOKEN` on both containers.
 
-| Field                                   | Type   | Default | Description                                                |
-| --------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
-| `config.hatchetToken.value`             | string | `""`    | Literal token value                                        |
-| `config.hatchetToken.secretKeyRef.name` | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
-| `config.hatchetToken.secretKeyRef.key`  | string | `""`    | Key within the Secret                                      |
+| Field                                        | Type   | Default | Description                                                |
+| -------------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
+| `config.hatchet.token.value`                 | string | `""`    | Literal token value                                        |
+| `config.hatchet.token.secretKeyRef.name`     | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
+| `config.hatchet.token.secretKeyRef.key`      | string | `""`    | Key within the Secret                                      |
 
 ### `config.inputVolume`
 
@@ -211,10 +211,11 @@ Instead of putting token values directly in `values.yaml`, reference a pre-exist
 
 ```yaml
 config:
-  hatchetToken:
-    secretKeyRef:
-      name: media-processor-secrets
-      key: hatchet-token
+  hatchet:
+    token:
+      secretKeyRef:
+        name: media-processor-secrets
+        key: hatchet-token
 
   worker:
     radarr:
@@ -246,10 +247,11 @@ This example uses a PVC for input and NFS for output, configures arr path transl
 
 ```yaml
 config:
-  hatchetToken:
-    secretKeyRef:
-      name: media-processor-secrets
-      key: hatchet-token
+  hatchet:
+    token:
+      secretKeyRef:
+        name: media-processor-secrets
+        key: hatchet-token
 
   inputVolume:
     type: persistentVolumeClaim
