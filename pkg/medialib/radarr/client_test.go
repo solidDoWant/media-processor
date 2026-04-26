@@ -94,7 +94,6 @@ func TestGetMovieByFilePath(t *testing.T) {
 	tests := []struct {
 		name      string
 		path      string
-		cfg       radarr.Config
 		parseResp *parseResponse
 		expected  medialib.Movie
 		errFunc   require.ErrorAssertionFunc
@@ -117,33 +116,6 @@ func TestGetMovieByFilePath(t *testing.T) {
 				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
 			},
 		},
-		{
-			name:      "path translation maps local to remote path",
-			path:      "/mnt/movies/The.Matrix.1999.mkv",
-			parseResp: &parseResponse{Movie: knownMovie},
-			cfg: radarr.Config{
-				LocalPathPrefix:  "/mnt/movies",
-				RemotePathPrefix: "/movies",
-			},
-			expected: medialib.Movie{
-				ID:    42,
-				Title: "The Matrix",
-				Year:  1999,
-			},
-		},
-		{
-			name:      "path traversal outside remote prefix returns error",
-			path:      "/mnt/movies/../../etc/passwd",
-			parseResp: &parseResponse{},
-			cfg: radarr.Config{
-				LocalPathPrefix:  "/mnt/movies",
-				RemotePathPrefix: "/movies",
-			},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				require.NotErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
-			},
-		},
 	}
 
 	for _, tc := range tests {
@@ -151,11 +123,7 @@ func TestGetMovieByFilePath(t *testing.T) {
 			srv := newTestServer(t, tc.parseResp)
 			t.Cleanup(srv.Close)
 
-			cfg := tc.cfg
-			cfg.URL = srv.URL
-			cfg.APIKey = "test-key"
-
-			client := radarr.New(cfg)
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
 			movie, err := client.GetMovieByFilePath(t.Context(), tc.path)
 
@@ -177,7 +145,6 @@ func TestImportByFilePath(t *testing.T) {
 	tests := []struct {
 		name        string
 		path        string
-		cfg         radarr.Config
 		wantCmdName string
 		wantCmdPath string
 		errFunc     require.ErrorAssertionFunc
@@ -187,25 +154,6 @@ func TestImportByFilePath(t *testing.T) {
 			path:        "/movies/The.Matrix.1999.mkv",
 			wantCmdName: "DownloadedMoviesScan",
 			wantCmdPath: "/movies/The.Matrix.1999.mkv",
-		},
-		{
-			name: "path translation maps local prefix to remote prefix in command",
-			path: "/mnt/movies/The.Matrix.1999.mkv",
-			cfg: radarr.Config{
-				LocalPathPrefix:  "/mnt/movies",
-				RemotePathPrefix: "/movies",
-			},
-			wantCmdName: "DownloadedMoviesScan",
-			wantCmdPath: "/movies/The.Matrix.1999.mkv",
-		},
-		{
-			name: "path traversal outside remote prefix returns error without sending command",
-			path: "/mnt/movies/../../etc/passwd",
-			cfg: radarr.Config{
-				LocalPathPrefix:  "/mnt/movies",
-				RemotePathPrefix: "/movies",
-			},
-			errFunc: require.Error,
 		},
 	}
 
@@ -223,11 +171,7 @@ func TestImportByFilePath(t *testing.T) {
 			})
 			t.Cleanup(srv.Close)
 
-			cfg := tc.cfg
-			cfg.URL = srv.URL
-			cfg.APIKey = "test-key"
-
-			client := radarr.New(cfg)
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
 			err := client.ImportByFilePath(t.Context(), tc.path)
 

@@ -15,6 +15,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
@@ -106,7 +107,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "existing directory passes",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: t.TempDir(), MediaType: medialib.MovieType},
+					{Name: "movies", WatchedPath: t.TempDir(), MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 				},
 			},
 			errFunc: require.NoError,
@@ -115,7 +116,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "missing directory returns error",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
+					{Name: "movies", WatchedPath: "/nonexistent/path/abc123", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 				},
 			},
 			errFunc: require.Error,
@@ -124,8 +125,8 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "all errors reported when multiple dirs are missing",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "alpha", WatchedPath: "/nonexistent/alpha", MediaType: medialib.MovieType},
-					{Name: "beta", WatchedPath: "/nonexistent/beta", MediaType: medialib.MovieType},
+					{Name: "alpha", WatchedPath: "/nonexistent/alpha", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
+					{Name: "beta", WatchedPath: "/nonexistent/beta", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 				},
 			},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -146,7 +147,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
 
-				return &Config{Watches: []WatchEntry{{Name: "movies", WatchedPath: f.Name(), MediaType: medialib.MovieType}}}
+				return &Config{Watches: []WatchEntry{{Name: "movies", WatchedPath: f.Name(), MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.Error(t, err, msgAndArgs...)
@@ -174,7 +175,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
@@ -186,7 +187,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	var calls []call
 
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string, _ bool, _ string, _ bool, _ string, _ string) error {
 		calls = append(calls, call{fp, mt, mn})
 		return nil
 	}
@@ -211,13 +212,13 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "shows", WatchedPath: dir, MediaType: medialib.ShowType},
+			{Name: "shows", WatchedPath: dir, MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -238,13 +239,13 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var count int
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -264,14 +265,14 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	})
 	assert.ErrorIs(t, err, context.Canceled)
@@ -289,13 +290,13 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType},
-			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType},
+			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
+			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	dispatched := make(map[string]medialib.MediaType) // path → media type
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched[fp] = mt
 		return nil
 	}
@@ -317,12 +318,12 @@ func TestScan_MetricsPresenceAfterScan(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -347,12 +348,12 @@ func TestScan_SuccessCounterIncrements(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -378,12 +379,12 @@ func TestScan_ErrorCounterIncrements(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return errors.New("simulated dispatch failure")
 	})
 
@@ -409,13 +410,13 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType},
-			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType},
+			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
+			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -451,12 +452,12 @@ func TestScan_LastSuccessfulScanSetOnSuccess(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -481,12 +482,12 @@ func TestScan_FilesDiscoveredCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -515,12 +516,12 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
@@ -550,13 +551,13 @@ func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -579,13 +580,13 @@ func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -606,13 +607,13 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -632,12 +633,12 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	instruments, reader := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return errors.New("hatchet unavailable")
 	})
 
@@ -678,7 +679,7 @@ func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
 
 			cfg := &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, PreserveSource: tt.preserveSource},
+					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, PreserveSource: tt.preserveSource, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 				},
 			}
 
@@ -686,7 +687,7 @@ func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
 
 			var dispatched bool
 
-			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, ps bool, _ string, _ bool) error {
+			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, ps bool, _ string, _ bool, _ string, _ string) error {
 				gotPreserveSource = ps
 				dispatched = true
 
@@ -710,7 +711,7 @@ func TestScan_WatchRootForwardedToDispatch(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
@@ -718,7 +719,7 @@ func TestScan_WatchRootForwardedToDispatch(t *testing.T) {
 
 	var dispatched bool
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, wr string, _ bool) error {
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, wr string, _ bool, _ string, _ string) error {
 		gotWatchRoot = wr
 		dispatched = true
 
@@ -752,7 +753,7 @@ func TestScan_RetainEmptyDirsForwardedToDispatch(t *testing.T) {
 
 			cfg := &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, RetainEmptyDirectories: tt.retainEmptyDirectories},
+					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, RetainEmptyDirectories: tt.retainEmptyDirectories, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 				},
 			}
 
@@ -760,7 +761,7 @@ func TestScan_RetainEmptyDirsForwardedToDispatch(t *testing.T) {
 
 			var dispatched bool
 
-			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, red bool) error {
+			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, red bool, _ string, _ string) error {
 				gotRetainEmptyDirs = red
 				dispatched = true
 
@@ -785,13 +786,13 @@ func TestScan_SkipsSentinelledFile(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
@@ -810,17 +811,81 @@ func TestScan_SkipsSentinelFileItself(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
 		},
 	}
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool) error {
+	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		dispatched = append(dispatched, fp)
 		return nil
 	}
 
 	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
 	assert.Empty(t, dispatched, "sentinel file itself should not be dispatched")
+}
+
+// TestScan_OutputPathForwardedToDispatch verifies that the watch entry's output.path is
+// forwarded as an absolute path to the dispatch callback for each discovered file.
+func TestScan_OutputPathForwardedToDispatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outputDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: outputDir}},
+		},
+	}
+
+	var gotOutputPath string
+
+	var dispatched bool
+
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, op string, _ string) error {
+		gotOutputPath = op
+		dispatched = true
+
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	require.True(t, dispatched, "expected dispatch to be called")
+
+	absOutputDir, err := filepath.Abs(outputDir)
+	require.NoError(t, err)
+	assert.Equal(t, absOutputDir, gotOutputPath)
+}
+
+// TestScan_OutputRemotePathForwardedToDispatch verifies that the watch entry's output.remotePath
+// is forwarded verbatim to the dispatch callback for each discovered file.
+func TestScan_OutputRemotePathForwardedToDispatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: dir, RemotePath: "/remote/movies"}},
+		},
+	}
+
+	var gotOutputRemotePath string
+
+	var dispatched bool
+
+	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, orp string) error {
+		gotOutputRemotePath = orp
+		dispatched = true
+
+		return nil
+	}
+
+	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
+	require.True(t, dispatched, "expected dispatch to be called")
+	assert.Equal(t, "/remote/movies", gotOutputRemotePath)
 }

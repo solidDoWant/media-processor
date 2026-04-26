@@ -36,6 +36,10 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
+	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
+		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
+	}
+
 	const defaultHealthAddr = ":8080"
 
 	healthAddr := os.Getenv("HEALTH_ADDR")
@@ -53,15 +57,6 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer shutdown()
-
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
-	}
-
-	mediaOutputDir := os.Getenv("MEDIA_OUTPUT_DIR")
-	if mediaOutputDir == "" {
-		return fmt.Errorf("MEDIA_OUTPUT_DIR is not set")
-	}
 
 	radarrURL := os.Getenv("RADARR_URL")
 	if radarrURL == "" {
@@ -84,17 +79,13 @@ func run(ctx context.Context) error {
 	}
 
 	radarrClient := radarr.New(radarr.Config{
-		URL:              radarrURL,
-		APIKey:           radarrAPIKey,
-		LocalPathPrefix:  os.Getenv("RADARR_LOCAL_PATH_PREFIX"),
-		RemotePathPrefix: os.Getenv("RADARR_REMOTE_PATH_PREFIX"),
+		URL:    radarrURL,
+		APIKey: radarrAPIKey,
 	})
 
 	sonarrClient := sonarr.New(sonarr.Config{
-		URL:              sonarrURL,
-		APIKey:           sonarrAPIKey,
-		LocalPathPrefix:  os.Getenv("SONARR_LOCAL_PATH_PREFIX"),
-		RemotePathPrefix: os.Getenv("SONARR_REMOTE_PATH_PREFIX"),
+		URL:    sonarrURL,
+		APIKey: sonarrAPIKey,
 	})
 
 	webhookClient := &webhook.Client{
@@ -141,8 +132,6 @@ func run(ctx context.Context) error {
 	}
 
 	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
-		OutputDir:             mediaOutputDir,
-		WatcherRoot:           os.Getenv("MEDIA_INPUT_ROOT"),
 		WebhookURL:            webhookClient.URL,
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
@@ -166,7 +155,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Hatchet worker: %w", err)
 	}
 
-	slog.InfoContext(ctx, "connected to Hatchet, starting worker", slog.String("output_dir", mediaOutputDir))
+	slog.InfoContext(ctx, "connected to Hatchet, starting worker")
 
 	healthServer.SetReady()
 

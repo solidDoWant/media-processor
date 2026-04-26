@@ -24,13 +24,6 @@ var _ medialib.ArrLibrary = (*Client)(nil)
 type Config struct {
 	URL    string
 	APIKey string
-	// LocalPathPrefix and RemotePathPrefix enable optional path translation.
-	// When set, paths starting with LocalPathPrefix are rewritten to use
-	// RemotePathPrefix before being matched against Sonarr's stored paths.
-	// This handles cases where the worker and Sonarr use different mount points
-	// for the same storage.
-	LocalPathPrefix  string
-	RemotePathPrefix string
 }
 
 // Client is a Sonarr client implementing medialib.EpisodeLibrary.
@@ -45,41 +38,10 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, sonarr: sonarrlib.New(s)}
 }
 
-// translatePath applies LocalPathPrefix/RemotePathPrefix translation to path and
-// validates the result is within the configured remote prefix. Returns the
-// translated path, or an error if the path escapes the prefix.
-func (c *Client) translatePath(path string) (string, error) {
-	if c.cfg.LocalPathPrefix != "" {
-		if after, ok := strings.CutPrefix(path, c.cfg.LocalPathPrefix); ok {
-			path = c.cfg.RemotePathPrefix + after
-		}
-	}
-
-	path = filepath.Clean(path)
-
-	// Guard against path traversal: if a remote prefix is configured, reject
-	// any path that escapes it after translation and cleaning.
-	if c.cfg.RemotePathPrefix != "" {
-		cleanPrefix := filepath.Clean(c.cfg.RemotePathPrefix)
-		if !strings.HasPrefix(path, cleanPrefix+string(filepath.Separator)) {
-			return "", fmt.Errorf("path %q is outside configured remote prefix %q", path, cleanPrefix)
-		}
-	}
-
-	return path, nil
-}
-
 // GetEpisodeByFilePath returns the episode identified by parsing the file path.
 // Uses Sonarr's parse endpoint, so it works for pre-import files.
 // Returns medialib.ErrNotFound if no episode is identified.
 func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
-	var err error
-
-	path, err = c.translatePath(path)
-	if err != nil {
-		return medialib.Episode{}, err
-	}
-
 	// Use the title parameter (filename stem) rather than path because Sonarr's
 	// parse endpoint matches path against library paths only, returning 204 No
 	// Content for download paths that haven't been imported yet.
@@ -142,21 +104,15 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	return &episode, nil
 }
 
-// ImportByFilePath implements medialib.ArrLibrary. It translates path to
-// Sonarr's view and sends a DownloadedEpisodesScan command for that path,
-// causing Sonarr to import the file at path into the library.
+// ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command
+// for path, causing Sonarr to import the file at path into the library.
 func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
-	translated, err := c.translatePath(path)
-	if err != nil {
-		return err
-	}
-
 	requestPayload := struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
 	}{
 		Name: "DownloadedEpisodesScan",
-		Path: translated,
+		Path: path,
 	}
 
 	var body bytes.Buffer
@@ -167,7 +123,7 @@ func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
 	var resp sonarrlib.CommandResponse
 
 	if err := c.sonarr.PostInto(ctx, starr.Request{URI: sonarrlib.APIver + "/command", Body: &body}, &resp); err != nil {
-		return fmt.Errorf("scan downloaded episodes at %q: %w", translated, err)
+		return fmt.Errorf("scan downloaded episodes at %q: %w", path, err)
 	}
 
 	return nil

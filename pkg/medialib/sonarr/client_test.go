@@ -94,7 +94,6 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 	tests := []struct {
 		name      string
 		path      string
-		cfg       sonarr.Config
 		parseResp *sonarrlib.ParseOutput
 		expected  medialib.Episode
 		errFunc   require.ErrorAssertionFunc
@@ -119,35 +118,6 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
 			},
 		},
-		{
-			name:      "path translation maps local to remote path",
-			path:      "/mnt/tv/Breaking.Bad.S01E01.mkv",
-			parseResp: knownParseOutput,
-			cfg: sonarr.Config{
-				LocalPathPrefix:  "/mnt/tv",
-				RemotePathPrefix: "/tv",
-			},
-			expected: medialib.Episode{
-				ID:            200,
-				SeriesID:      10,
-				SeriesTitle:   "Breaking Bad",
-				SeasonNumber:  1,
-				EpisodeNumber: 1,
-			},
-		},
-		{
-			name:      "path traversal outside remote prefix returns error",
-			path:      "/mnt/tv/../../etc/passwd",
-			parseResp: &sonarrlib.ParseOutput{},
-			cfg: sonarr.Config{
-				LocalPathPrefix:  "/mnt/tv",
-				RemotePathPrefix: "/tv",
-			},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				require.NotErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
-			},
-		},
 	}
 
 	for _, tc := range tests {
@@ -155,11 +125,7 @@ func TestGetEpisodeByFilePath(t *testing.T) {
 			srv := newSonarrTestServer(t, tc.parseResp)
 			t.Cleanup(srv.Close)
 
-			cfg := tc.cfg
-			cfg.URL = srv.URL
-			cfg.APIKey = "test-key"
-
-			client := sonarr.New(cfg)
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
 
 			episode, err := client.GetEpisodeByFilePath(t.Context(), tc.path)
 
@@ -181,7 +147,6 @@ func TestImportByFilePath(t *testing.T) {
 	tests := []struct {
 		name        string
 		path        string
-		cfg         sonarr.Config
 		wantCmdName string
 		wantCmdPath string
 		errFunc     require.ErrorAssertionFunc
@@ -191,25 +156,6 @@ func TestImportByFilePath(t *testing.T) {
 			path:        "/tv/Breaking.Bad.S01E01.mkv",
 			wantCmdName: "DownloadedEpisodesScan",
 			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
-		},
-		{
-			name: "path translation maps local prefix to remote prefix in command",
-			path: "/mnt/tv/Breaking.Bad.S01E01.mkv",
-			cfg: sonarr.Config{
-				LocalPathPrefix:  "/mnt/tv",
-				RemotePathPrefix: "/tv",
-			},
-			wantCmdName: "DownloadedEpisodesScan",
-			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
-		},
-		{
-			name: "path traversal outside remote prefix returns error without sending command",
-			path: "/mnt/tv/../../etc/passwd",
-			cfg: sonarr.Config{
-				LocalPathPrefix:  "/mnt/tv",
-				RemotePathPrefix: "/tv",
-			},
-			errFunc: require.Error,
 		},
 	}
 
@@ -227,11 +173,7 @@ func TestImportByFilePath(t *testing.T) {
 			})
 			t.Cleanup(srv.Close)
 
-			cfg := tc.cfg
-			cfg.URL = srv.URL
-			cfg.APIKey = "test-key"
-
-			client := sonarr.New(cfg)
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
 
 			err := client.ImportByFilePath(t.Context(), tc.path)
 

@@ -87,9 +87,9 @@ Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This
 2. **Download initiated.** Sonarr/Radarr searches configured indexers, selects a release, and sends it to the configured download client.
 3. **File lands in `/downloads`.** The download client saves the completed file to the real `/downloads` directory and reports the file path back to Sonarr/Radarr.
 4. **Watcher detects the file.** The `cmd/watcher` process, which scans `/downloads` recursively on each Hatchet cron tick using `filepath.WalkDir`, discovers the new file and submits a media-processor workflow job to Hatchet.
-5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `/processed-output`. When `MEDIA_INPUT_ROOT` is set to `/downloads`, the worker mirrors the input's relative subdirectory under `/processed-output` (e.g., `/downloads/my-media-item/video.mp4` produces `/processed-output/my-media-item/video.mkv`). **`MEDIA_INPUT_ROOT` must be configured** for nested downloads to produce matching subdirectory structure; without it, all output is written flat into `/processed-output` and the import path in step 6 will not resolve correctly for nested inputs.
-6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.ImportByFilePath` with a path derived from the original input file path: the same directory and stem as the downloaded file, but with the extension replaced by `.mkv` to match the transcoded output (e.g., if the input was `/downloads/my-media-item/video.mp4`, the import path is `/downloads/my-media-item/video.mkv`). The path is translated if necessary via `LocalPathPrefix`/`RemotePathPrefix` to produce the path as Sonarr/Radarr sees it (e.g., `/downloads/my-media-item/video.mkv`), then a `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path. The arr service scans the file at that path (which resolves to the transcoded output via the bind mount) and triggers the normal import pipeline.
-7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans its `/downloads` path (which resolves to `/processed-output` on the host) and finds the processed file, then imports it into the library.
+5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `output.path` from the watcher config (mirroring the input's relative subdirectory under that path when `watchedPath` is a parent of the input file).
+6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.ImportByFilePath` with the transcoded output file path (`transcode.DestFilePath`). When `output.remotePath` is set, the `output.path` prefix is replaced by `output.remotePath` to produce the path as Sonarr/Radarr sees it (e.g., local `/processed/movies/sub/film.mkv` becomes `/media/movies/sub/film.mkv`). A `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path, triggering the normal import pipeline.
+7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans the path it was given (the `output.remotePath`-prefixed path, or the `output.path`-based path when `output.remotePath` is not set), finds the processed file, and imports it into the library.
 
 ### Why the bind-mount is necessary
 
@@ -151,17 +151,11 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
-| `MEDIA_OUTPUT_DIR` | string (path) | — | **Required** | Directory where transcoded output files are written. |
 | `RADARR_URL` | string (URL) | — | **Required** | Radarr base URL (e.g. `http://radarr:7878`). |
 | `RADARR_API_KEY` | string | — | **Required** | Radarr API key. |
 | `SONARR_URL` | string (URL) | — | **Required** | Sonarr base URL (e.g. `http://sonarr:8989`). |
 | `SONARR_API_KEY` | string | — | **Required** | Sonarr API key. |
-| `RADARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Radarr path translation. Set together with `RADARR_REMOTE_PATH_PREFIX`; setting one without the other will produce paths Radarr cannot resolve. Not validated at startup. |
-| `RADARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Radarr path translation. Replaces `RADARR_LOCAL_PATH_PREFIX` in paths sent to Radarr. |
-| `SONARR_LOCAL_PATH_PREFIX` | string (path) | `""` | Optional | Local-side prefix for Sonarr path translation. Set together with `SONARR_REMOTE_PATH_PREFIX`; setting one without the other will produce paths Sonarr cannot resolve. Not validated at startup. |
-| `SONARR_REMOTE_PATH_PREFIX` | string (path) | `""` | Optional | Remote-side prefix for Sonarr path translation. Replaces `SONARR_LOCAL_PATH_PREFIX` in paths sent to Sonarr. |
 | `MEDIA_WEBHOOK_URL` | string (URL) | `""` | Optional | Webhook endpoint notified on workflow failure. No notification is sent when empty. |
-| `MEDIA_INPUT_ROOT` | string (path) | `""` | Optional | Root of the watched input directories. When set, transcoded output is placed in a mirrored subdirectory under `MEDIA_OUTPUT_DIR`, preserving the original directory structure. |
 | `MEDIA_HARDWARE_DEVICE_PATH` | string (path) | `""` | Optional | Hardware device path for hardware-accelerated transcoding (e.g. `/dev/dri/renderD128`). When empty, the software encoder is used. |
 | `MEDIA_MIN_CROP_X` | integer | `10` | Optional | Minimum number of pixels that must be trimmed horizontally before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |

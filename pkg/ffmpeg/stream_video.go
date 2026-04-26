@@ -165,7 +165,36 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 
 	vss.decoder.codec = codec
 
-	return vss.allocAndConfigDecoderContext(inStream, inputFmt)
+	if err := vss.allocAndConfigDecoderContext(inStream, inputFmt); err != nil {
+		return err
+	}
+
+	// HW decoders (h264_vaapi, h264_qsv, etc.) create hw_frames_ctx lazily on the
+	// first decoded frame, not during avcodec_open2. setupCropFilter runs before any
+	// frames are decoded and requires hw_frames_ctx to configure the buffersrc with
+	// the HW pixel format. Pre-allocate a frames context now so it is non-NULL after
+	// Open(), allowing the crop filter's buffersrc to initialize successfully.
+	if vss.decoder.hwDevCtx != nil && vss.cropParams != nil {
+		profile := hwProfiles[hwAccel]
+		framesCtx := astiav.AllocHardwareFramesContext(vss.decoder.hwDevCtx)
+		if framesCtx != nil {
+			framesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
+			framesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
+			framesCtx.SetWidth(inStream.CodecParameters().Width())
+			framesCtx.SetHeight(inStream.CodecParameters().Height())
+			framesCtx.SetInitialPoolSize(20)
+			if err := framesCtx.Initialize(); err != nil {
+				framesCtx.Free()
+				slog.Debug("ffmpeg: pre-allocating hw_frames_ctx for crop filter failed, lazy init will be used",
+					"hwAccel", hwAccel, "error", err)
+			} else {
+				vss.decoder.codecContext.SetHardwareFramesContext(framesCtx)
+				framesCtx.Free()
+			}
+		}
+	}
+
+	return nil
 }
 
 // allocAndConfigDecoderContext allocates and configures a fresh decoder codec
