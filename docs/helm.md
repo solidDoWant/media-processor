@@ -85,7 +85,7 @@ A map of volume names to bjw-s persistence items. Keys become the bjw-s persiste
 
 ### `config.watcher.watches` — output fields
 
-Each watch entry in `config.watcher.watches` may include the following Helm-only fields in its `output` block. These fields are stripped before the watcher YAML config is written; the chart injects `output.path` from `mountPath` so the worker receives the correct path at runtime.
+Each watch entry in `config.watcher.watches` may include the following fields in its `output` block. `output.volumeName`, `output.mountPath`, and `output.subPath` are Helm-only fields used to configure Kubernetes volume mounts; they are not written to the watcher YAML config. The chart injects `output.path` from `mountPath` so the worker receives the correct path at runtime. `output.remotePath` is not Helm-only and is preserved as `remotePath` in the watcher YAML config.
 
 | Field                            | Type   | Required | Description                                                                                     |
 | -------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
