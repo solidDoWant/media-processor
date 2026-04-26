@@ -22,8 +22,11 @@ cronSchedule: "*/5 * * * * *"
 
 watches:
   - name: movies
-    path: /downloads/movies
+    watchedPath: /downloads/movies
     mediaType: movie          # "movie" or "show"
+    output:
+      path: /processed/movies
+      remotePath: /media/movies   # path as seen by Radarr (omit if same as output.path)
     ignorePatterns:
       - \.!qB$               # incomplete qBittorrent downloads
       - (^|/)_unpack(/|$)    # unpack-in-progress directories
@@ -31,12 +34,16 @@ watches:
     retainEmptyDirectories: false  # prune empty dirs after deletion (default)
 
   - name: shows
-    path: /downloads/tv
+    watchedPath: /downloads/tv
     mediaType: show
+    output:
+      path: /processed/tv
 
   - name: archive
-    path: /downloads/archive
+    watchedPath: /downloads/archive
     mediaType: movie
+    output:
+      path: /processed/archive
     preserveSource: true           # keep the original file
     retainEmptyDirectories: true   # leave empty directories in place
 ```
@@ -47,8 +54,10 @@ watches:
 | ---------------------------------- | -------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cronSchedule`                     | string   | `*/5 * * * * *` | 6-field cron expression controlling how often each watch directory is scanned. Defaults to every 5 seconds when omitted.                                                               |
 | `watches[].name`                   | string   | —               | **Required.** Logical name for this watch entry; used as a label in metrics.                                                                                                           |
-| `watches[].path`                   | string   | —               | **Required.** Path to watch. Relative paths are resolved against the watcher's working directory.                                                                                      |
+| `watches[].watchedPath`            | string   | —               | **Required.** Path to the directory to watch. Relative paths are resolved against the watcher's working directory.                                                                     |
 | `watches[].mediaType`              | string   | —               | **Required.** `movie` or `show`. Determines which library service (Radarr or Sonarr) is notified.                                                                                      |
+| `watches[].output.path`            | string   | —               | **Required.** Directory where processed files for this watch entry are written.                                                                                                        |
+| `watches[].output.remotePath`      | string   | `""`            | Path by which the output directory is known to the arr service (Radarr or Sonarr). Set this when the worker and the arr service mount the output volume at different paths. When empty, no path translation is applied. |
 | `watches[].ignorePatterns`         | []string | `[]`            | Regular expressions in [RE2 syntax](https://github.com/google/re2/wiki/Syntax). A file whose path matches any pattern is silently skipped; a directory match skips the entire subtree. |
 | `watches[].preserveSource`         | bool     | `false`         | When `true`, the source file is kept after successful transcoding.                                                                                                                     |
 | `watches[].retainEmptyDirectories` | bool     | `false`         | When `true`, parent directories that become empty after source deletion are left in place rather than being deleted up to the watch root.                                              |

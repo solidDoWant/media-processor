@@ -46,10 +46,10 @@
           "minLength": 1,
           "description": "Name is a human-readable label for this watch entry, used in logs and metrics."
         },
-        "path": {
+        "watchedPath": {
           "type": "string",
           "minLength": 1,
-          "description": "Path is the filesystem path to the directory to watch. Relative paths are resolved\nagainst the watcher's working directory."
+          "description": "WatchedPath is the filesystem path to the directory to watch. Relative paths are resolved\nagainst the watcher's working directory."
         },
         "mediaType": {
           "$ref": "#/$defs/MediaType",
@@ -69,16 +69,40 @@
         "retainEmptyDirectories": {
           "type": "boolean",
           "description": "RetainEmptyDirectories controls whether empty parent directories are removed after the\nsource file is deleted. When false or omitted (the default), parent directories that\nbecome empty as a result of source-file deletion are pruned bottom-up, stopping at the\nwatch root. When true, no directory removal is performed."
+        },
+        "output": {
+          "$ref": "#/$defs/WatchEntryOutput",
+          "description": "Output describes where processed files are written and how the output path is translated\nfor the arr service."
         }
       },
       "additionalProperties": false,
       "type": "object",
       "required": [
         "name",
-        "path",
-        "mediaType"
+        "watchedPath",
+        "mediaType",
+        "output"
       ],
       "description": "WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch and carrying a human-readable name for identification."
+    },
+    "WatchEntryOutput": {
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path is the filesystem path to the directory where processed files are written."
+        },
+        "remotePath": {
+          "type": "string",
+          "description": "RemotePath is the path by which the output directory is known to the arr service (Radarr/Sonarr).\nSet this when the worker and the arr service mount the output volume at different paths.\nWhen empty, no path translation is applied."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "description": "WatchEntryOutput describes the output destination for a watch entry."
     }
   }
 }

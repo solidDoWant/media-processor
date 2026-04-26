@@ -70,14 +70,24 @@ func (c *CompiledRegexp) UnmarshalYAML(value *yaml.Node) error {
 // It drives runtime validation; JSON Schema enum generation is handled by medialib.MediaType.JSONSchema.
 var validMediaTypes = []medialib.MediaType{medialib.MovieType, medialib.ShowType}
 
+// WatchEntryOutput describes the output destination for a watch entry.
+type WatchEntryOutput struct {
+	// Path is the filesystem path to the directory where processed files are written.
+	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
+	// RemotePath is the path by which the output directory is known to the arr service (Radarr/Sonarr).
+	// Set this when the worker and the arr service mount the output volume at different paths.
+	// When empty, no path translation is applied.
+	RemotePath string `yaml:"remotePath,omitempty"`
+}
+
 // WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch
 // and carrying a human-readable name for identification.
 type WatchEntry struct {
 	// Name is a human-readable label for this watch entry, used in logs and metrics.
 	Name string `yaml:"name" jsonschema:"minLength=1" validate:"min=1"`
-	// Path is the filesystem path to the directory to watch. Relative paths are resolved
+	// WatchedPath is the filesystem path to the directory to watch. Relative paths are resolved
 	// against the watcher's working directory.
-	Path string `yaml:"path" jsonschema:"minLength=1" validate:"min=1"`
+	WatchedPath string `yaml:"watchedPath" jsonschema:"minLength=1" validate:"min=1"`
 	// MediaType indicates whether this directory contains movies or TV show episodes.
 	MediaType medialib.MediaType `yaml:"mediaType" validate:"mediatype"`
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute
@@ -94,6 +104,9 @@ type WatchEntry struct {
 	// become empty as a result of source-file deletion are pruned bottom-up, stopping at the
 	// watch root. When true, no directory removal is performed.
 	RetainEmptyDirectories bool `yaml:"retainEmptyDirectories,omitempty"`
+	// Output describes where processed files are written and how the output path is translated
+	// for the arr service.
+	Output WatchEntryOutput `yaml:"output"`
 }
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
