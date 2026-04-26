@@ -222,6 +222,13 @@ func NewMediaWorkflow(
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
+		if strings.TrimSpace(input.OutputPath) == "" {
+			err := fmt.Errorf("output_path is required")
+			logStepResult(ctx, "transcode", input.FilePath, start, err)
+
+			return steps.TranscodeOutput{}, err
+		}
+
 		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, input.OutputPath, input.WatchRoot, cfg.HardwareDevicePath, cfg.H265CRF, cfg.ProgressLogInterval, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
@@ -255,9 +262,15 @@ func NewMediaWorkflow(
 
 		importPath := transcode.DestFilePath
 		if input.OutputRemotePath != "" {
-			if after, ok := strings.CutPrefix(importPath, input.OutputPath); ok {
-				importPath = input.OutputRemotePath + after
+			after, ok := strings.CutPrefix(importPath, input.OutputPath)
+			if !ok {
+				wrappedErr := fmt.Errorf("output file %q does not start with output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
+				logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+
+				return struct{}{}, wrappedErr
 			}
+
+			importPath = input.OutputRemotePath + after
 		}
 
 		if err := library.ImportByFilePath(ctx, importPath); err != nil {

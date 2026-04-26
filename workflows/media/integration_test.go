@@ -200,6 +200,37 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	assert.Empty(t, entries, "output directory should be empty when file is not a valid video")
 }
 
+func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
+	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
+		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
+	}
+
+	client, err := hatchet.NewClient()
+	require.NoError(t, err)
+
+	inputPath := copyTestVideo(t)
+	outputDir := t.TempDir()
+	remoteDir := "/remote/movies"
+
+	radarrStub := &stubLibraryClient{}
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, client, wf)
+
+	_, err = wf.Run(t.Context(), MediaInput{
+		FilePath:         inputPath,
+		MediaType:        medialib.MovieType,
+		OutputPath:       outputDir,
+		OutputRemotePath: remoteDir,
+	})
+	require.NoError(t, err)
+
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	expectedImportPath := filepath.Join(remoteDir, mkvBase)
+	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
+	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should receive the remote path")
+}
+
 func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
 		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")

@@ -104,9 +104,8 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	return &episode, nil
 }
 
-// ImportByFilePath implements medialib.ArrLibrary. It translates path to
-// Sonarr's view and sends a DownloadedEpisodesScan command for that path,
-// causing Sonarr to import the file at path into the library.
+// ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command
+// for path, causing Sonarr to import the file at path into the library.
 func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
 	requestPayload := struct {
 		Name string `json:"name"`
