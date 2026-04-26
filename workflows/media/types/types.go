@@ -15,4 +15,6 @@ type MediaInput struct {
 	PreserveSource         bool               `json:"preserve_source,omitempty"`
 	WatchRoot              string             `json:"watch_root,omitempty"`
 	RetainEmptyDirectories bool               `json:"retain_empty_directories,omitempty"`
+	OutputPath             string             `json:"output_path,omitempty"`
+	OutputRemotePath       string             `json:"output_remote_path,omitempty"`
 }

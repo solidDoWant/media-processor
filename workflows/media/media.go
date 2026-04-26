@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,13 +38,6 @@ const (
 
 // MediaWorkflowConfig holds the configuration for the media processing workflow.
 type MediaWorkflowConfig struct {
-	// OutputDir is the local directory where transcoded files are written.
-	OutputDir string
-	// WatcherRoot is the root directory monitored by the watcher. When set,
-	// RunTranscode mirrors the subdirectory of the input file relative to
-	// WatcherRoot under OutputDir, preserving the download client's directory
-	// structure so that arr queue entries can be matched by path.
-	WatcherRoot string
 	// WebhookURL is the endpoint to notify on workflow failure.
 	WebhookURL string
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
@@ -230,7 +222,7 @@ func NewMediaWorkflow(
 			return steps.TranscodeOutput{}, wrappedErr
 		}
 
-		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, cfg.OutputDir, cfg.WatcherRoot, cfg.HardwareDevicePath, cfg.H265CRF, cfg.ProgressLogInterval, library)
+		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, input.OutputPath, input.WatchRoot, cfg.HardwareDevicePath, cfg.H265CRF, cfg.ProgressLogInterval, library)
 		if err == nil && out.ArtworkFetchSkipped {
 			recorder.RecordArtworkFetchSkipped(ctx)
 		}
@@ -242,9 +234,8 @@ func NewMediaWorkflow(
 
 	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
 	// for the processed output file, triggering import into the library. The import path is
-	// derived from input.FilePath (the original download path) with the extension replaced
-	// by .mkv, so that the path points to the actual transcoded file as seen by the arr
-	// service (via the LocalPathPrefix/RemotePathPrefix translation in ImportByFilePath).
+	// the transcoded output file path. When output.remotePath is set, the output.path prefix
+	// is replaced by output.remotePath so the arr service sees its own mount point.
 	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
 		start := time.Now()
 
@@ -262,12 +253,12 @@ func NewMediaWorkflow(
 			return struct{}{}, err
 		}
 
-		// Derive the import path from the original input path, replacing the extension
-		// with .mkv to match the transcoded output. This ensures the arr service can
-		// locate the processed file and that the path maps to the queue entry's directory.
-		inputBase := filepath.Base(input.FilePath)
-		mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
-		importPath := filepath.Join(filepath.Dir(input.FilePath), mkvBase)
+		importPath := transcode.DestFilePath
+		if input.OutputRemotePath != "" {
+			if after, ok := strings.CutPrefix(importPath, input.OutputPath); ok {
+				importPath = input.OutputRemotePath + after
+			}
+		}
 
 		if err := library.ImportByFilePath(ctx, importPath); err != nil {
 			wrappedErr := fmt.Errorf("notify library: %w", err)

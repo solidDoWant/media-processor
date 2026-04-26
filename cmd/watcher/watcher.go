@@ -33,9 +33,10 @@ func statusAttr(status string) attribute.KeyValue {
 }
 
 // dispatchFunc submits a workflow run for the given absolute file path, media type, mapping name,
-// whether to preserve the source file after processing, the watch root directory, and whether to
-// retain empty parent directories after source-file deletion.
-type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool) error
+// whether to preserve the source file after processing, the watch root directory, whether to
+// retain empty parent directories after source-file deletion, the absolute output directory path,
+// and the arr-side remote output path prefix (empty means no translation).
+type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error
 
 // scanInstruments holds all OTel instruments used during scan. Instruments are registered
 // once at startup and reused across every scan invocation.
@@ -127,7 +128,7 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 	task := client.NewStandaloneTask(
 		"directory-scan",
 		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool) error {
+			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error {
 				_, err := client.RunNoWait(
 					dispatchCtx,
 					mediatypes.MediaWorkflowName,
@@ -138,6 +139,8 @@ func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterPro
 						PreserveSource:         preserveSource,
 						WatchRoot:              watchRoot,
 						RetainEmptyDirectories: retainEmptyDirs,
+						OutputPath:             outputPath,
+						OutputRemotePath:       outputRemotePath,
 					},
 					hatchet.WithRunKey(filePath),
 				)
@@ -216,6 +219,14 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			continue
 		}
 
+		absOutputPath, err := filepath.Abs(w.Output.Path)
+		if err != nil {
+			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for output directory %q: %w", w.Output.Path, err))
+			errs = append(errs, mappingErrs...)
+
+			continue
+		}
+
 		start := time.Now()
 
 		if err := filepath.WalkDir(absWatchRoot, func(path string, d fs.DirEntry, err error) error {
@@ -262,7 +273,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			filesDiscovered++
 
-			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories); dispatchErr != nil {
+			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, w.Output.RemotePath); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)

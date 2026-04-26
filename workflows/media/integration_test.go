@@ -57,10 +57,10 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -83,10 +83,10 @@ func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -110,15 +110,17 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
-	expectedImportPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".mkv"
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	expectedImportPath := filepath.Join(outputDir, mkvBase)
 	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should be called with the input path with .mkv extension")
+	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should be called with the output file path")
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
@@ -132,10 +134,10 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -159,15 +161,17 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 	outputDir := t.TempDir()
 
 	sonarrStub := &stubLibraryClient{}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
 	require.NoError(t, err)
 
-	expectedImportPath := strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".mkv"
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	expectedImportPath := filepath.Join(outputDir, mkvBase)
 	require.Len(t, sonarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
-	assert.Equal(t, expectedImportPath, sonarrStub.importCalls[0], "ImportByFilePath should be called with the input path with .mkv extension")
+	assert.Equal(t, expectedImportPath, sonarrStub.importCalls[0], "ImportByFilePath should be called with the output file path")
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {
@@ -182,10 +186,10 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	require.NoError(t, os.WriteFile(inputPath, []byte("not a video"), 0o600))
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(inputPath)
@@ -208,10 +212,10 @@ func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{err: medialib.ErrNotFound}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{OutputDir: outputDir}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, client, wf)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType})
+	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	assert.Error(t, err, "workflow should fail when the movie is not found in Radarr")
 
 	_, statErr := os.Stat(inputPath)
