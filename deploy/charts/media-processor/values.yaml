@@ -89,7 +89,7 @@ resources:
       containers:
         watcher:
           image:
-            repository: ghcr.io/soliddowant/watcher
+            repository: ghcr.io/soliddowant/media-processor/watcher
             tag: "{{ .Chart.AppVersion }}"
           args:
             - --config
@@ -132,7 +132,7 @@ resources:
       containers:
         worker:
           image:
-            repository: ghcr.io/soliddowant/worker
+            repository: ghcr.io/soliddowant/media-processor/worker
             tag: "{{ .Chart.AppVersion }}"
           probes:
             liveness:
