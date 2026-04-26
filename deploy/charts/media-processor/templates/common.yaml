@@ -191,6 +191,9 @@
     {{- if and $volName (not $mountPath) -}}
       {{- fail (printf "config.watcher.watches[%q]: output.volumeName requires output.mountPath to be set" $watchName) -}}
     {{- end -}}
+    {{- if and $mountPath (not (hasPrefix "/" $mountPath)) -}}
+      {{- fail (printf "config.watcher.watches[%q]: output.mountPath must be an absolute path, got %q" $watchName $mountPath) -}}
+    {{- end -}}
     {{- if $volName -}}
       {{- $mount := dict "path" $mountPath -}}
       {{- if $subPath -}}
@@ -246,6 +249,11 @@
     {{- $volName := index $output "volumeName" | default "" -}}
     {{- if $volName -}}
       {{- $mountPath := index $output "mountPath" | default "" -}}
+      {{- $existingPath := index $output "path" | default "" -}}
+      {{- if and $existingPath (ne $existingPath $mountPath) -}}
+        {{- $watchName := index $entry "name" | default "(unnamed)" -}}
+        {{- fail (printf "config.watcher.watches[%q]: output.path %q conflicts with output.mountPath %q; remove output.path — it is set automatically from mountPath" $watchName $existingPath $mountPath) -}}
+      {{- end -}}
       {{- $_ := set $output "path" $mountPath -}}
       {{- $_ := unset $output "volumeName" -}}
       {{- $_ := unset $output "mountPath" -}}
