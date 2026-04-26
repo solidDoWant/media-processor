@@ -235,6 +235,8 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			continue
 		}
 
+		outputRemotePath := strings.TrimSpace(w.Output.RemotePath)
+
 		start := time.Now()
 
 		if err := filepath.WalkDir(absWatchRoot, func(path string, d fs.DirEntry, err error) error {
@@ -280,8 +282,6 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
 
 			filesDiscovered++
-
-			outputRemotePath := strings.TrimSpace(w.Output.RemotePath)
 
 			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, outputRemotePath); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))

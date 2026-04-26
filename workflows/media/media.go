@@ -268,7 +268,7 @@ func NewMediaWorkflow(
 			outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
 
 			rel, relErr := filepath.Rel(outputPath, importPath)
-			if relErr != nil || strings.HasPrefix(rel, "..") {
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				wrappedErr := fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
 				logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
 
