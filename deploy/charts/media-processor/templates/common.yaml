@@ -3,7 +3,6 @@
 {{/* Hard-coded chart internals (not exposed in values)           */}}
 {{/* ============================================================ */}}
 {{- $inputMountPath  := "/media/input" -}}
-{{- $outputMountPath := "/media/output" -}}
 {{- $configMountPath := "/etc/media-processor" -}}
 {{- $metricsPort     := 9090 -}}
 
@@ -87,12 +86,6 @@
 {{/* LOG_LEVEL */}}
 {{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
 
-{{/* MEDIA_INPUT_ROOT */}}
-{{- $_ := set $workerEnv "MEDIA_INPUT_ROOT" $inputMountPath -}}
-
-{{/* MEDIA_OUTPUT_DIR */}}
-{{- $_ := set $workerEnv "MEDIA_OUTPUT_DIR" $outputMountPath -}}
-
 {{/* MEDIA_WEBHOOK_URL */}}
 {{- if .Values.config.worker.media.webhookUrl -}}
   {{- $_ := set $workerEnv "MEDIA_WEBHOOK_URL" .Values.config.worker.media.webhookUrl -}}
@@ -101,18 +94,6 @@
 {{/* MEDIA_HARDWARE_DEVICE_PATH */}}
 {{- if .Values.config.worker.media.hardware.devicePath -}}
   {{- $_ := set $workerEnv "MEDIA_HARDWARE_DEVICE_PATH" .Values.config.worker.media.hardware.devicePath -}}
-{{- end -}}
-
-{{/* RADARR path vars (conditional on radarrRemoteMountPath) */}}
-{{- if .Values.config.worker.media.output.radarrRemoteMountPath -}}
-  {{- $_ := set $workerEnv "RADARR_LOCAL_PATH_PREFIX"  $outputMountPath -}}
-  {{- $_ := set $workerEnv "RADARR_REMOTE_PATH_PREFIX" .Values.config.worker.media.output.radarrRemoteMountPath -}}
-{{- end -}}
-
-{{/* SONARR path vars (conditional on sonarrRemoteMountPath) */}}
-{{- if .Values.config.worker.media.output.sonarrRemoteMountPath -}}
-  {{- $_ := set $workerEnv "SONARR_LOCAL_PATH_PREFIX"  $outputMountPath -}}
-  {{- $_ := set $workerEnv "SONARR_REMOTE_PATH_PREFIX" .Values.config.worker.media.output.sonarrRemoteMountPath -}}
 {{- end -}}
 
 {{/* RADARR_URL */}}
@@ -194,17 +175,34 @@
   {{- $_ := set $computedPersistence "input" $inputVolBase -}}
 {{- end -}}
 
-{{/* Output volume (worker only) */}}
-{{- $outputVolBase := omit .Values.config.worker.media.output.volume "subPath" -}}
-{{- if $outputVolBase -}}
-  {{- $outputMount := dict "path" $outputMountPath -}}
-  {{- if .Values.config.worker.media.output.volume.subPath -}}
-    {{- $outputMount = dict "path" $outputMountPath "subPath" .Values.config.worker.media.output.volume.subPath -}}
+{{/* Per-watch-entry output volumes (worker only) */}}
+{{/* Build mount map: volumeName -> (mountPath -> mountSpec), deduped by mountPath per volume */}}
+{{- $outputVolMounts := dict -}}
+{{- range .Values.config.watcher.watches -}}
+  {{- $output := index . "output" -}}
+  {{- if $output -}}
+    {{- $volName := index $output "volumeName" | default "" -}}
+    {{- if $volName -}}
+      {{- $mountPath := index $output "mountPath" | default "" -}}
+      {{- $subPath := index $output "subPath" | default "" -}}
+      {{- $mount := dict "path" $mountPath -}}
+      {{- if $subPath -}}
+        {{- $mount = dict "path" $mountPath "subPath" $subPath -}}
+      {{- end -}}
+      {{- $volMounts := index $outputVolMounts $volName | default dict -}}
+      {{- $_ := set $volMounts $mountPath $mount -}}
+      {{- $_ := set $outputVolMounts $volName $volMounts -}}
+    {{- end -}}
   {{- end -}}
-  {{- $_ := set $outputVolBase "advancedMounts" (dict
-    "worker" (dict "worker" (list $outputMount))
-  ) -}}
-  {{- $_ := set $computedPersistence "output" $outputVolBase -}}
+{{- end -}}
+{{- $watcherVolumes := .Values.config.watcher.volumes | default dict -}}
+{{- range $volName, $volMounts := $outputVolMounts -}}
+  {{- if not (hasKey $watcherVolumes $volName) -}}
+    {{- fail (printf "config.watcher.watches: output.volumeName %q not found in config.watcher.volumes" $volName) -}}
+  {{- end -}}
+  {{- $volBase := mustDeepCopy (index $watcherVolumes $volName) -}}
+  {{- $_ := set $volBase "advancedMounts" (dict "worker" (dict "worker" (values $volMounts))) -}}
+  {{- $_ := set $computedPersistence $volName $volBase -}}
 {{- end -}}
 
 {{/* Hardware device hostPath (conditional) */}}
@@ -218,7 +216,24 @@
 {{- end -}}
 
 {{/* Watcher config ConfigMap / Secret + persistence */}}
-{{- $watcherConfigContent := dict "cronSchedule" .Values.config.watcher.schedule "watches" .Values.config.watcher.watches -}}
+{{/* Build cleaned watches: strip Helm-only output fields, inject output.path from mountPath */}}
+{{- $cleanWatches := list -}}
+{{- range .Values.config.watcher.watches -}}
+  {{- $entry := mustDeepCopy . -}}
+  {{- $output := index $entry "output" -}}
+  {{- if $output -}}
+    {{- $volName := index $output "volumeName" | default "" -}}
+    {{- if $volName -}}
+      {{- $mountPath := index $output "mountPath" | default "" -}}
+      {{- $_ := set $output "path" $mountPath -}}
+      {{- $_ := unset $output "volumeName" -}}
+      {{- $_ := unset $output "mountPath" -}}
+      {{- $_ := unset $output "subPath" -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $cleanWatches = append $cleanWatches $entry -}}
+{{- end -}}
+{{- $watcherConfigContent := dict "cronSchedule" .Values.config.watcher.schedule "watches" $cleanWatches -}}
 {{- $watcherConfigYaml := toYaml $watcherConfigContent -}}
 
 {{- $watcherConfigMount := dict "path" $configMountPath "readOnly" true -}}
