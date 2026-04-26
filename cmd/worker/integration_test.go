@@ -4,12 +4,26 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// freeAddr returns a local TCP address with an available port.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+
+	return addr
+}
 
 // TestWorkerConnectsToHatchet verifies that the worker successfully connects to a
 // running Hatchet server and stays running until signalled to stop.
@@ -27,6 +41,7 @@ func TestWorkerConnectsToHatchet(t *testing.T) {
 	t.Setenv("RADARR_API_KEY", "test-key")
 	t.Setenv("SONARR_URL", "http://localhost:9998")
 	t.Setenv("SONARR_API_KEY", "test-key")
+	t.Setenv("HEALTH_ADDR", freeAddr(t))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

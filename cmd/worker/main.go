@@ -36,6 +36,10 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
+	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
+		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
+	}
+
 	const defaultHealthAddr = ":8080"
 
 	healthAddr := os.Getenv("HEALTH_ADDR")
@@ -53,10 +57,6 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer shutdown()
-
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
-	}
 
 	radarrURL := os.Getenv("RADARR_URL")
 	if radarrURL == "" {
