@@ -29,17 +29,21 @@ func TestLoadConfig(t *testing.T) {
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
   - name: shows
-    path: /watch/shows
+    watchedPath: /watch/shows
     mediaType: show
+    output:
+      path: /out/shows
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Name: "movies", Path: "/watch/movies", MediaType: medialib.MovieType},
-					{Name: "shows", Path: "/watch/shows", MediaType: medialib.ShowType},
+					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
+					{Name: "shows", WatchedPath: "/watch/shows", MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: "/out/shows"}},
 				},
 			},
 		},
@@ -71,8 +75,10 @@ watches: []
 			name: "omitted name in watch entry returns error",
 			content: `
 watches:
-  - path: /watch/movies
+  - watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
 `,
 			errFunc: require.Error,
 		},
@@ -81,28 +87,85 @@ watches:
 			content: `
 watches:
   - name: ""
-    path: /watch/movies
+    watchedPath: /watch/movies
+    mediaType: movie
+    output:
+      path: /out/movies
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "omitted watchedPath in watch entry returns error",
+			content: `
+watches:
+  - name: movies
+    mediaType: movie
+    output:
+      path: /out/movies
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "empty watchedPath in watch entry returns error",
+			content: `
+watches:
+  - name: movies
+    watchedPath: ""
+    mediaType: movie
+    output:
+      path: /out/movies
+`,
+			errFunc: require.Error,
+		},
+		{
+			name: "omitted output.path in watch entry returns error",
+			content: `
+watches:
+  - name: movies
+    watchedPath: /watch/movies
     mediaType: movie
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "empty path in watch entry returns error",
+			name: "empty output.path in watch entry returns error",
 			content: `
 watches:
   - name: movies
-    path: ""
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: ""
 `,
 			errFunc: require.Error,
+		},
+		{
+			name: "output.remotePath is optional",
+			content: `
+watches:
+  - name: movies
+    watchedPath: /watch/movies
+    mediaType: movie
+    output:
+      path: /out/movies
+      remotePath: /remote/movies
+`,
+			expected: Config{
+				CronSchedule: watcherconfig.DefaultCronSchedule,
+				Watches: []WatchEntry{
+					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies", RemotePath: "/remote/movies"}},
+				},
+			},
 		},
 		{
 			name: "empty mediaType in watch entry returns error",
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: ""
+    output:
+      path: /out/movies
 `,
 			errFunc: require.Error,
 		},
@@ -111,8 +174,10 @@ watches:
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: UnknownType
+    output:
+      path: /out/movies
 `,
 			errFunc: require.Error,
 		},
@@ -156,14 +221,16 @@ watches: []
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
     preserveSource: true
+    output:
+      path: /out/movies
 `,
 			expected: Config{
 				CronSchedule: watcherconfig.DefaultCronSchedule,
 				Watches: []WatchEntry{
-					{Name: "movies", Path: "/watch/movies", MediaType: medialib.MovieType, PreserveSource: true},
+					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, PreserveSource: true, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
 				},
 			},
 		},
@@ -172,8 +239,10 @@ watches:
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
     ignorePatterns:
       - "[unclosed"
 `,
@@ -184,8 +253,10 @@ watches:
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
     ignorePatterns:
       - 123
 `,
@@ -196,8 +267,10 @@ watches:
 			content: `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
     ignorePatterns:
       - ""
 `,
@@ -240,8 +313,10 @@ func TestLoadConfig_NullIgnorePatternEntryDropped(t *testing.T) {
 	content := `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
     ignorePatterns:
       - null
 `
@@ -260,8 +335,10 @@ func TestLoadConfig_IgnorePatternsParsedAndCompiled(t *testing.T) {
 	content := `
 watches:
   - name: movies
-    path: /watch/movies
+    watchedPath: /watch/movies
     mediaType: movie
+    output:
+      path: /out/movies
     ignorePatterns:
       - \.!qB$
       - (^|/)_unpack(/|$)

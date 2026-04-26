@@ -59,11 +59,15 @@ Minimal watcher config:
 ```yaml
 watches:
   - name: movies
-    path: /downloads/movies
+    watchedPath: /downloads/movies
     mediaType: movie
+    output:
+      path: /processed/movies
   - name: shows
-    path: /downloads/tv
+    watchedPath: /downloads/tv
     mediaType: show
+    output:
+      path: /processed/tv
 ```
 
 ### Worker

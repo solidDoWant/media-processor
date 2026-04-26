@@ -218,11 +218,15 @@ config:
     schedule: "*/30 * * * * *"
     watches:
       - name: movies
-        path: /media/input/movies
+        watchedPath: /media/input/movies
         mediaType: movie
+        output:
+          path: /media/output/movies
       - name: shows
-        path: /media/input/shows
+        watchedPath: /media/input/shows
         mediaType: show
+        output:
+          path: /media/output/shows
 
   worker:
     media:

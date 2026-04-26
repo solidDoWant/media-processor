@@ -106,7 +106,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "existing directory passes",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", Path: t.TempDir(), MediaType: medialib.MovieType},
+					{Name: "movies", WatchedPath: t.TempDir(), MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.NoError,
@@ -115,7 +115,7 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "missing directory returns error",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", Path: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
+					{Name: "movies", WatchedPath: "/nonexistent/path/abc123", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: require.Error,
@@ -124,8 +124,8 @@ func TestValidateWatchDirs(t *testing.T) {
 			name: "all errors reported when multiple dirs are missing",
 			cfg: &Config{
 				Watches: []WatchEntry{
-					{Name: "alpha", Path: "/nonexistent/alpha", MediaType: medialib.MovieType},
-					{Name: "beta", Path: "/nonexistent/beta", MediaType: medialib.MovieType},
+					{Name: "alpha", WatchedPath: "/nonexistent/alpha", MediaType: medialib.MovieType},
+					{Name: "beta", WatchedPath: "/nonexistent/beta", MediaType: medialib.MovieType},
 				},
 			},
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
@@ -146,7 +146,7 @@ func TestValidateWatchDirs(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
 
-				return &Config{Watches: []WatchEntry{{Name: "movies", Path: f.Name(), MediaType: medialib.MovieType}}}
+				return &Config{Watches: []WatchEntry{{Name: "movies", WatchedPath: f.Name(), MediaType: medialib.MovieType}}}
 			}(),
 			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
 				require.Error(t, err, msgAndArgs...)
@@ -174,7 +174,7 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -211,7 +211,7 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "shows", Path: dir, MediaType: medialib.ShowType},
+			{Name: "shows", WatchedPath: dir, MediaType: medialib.ShowType},
 		},
 	}
 
@@ -238,7 +238,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -264,7 +264,7 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -289,8 +289,8 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: movieDir, MediaType: medialib.MovieType},
-			{Name: "shows", Path: showDir, MediaType: medialib.ShowType},
+			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType},
+			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType},
 		},
 	}
 
@@ -317,7 +317,7 @@ func TestScan_MetricsPresenceAfterScan(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -347,7 +347,7 @@ func TestScan_SuccessCounterIncrements(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -378,7 +378,7 @@ func TestScan_ErrorCounterIncrements(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -409,8 +409,8 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: movieDir, MediaType: medialib.MovieType},
-			{Name: "shows", Path: showDir, MediaType: medialib.ShowType},
+			{Name: "movies", WatchedPath: movieDir, MediaType: medialib.MovieType},
+			{Name: "shows", WatchedPath: showDir, MediaType: medialib.ShowType},
 		},
 	}
 
@@ -451,7 +451,7 @@ func TestScan_LastSuccessfulScanSetOnSuccess(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -481,7 +481,7 @@ func TestScan_FilesDiscoveredCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -515,7 +515,7 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -550,7 +550,7 @@ func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
 		},
 	}
 
@@ -579,7 +579,7 @@ func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`(^|/)_unpack(/|$)`)}}},
 		},
 	}
 
@@ -606,7 +606,7 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, IgnorePatterns: []CompiledRegexp{{Regexp: regexp.MustCompile(`\.!qB$`)}}},
 		},
 	}
 
@@ -632,7 +632,7 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -678,7 +678,7 @@ func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
 
 			cfg := &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", Path: dir, MediaType: medialib.MovieType, PreserveSource: tt.preserveSource},
+					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, PreserveSource: tt.preserveSource},
 				},
 			}
 
@@ -710,7 +710,7 @@ func TestScan_WatchRootForwardedToDispatch(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -752,7 +752,7 @@ func TestScan_RetainEmptyDirsForwardedToDispatch(t *testing.T) {
 
 			cfg := &Config{
 				Watches: []WatchEntry{
-					{Name: "movies", Path: dir, MediaType: medialib.MovieType, RetainEmptyDirectories: tt.retainEmptyDirectories},
+					{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, RetainEmptyDirectories: tt.retainEmptyDirectories},
 				},
 			}
 
@@ -785,7 +785,7 @@ func TestScan_SkipsSentinelledFile(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
@@ -810,7 +810,7 @@ func TestScan_SkipsSentinelFileItself(t *testing.T) {
 
 	cfg := &Config{
 		Watches: []WatchEntry{
-			{Name: "movies", Path: dir, MediaType: medialib.MovieType},
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType},
 		},
 	}
 
