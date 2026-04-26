@@ -221,7 +221,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 		trimmedOutputPath := strings.TrimSpace(w.Output.Path)
 		if trimmedOutputPath == "" {
-			mappingErrs = append(mappingErrs, fmt.Errorf("output.path is blank or whitespace-only"))
+			mappingErrs = append(mappingErrs, fmt.Errorf("output.path is blank or whitespace-only for watch %q (watched path %q)", w.Name, w.WatchedPath))
 			errs = append(errs, mappingErrs...)
 
 			continue
