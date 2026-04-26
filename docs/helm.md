@@ -14,28 +14,28 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 The chart has no required values at `helm template` time — the manifests render without error with all defaults. However, the pods will fail to start at runtime without the following values. You will need at a minimum:
 
-- `config.hatchetToken` — Hatchet API token
+- `config.hatchet.token` — Hatchet API token
 - `config.watcher.watches` — at least one watch entry
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
 - `config.inputVolume` — volume definition for the media input directory
-- `config.worker.media.output.volume` — volume definition for the media output directory
+- `config.watcher.volumes` — one volume definition per distinct `output.volumeName` referenced by watch entries
 
 ## Values reference
 
-### `config.hatchetToken`
+### `config.hatchet.token`
 
 The Hatchet API token for both watcher and worker. Sets `HATCHET_CLIENT_TOKEN` on both containers.
 
-| Field                                   | Type   | Default | Description                                                |
-| --------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
-| `config.hatchetToken.value`             | string | `""`    | Literal token value                                        |
-| `config.hatchetToken.secretKeyRef.name` | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
-| `config.hatchetToken.secretKeyRef.key`  | string | `""`    | Key within the Secret                                      |
+| Field                                        | Type   | Default | Description                                                |
+| -------------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
+| `config.hatchet.token.value`                 | string | `""`    | Literal token value                                        |
+| `config.hatchet.token.secretKeyRef.name`     | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
+| `config.hatchet.token.secretKeyRef.key`      | string | `""`    | Key within the Secret                                      |
 
 ### `config.inputVolume`
 
-A bjw-s persistence item describing the volume that holds the input media files. The chart mounts it read-only in the watcher at `/media/input` and read-write in the worker at `/media/input`. Sets `MEDIA_INPUT_ROOT=/media/input` on the worker. When empty (`{}`), no input volume is created.
+A bjw-s persistence item describing the volume that holds the input media files. The chart mounts it at `/media/input` in both the watcher (read-only) and the worker (read-write). When empty (`{}`), no input volume is created. The chart does not inject `MEDIA_INPUT_ROOT` or `MEDIA_OUTPUT_DIR`, so configure any path-related environment variables your containers need explicitly.
 
 Any bjw-s persistence item type is supported (`persistentVolumeClaim`, `hostPath`, `nfs`, `custom`, etc.). Do not set `globalMounts` or `advancedMounts` — the chart manages those.
 
@@ -68,11 +68,62 @@ Shared observability settings applied to both watcher and worker.
 | -------------------------------- | ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                      |
 | `config.watcher.schedule`        | string | `""`        | 6-field Hatchet cron expression for the scan schedule (e.g. `*/30 * * * * *`). When empty, the watcher uses the built-in default (`*/5 * * * * *`, every 5 seconds). Written to `cronSchedule` in the config file |
-| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file                                                              |
+| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                      |
+| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                  |
 | `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                   |
 | `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                               |
 
 The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `configType: Secret`) and mounted read-only at `/etc/media-processor/`. The watcher container receives `--config /etc/media-processor/watcher.yaml`.
+
+### `config.watcher.volumes`
+
+A map of volume names to bjw-s persistence items. Keys become the bjw-s persistence key (and the Kubernetes volume name). Values are standard bjw-s persistence items (`type`, `existingClaim`, `server`/`path` for NFS, etc.) — do not set `globalMounts` or `advancedMounts`, the chart manages those. Volumes are mounted in the worker only. A volume is only mounted if at least one watch entry references it by `volumeName`; volumes with no references are ignored.
+
+| Field                         | Type   | Default | Description                                |
+| ----------------------------- | ------ | ------- | ------------------------------------------ |
+| `config.watcher.volumes.NAME` | object | —       | bjw-s persistence item for volume `NAME`   |
+
+### `config.watcher.watches` — output fields
+
+Each watch entry in `config.watcher.watches` may include the following fields in its `output` block. `output.volumeName`, `output.mountPath`, and `output.subPath` are Helm-only fields used to configure Kubernetes volume mounts; they are not written to the watcher YAML config. The chart injects `output.path` from `mountPath` so the worker receives the correct path at runtime. `output.remotePath` is not Helm-only and is preserved as `remotePath` in the watcher YAML config.
+
+| Field                            | Type   | Required | Description                                                                                     |
+| -------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `output.volumeName`              | string | yes      | Name of the volume from `config.watcher.volumes` to mount for this watch entry's output         |
+| `output.mountPath`               | string | yes      | Container path where the volume is mounted; becomes `output.path` in the watcher YAML config    |
+| `output.subPath`                 | string | no       | Optional volume mount subPath; not written to the watcher YAML config                           |
+| `output.remotePath`              | string | no       | How the arr service (Radarr/Sonarr) sees this output path. Written to `remotePath` in the YAML |
+
+Multiple watch entries may reference the same `volumeName` with different `mountPath`/`subPath` values; the chart creates one Kubernetes volume with multiple mounts rather than duplicating the underlying PVC or NFS share.
+
+Example — one NFS share serving two watch entries at different sub-paths:
+
+```yaml
+config:
+  watcher:
+    volumes:
+      media-output:
+        type: nfs
+        server: nas.example.com
+        path: /volume1/media
+    watches:
+      - name: movies
+        watchedPath: /media/input/movies
+        mediaType: movie
+        output:
+          volumeName: media-output
+          mountPath: /media/output/movies
+          subPath: movies
+          remotePath: /downloads/movies
+      - name: shows
+        watchedPath: /media/input/shows
+        mediaType: show
+        output:
+          volumeName: media-output
+          mountPath: /media/output/shows
+          subPath: shows
+          remotePath: /downloads/shows
+```
 
 ### `config.worker`
 
@@ -80,15 +131,6 @@ The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `confi
 | ------------------------------- | ------ | ------- | ------------------------------------------------------------ |
 | `config.worker.logLevel`        | string | `info`  | Sets `LOG_LEVEL` on the worker container                     |
 | `config.worker.metrics.enabled` | bool   | `false` | When true, sets `METRICS_ADDR=:9090` on the worker container |
-
-### `config.worker.media.output`
-
-| Field                                              | Type   | Default | Description                                                                                                                                                               |
-| -------------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.worker.media.output.volume`                | object | `{}`    | bjw-s persistence item for the output directory. Mounted at `/media/output` in the worker. Sets `MEDIA_OUTPUT_DIR=/media/output`. When empty, no output volume is created |
-| `config.worker.media.output.volume.subPath`        | string | `""`    | Optional subPath for the volume mount                                                                                                                                     |
-| `config.worker.media.output.radarrRemoteMountPath` | string | `""`    | How Radarr sees the output directory. When non-empty, sets `RADARR_LOCAL_PATH_PREFIX=/media/output` and `RADARR_REMOTE_PATH_PREFIX=<value>` on the worker                 |
-| `config.worker.media.output.sonarrRemoteMountPath` | string | `""`    | How Sonarr sees the output directory. When non-empty, sets `SONARR_LOCAL_PATH_PREFIX=/media/output` and `SONARR_REMOTE_PATH_PREFIX=<value>` on the worker                 |
 
 ### `config.worker.media.hardware`
 
@@ -156,7 +198,6 @@ These values are intentionally not configurable in `values.yaml`:
 | Setting              | Value                   |
 | -------------------- | ----------------------- |
 | Input mount path     | `/media/input`          |
-| Output mount path    | `/media/output`         |
 | Watcher config mount | `/etc/media-processor/` |
 | Watcher health port  | `8081`                  |
 | Worker health port   | `8080`                  |
@@ -170,10 +211,11 @@ Instead of putting token values directly in `values.yaml`, reference a pre-exist
 
 ```yaml
 config:
-  hatchetToken:
-    secretKeyRef:
-      name: media-processor-secrets
-      key: hatchet-token
+  hatchet:
+    token:
+      secretKeyRef:
+        name: media-processor-secrets
+        key: hatchet-token
 
   worker:
     radarr:
@@ -201,14 +243,15 @@ Alternatively, store the watcher YAML config (which may include watch paths) as 
 
 ## Worked example: persistence, arr path translation, and hardware acceleration
 
-This example uses PVCs for input and output, configures arr path translation for the bind-mount arrangement described in the [README](../README.md), and enables Intel QSV hardware acceleration.
+This example uses a PVC for input and NFS for output, configures arr path translation for the bind-mount arrangement described in the [README](../README.md), and enables Intel QSV hardware acceleration.
 
 ```yaml
 config:
-  hatchetToken:
-    secretKeyRef:
-      name: media-processor-secrets
-      key: hatchet-token
+  hatchet:
+    token:
+      secretKeyRef:
+        name: media-processor-secrets
+        key: hatchet-token
 
   inputVolume:
     type: persistentVolumeClaim
@@ -216,28 +259,33 @@ config:
 
   watcher:
     schedule: "*/30 * * * * *"
+    volumes:
+      processed-output:
+        type: nfs
+        server: nas.example.com
+        path: /volume1/processed
     watches:
       - name: movies
         watchedPath: /media/input/movies
         mediaType: movie
         output:
-          path: /media/output/movies
+          volumeName: processed-output
+          mountPath: /media/output/movies
+          subPath: movies
+          # Radarr's /downloads/movies is bind-mounted from the NFS share on the host,
+          # so Radarr sees /downloads/movies where the worker writes /media/output/movies.
+          remotePath: /downloads/movies
       - name: shows
         watchedPath: /media/input/shows
         mediaType: show
         output:
-          path: /media/output/shows
+          volumeName: processed-output
+          mountPath: /media/output/shows
+          subPath: shows
+          remotePath: /downloads/shows
 
   worker:
     media:
-      output:
-        volume:
-          type: persistentVolumeClaim
-          existingClaim: processed-output-pvc
-        # Radarr's /downloads is bind-mounted from the output PVC on the host,
-        # so Radarr sees /downloads where the worker writes /media/output.
-        radarrRemoteMountPath: "/downloads"
-        sonarrRemoteMountPath: "/downloads"
       hardware:
         # Intel QSV via /dev/dri/renderD128 (bare-metal or VM node)
         devicePath: "/dev/dri/renderD128"

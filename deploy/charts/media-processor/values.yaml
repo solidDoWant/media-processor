@@ -24,6 +24,16 @@ config:
     # schedule is the 6-field Hatchet cron expression (seconds-leading) for the watcher scan.
     schedule: ""
     watches: []
+    # volumes is a map of volume names to bjw-s persistence items (type, existingClaim, server/path,
+    # etc.) without globalMounts or advancedMounts; the chart manages mounts. Keys become bjw-s
+    # persistence keys. Referenced by watch entry output.volumeName fields. Volumes not referenced
+    # by any watch entry are not mounted. When empty, no output volumes are created.
+    volumes: {}
+    # volumes:
+    #   media-output:
+    #     type: nfs
+    #     server: nas.example.com
+    #     path: /volume1/media
     logLevel: info
     metrics:
       enabled: false
@@ -38,22 +48,6 @@ config:
         endpoint: ""
       highCardinalityLabels: false
     media:
-      output:
-        # volume is a bjw-s persistence item without globalMounts or advancedMounts; the chart
-        # manages mounts at /media/output. An optional subPath field controls the mount subPath.
-        # When empty, no output volume is created.
-        volume: {}
-        # volume:
-        #   type: nfs
-        #   server: nas.example.com
-        #   path: /volume1/media
-        #   subPath: output
-        # radarrRemoteMountPath is how Radarr sees the output directory. When non-empty,
-        # RADARR_LOCAL_PATH_PREFIX and RADARR_REMOTE_PATH_PREFIX are set on the worker.
-        radarrRemoteMountPath: ""
-        # sonarrRemoteMountPath is how Sonarr sees the output directory. When non-empty,
-        # SONARR_LOCAL_PATH_PREFIX and SONARR_REMOTE_PATH_PREFIX are set on the worker.
-        sonarrRemoteMountPath: ""
       webhookUrl: ""
       hardware:
         # devicePath is the host path to the hardware encoding device (e.g. /dev/dri/renderD128).
