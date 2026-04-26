@@ -1,19 +1,12 @@
 package steps
 
 import (
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestMain(m *testing.M) {
-	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	os.Exit(m.Run())
-}
 
 // testVideoPath points to the small H.264/MP4 clip shared with the ffprobe package.
 const testVideoPath = "../../pkg/ffprobe/testdata/video.mp4"
