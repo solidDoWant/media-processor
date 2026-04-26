@@ -19,7 +19,7 @@ The chart has no required values at `helm template` time — the manifests rende
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
 - `config.inputVolume` — volume definition for the media input directory
-- `config.watcher.volumes` — one volume definition per distinct output path referenced by watch entries
+- `config.watcher.volumes` — one volume definition per distinct `output.volumeName` referenced by watch entries
 
 ## Values reference
 
