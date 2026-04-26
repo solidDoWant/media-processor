@@ -29,9 +29,9 @@ Sonarr/Radarr's `/downloads` is bind-mounted from `/processed-output` on the hos
 2. Sonarr/Radarr sends the release to the download client.
 3. The download client saves the completed file to `/downloads` and reports the path back to Sonarr/Radarr.
 4. The watcher detects the new file and submits a Hatchet job.
-5. The worker picks up the job: it probes the file, detects black-bar crop, and writes an MKV output to the directory specified by `output.path` in the watcher config (mirroring the input's subdirectory under that path when `output.watchedPath` is set as a parent). Non-H.264/H.265 video is re-encoded to H.265; H.264 or H.265 sources already in MKV are remuxed without re-encode unless a crop is being applied.
-6. The worker calls the Radarr or Sonarr API to trigger a library rescan. The scan path is derived from the original download path with the extension swapped to `.mkv` (not the worker's actual output path); the arr service resolves this to the transcoded file via its `/downloads` bind mount.
-7. Sonarr/Radarr scans its `/downloads` (which resolves to `/processed-output`), finds the processed file, and imports it.
+5. The worker picks up the job: it probes the file, detects black-bar crop, and writes an MKV output to the directory specified by `output.path` in the watcher config (mirroring the input's subdirectory under that path when `watchedPath` is a parent of the input file). Non-H.264/H.265 video is re-encoded to H.265; H.264 or H.265 sources already in MKV are remuxed without re-encode unless a crop is being applied.
+6. The worker calls the Radarr or Sonarr API to trigger a library rescan using the transcoded output file path. When `output.remotePath` is configured, the `output.path` prefix in that path is replaced by `output.remotePath` to produce the path as Sonarr/Radarr sees it (e.g., local `/processed-output/movies/film.mkv` becomes `/downloads/movies/film.mkv` when `output.remotePath` is `/downloads`).
+7. Sonarr/Radarr scans the notified path, finds the processed file, and imports it into the library.
 
 ## Building
 

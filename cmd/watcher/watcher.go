@@ -281,7 +281,9 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			filesDiscovered++
 
-			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, w.Output.RemotePath); dispatchErr != nil {
+			outputRemotePath := strings.TrimSpace(w.Output.RemotePath)
+
+			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, outputRemotePath); dispatchErr != nil {
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
 
 				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)

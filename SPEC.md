@@ -89,7 +89,7 @@ Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This
 4. **Watcher detects the file.** The `cmd/watcher` process, which scans `/downloads` recursively on each Hatchet cron tick using `filepath.WalkDir`, discovers the new file and submits a media-processor workflow job to Hatchet.
 5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `output.path` from the watcher config (mirroring the input's relative subdirectory under that path when `watchedPath` is a parent of the input file).
 6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.ImportByFilePath` with the transcoded output file path (`transcode.DestFilePath`). When `output.remotePath` is set, the `output.path` prefix is replaced by `output.remotePath` to produce the path as Sonarr/Radarr sees it (e.g., local `/processed/movies/sub/film.mkv` becomes `/media/movies/sub/film.mkv`). A `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path, triggering the normal import pipeline.
-7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans its `/downloads` path (which resolves to `/processed-output` on the host) and finds the processed file, then imports it into the library.
+7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans the path it was given (the `output.remotePath`-prefixed path, or the `output.path`-based path when `output.remotePath` is not set), finds the processed file, and imports it into the library.
 
 ### Why the bind-mount is necessary
 

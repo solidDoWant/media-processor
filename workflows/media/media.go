@@ -264,7 +264,7 @@ func NewMediaWorkflow(
 
 		importPath := transcode.DestFilePath
 
-		if input.OutputRemotePath != "" {
+		if remotePath := strings.TrimSpace(input.OutputRemotePath); remotePath != "" {
 			outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
 
 			rel, relErr := filepath.Rel(outputPath, importPath)
@@ -275,7 +275,7 @@ func NewMediaWorkflow(
 				return struct{}{}, wrappedErr
 			}
 
-			importPath = filepath.Join(input.OutputRemotePath, rel)
+			importPath = filepath.Join(remotePath, rel)
 		}
 
 		if err := library.ImportByFilePath(ctx, importPath); err != nil {
