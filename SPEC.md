@@ -110,22 +110,28 @@ No config file merging is performed. Exactly one YAML config file path is accept
 cronSchedule: "*/5 * * * * *"
 watches:
   - name: movies
-    path: /media/incoming/movies
+    watchedPath: /media/incoming/movies
     mediaType: movie
+    output:
+      path: /media/processed/movies
     ignorePatterns:
       - \.!qB$
       - (^|/)_unpack(/|$)
   - name: shows
-    path: /media/incoming/tv
+    watchedPath: /media/incoming/tv
     mediaType: show
+    output:
+      path: /media/processed/tv
   - name: archive
-    path: /media/incoming/archive
+    watchedPath: /media/incoming/archive
     mediaType: movie
+    output:
+      path: /media/processed/archive
     preserveSource: true
     retainEmptyDirectories: true
 ```
 
-`cronSchedule`, `ignorePatterns`, `preserveSource`, and `retainEmptyDirectories` are all optional. A minimal entry only needs `name`, `path`, and `mediaType`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file. By default, after a source file is deleted (either because it is invalid media or after successful processing), any parent directories that become empty are removed bottom-up, stopping at the watch root. Set `retainEmptyDirectories: true` to disable this behaviour and leave empty directories in place.
+`cronSchedule`, `ignorePatterns`, `preserveSource`, and `retainEmptyDirectories` are all optional. A minimal entry needs `name`, `watchedPath`, `mediaType`, and `output.path`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file. By default, after a source file is deleted (either because it is invalid media or after successful processing), any parent directories that become empty are removed bottom-up, stopping at the watch root. Set `retainEmptyDirectories: true` to disable this behaviour and leave empty directories in place.
 
 ### Environment variables
 

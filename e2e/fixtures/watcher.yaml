@@ -1,17 +1,25 @@
 watches:
   - name: radarr
-    path: /tmp/e2e-media-processor/downloads/radarr
+    watchedPath: /tmp/e2e-media-processor/downloads/radarr
     mediaType: movie
+    output:
+      path: /tmp/e2e-media-processor/processed-output/radarr
+      remotePath: /downloads
     ignorePatterns:
       - \.tmp$
   - name: sonarr
-    path: /tmp/e2e-media-processor/downloads/sonarr
+    watchedPath: /tmp/e2e-media-processor/downloads/sonarr
     mediaType: show
+    output:
+      path: /tmp/e2e-media-processor/processed-output/sonarr
+      remotePath: /downloads
     ignorePatterns:
       - \.tmp$
   - name: preserve-source
-    path: /tmp/e2e-media-processor/downloads/preserve-source
+    watchedPath: /tmp/e2e-media-processor/downloads/preserve-source
     mediaType: movie
+    output:
+      path: /tmp/e2e-media-processor/processed-output/preserve-source
     preserveSource: true
     ignorePatterns:
       - \.tmp$
