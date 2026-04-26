@@ -182,21 +182,38 @@
   {{- $output := index . "output" -}}
   {{- if $output -}}
     {{- $volName := index $output "volumeName" | default "" -}}
+    {{- $mountPath := index $output "mountPath" | default "" -}}
+    {{- $subPath := index $output "subPath" | default "" -}}
+    {{- $watchName := index . "name" | default "(unnamed)" -}}
+    {{- if and (or $mountPath $subPath) (not $volName) -}}
+      {{- fail (printf "config.watcher.watches[%q]: output.mountPath/subPath require output.volumeName to be set" $watchName) -}}
+    {{- end -}}
+    {{- if and $volName (not $mountPath) -}}
+      {{- fail (printf "config.watcher.watches[%q]: output.volumeName requires output.mountPath to be set" $watchName) -}}
+    {{- end -}}
     {{- if $volName -}}
-      {{- $mountPath := index $output "mountPath" | default "" -}}
-      {{- $subPath := index $output "subPath" | default "" -}}
       {{- $mount := dict "path" $mountPath -}}
       {{- if $subPath -}}
         {{- $mount = dict "path" $mountPath "subPath" $subPath -}}
       {{- end -}}
       {{- $volMounts := index $outputVolMounts $volName | default dict -}}
+      {{- if hasKey $volMounts $mountPath -}}
+        {{- $existingSubPath := index (index $volMounts $mountPath) "subPath" | default "" -}}
+        {{- if ne $existingSubPath $subPath -}}
+          {{- fail (printf "config.watcher.watches[%q]: conflicting output mount for volumeName %q and mountPath %q: subPath %q conflicts with %q" $watchName $volName $mountPath $existingSubPath $subPath) -}}
+        {{- end -}}
+      {{- end -}}
       {{- $_ := set $volMounts $mountPath $mount -}}
       {{- $_ := set $outputVolMounts $volName $volMounts -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- $watcherVolumes := .Values.config.watcher.volumes | default dict -}}
+{{- $reservedPersistenceKeys := list "input" "watcher-config" "hardware-device" -}}
 {{- range $volName, $volMounts := $outputVolMounts -}}
+  {{- if has $volName $reservedPersistenceKeys -}}
+    {{- fail (printf "config.watcher.volumes: volume name %q conflicts with a chart-reserved persistence key (reserved: %s)" $volName (join ", " $reservedPersistenceKeys)) -}}
+  {{- end -}}
   {{- if not (hasKey $watcherVolumes $volName) -}}
     {{- fail (printf "config.watcher.watches: output.volumeName %q not found in config.watcher.volumes" $volName) -}}
   {{- end -}}

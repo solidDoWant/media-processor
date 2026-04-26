@@ -35,7 +35,7 @@ The Hatchet API token for both watcher and worker. Sets `HATCHET_CLIENT_TOKEN` o
 
 ### `config.inputVolume`
 
-A bjw-s persistence item describing the volume that holds the input media files. The chart mounts it read-only in the watcher at `/media/input` and read-write in the worker at `/media/input`. When empty (`{}`), no input volume is created.
+A bjw-s persistence item describing the volume that holds the input media files. The chart mounts it at `/media/input` in both the watcher (read-only) and the worker (read-write). When empty (`{}`), no input volume is created. The chart does not inject `MEDIA_INPUT_ROOT` or `MEDIA_OUTPUT_DIR`, so configure any path-related environment variables your containers need explicitly.
 
 Any bjw-s persistence item type is supported (`persistentVolumeClaim`, `hostPath`, `nfs`, `custom`, etc.). Do not set `globalMounts` or `advancedMounts` — the chart manages those.
 
