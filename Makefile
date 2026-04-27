@@ -172,27 +172,12 @@ clean: ## Clean up all build artifacts and loaded container images.
 
 ##@ Local Dev
 
-TEMPORAL_PID_FILE := .temporal.pid
-TEMPORAL_DB_FILE  := .temporal.db
-
 .PHONY: temporal-up
-temporal-up: ## Start a local Temporal development server (requires 'temporal' CLI in PATH).
-	@if [ -f "$(TEMPORAL_PID_FILE)" ] && kill -0 "$$(cat $(TEMPORAL_PID_FILE))" 2>/dev/null; then \
-		echo "Temporal server already running (PID $$(cat $(TEMPORAL_PID_FILE)))"; exit 1; \
-	fi
-	@rm -f "$(TEMPORAL_PID_FILE)"
-	@temporal server start-dev --headless --db-filename "$(TEMPORAL_DB_FILE)" & \
-	pid=$$!; sleep 2; \
-	if ! kill -0 "$$pid" 2>/dev/null; then echo "Temporal server failed to start"; exit 1; fi; \
-	echo "$$pid" > "$(TEMPORAL_PID_FILE)"; \
-	echo "Temporal server started (PID $$pid). Run 'make test-integration' to run integration tests."
+temporal-up: ## Start a local Temporal dev stack via Docker Compose and wait until ready.
+	docker compose up -d --wait
+	@echo "Temporal is ready. Dashboard: http://localhost:8233"
+	@echo "Run 'make test-integration' to run integration tests."
 
 .PHONY: temporal-down
-temporal-down: ## Stop the local Temporal development server started by 'make temporal-up'.
-	@if [ -f "$(TEMPORAL_PID_FILE)" ]; then \
-		kill "$$(cat $(TEMPORAL_PID_FILE))" 2>/dev/null || true; \
-		rm -f "$(TEMPORAL_PID_FILE)"; \
-		echo "Temporal server stopped"; \
-	else \
-		echo "No running Temporal server found ($(TEMPORAL_PID_FILE) does not exist)"; \
-	fi
+temporal-down: ## Stop the local Temporal dev stack started by 'make temporal-up'.
+	docker compose down

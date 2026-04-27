@@ -5,97 +5,47 @@ services:
     restart: always
     hostname: postgres
     environment:
-      POSTGRES_USER: hatchet
-      POSTGRES_PASSWORD: hatchet
-      POSTGRES_DB: hatchet
-    ports:
-      - "5435:5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
     volumes:
-      - hatchet_postgres_data:/var/lib/postgresql
+      - temporal_postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
+      test: ["CMD-SHELL", "pg_isready -d temporal -U temporal"]
       interval: 10s
       timeout: 10s
       retries: 5
       start_period: 10s
 
-  migration:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.83.37
-    command: /hatchet/hatchet-migrate
+  temporal:
+    image: temporalio/auto-setup:1.27
+    ports:
+      - "7233:7233"
     environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
+      - DB=postgres12_pgx
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=postgres
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "temporal --address $(hostname -i):7233 operator cluster health 2>/dev/null | grep -q SERVING"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
-  setup-config:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.83.37
-    command: >
-      /hatchet/hatchet-admin quickstart
-      --skip certs
-      --generated-config-dir /hatchet/config
-      --overwrite=false
-    environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-      SERVER_MSGQUEUE_KIND: postgres
-      SERVER_AUTH_COOKIE_DOMAIN: "localhost:8080"
-      SERVER_AUTH_COOKIE_INSECURE: "t"
-      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
-      SERVER_GRPC_INSECURE: "t"
-      SERVER_GRPC_BROADCAST_ADDRESS: "localhost:7077"
-      SERVER_DEFAULT_ENGINE_VERSION: "V1"
-      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: "hatchet-engine:7070"
-    volumes:
-      - hatchet_certs:/hatchet/certs
-      - hatchet_config:/hatchet/config
-    depends_on:
-      migration:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-
-  hatchet-engine:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.83.37
-    command: /hatchet/hatchet-engine --config /hatchet/config
-    restart: on-failure
+  temporal-ui:
+    # Dashboard: http://localhost:8233
+    image: temporalio/ui:2.34.0
     ports:
-      - "7077:7070"
+      - "8233:8080"
     environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-      SERVER_MSGQUEUE_KIND: postgres
-      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
-      SERVER_GRPC_INSECURE: "t"
-    volumes:
-      - hatchet_certs:/hatchet/certs
-      - hatchet_config:/hatchet/config
+      - TEMPORAL_ADDRESS=temporal:7233
     depends_on:
-      setup-config:
-        condition: service_completed_successfully
-      migration:
-        condition: service_completed_successfully
-
-  hatchet-dashboard:
-    # Default admin credentials (created by setup-config quickstart):
-    #   URL:      http://localhost:8080
-    #   Email:    admin@example.com
-    #   Password: Admin123!!
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-dashboard:v0.83.37
-    command: sh ./entrypoint.sh --config /hatchet/config
-    restart: on-failure
-    ports:
-      - "8080:80"
-    environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-    volumes:
-      - hatchet_certs:/hatchet/certs
-      - hatchet_config:/hatchet/config
-    depends_on:
-      setup-config:
-        condition: service_completed_successfully
-      migration:
-        condition: service_completed_successfully
+      - temporal
 
 volumes:
-  hatchet_postgres_data:
-  hatchet_config:
-  hatchet_certs:
+  temporal_postgres_data:
