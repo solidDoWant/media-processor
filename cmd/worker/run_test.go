@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRun_MissingToken verifies that the worker exits with a descriptive error
-// when HATCHET_CLIENT_TOKEN is not set.
-func TestRun_MissingToken(t *testing.T) {
-	t.Setenv("HATCHET_CLIENT_TOKEN", "")
+// TestRun_MissingTemporalAddress verifies that the worker exits with a descriptive
+// error when TEMPORAL_ADDRESS is not set.
+func TestRun_MissingTemporalAddress(t *testing.T) {
+	t.Setenv("TEMPORAL_ADDRESS", "")
 
 	err := run(t.Context())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "HATCHET_CLIENT_TOKEN")
+	assert.Contains(t, err.Error(), "TEMPORAL_ADDRESS")
 }
 
 func TestParseH265CRF(t *testing.T) {

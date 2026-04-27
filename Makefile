@@ -25,13 +25,9 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: update-dependencies
-update-dependencies: ## Update Go module dependencies and sync Hatchet Docker image versions.
+update-dependencies: ## Update Go module dependencies and sync flake.nix vendor hashes.
 	go get -u ./...
 	go mod tidy
-	@HATCHET_VERSION=$$(go list -m github.com/hatchet-dev/hatchet | awk '{print $$2}'); \
-	sed -i "s|ghcr\.io/hatchet-dev/hatchet/\([^:]*\):v[0-9][0-9.]*|ghcr.io/hatchet-dev/hatchet/\1:$${HATCHET_VERSION}|g" \
-		docker-compose.yml \
-		e2e/docker-compose.yml
 	@update_vendor_hash() { \
 	    var=$${1}VendorHash fake="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; \
 	    sed -i "s|$$var[[:space:]]*=[[:space:]]*\"sha256-[^\"]*\"|$$var = \"$$fake\"|" flake.nix; \
@@ -70,9 +66,14 @@ TEST_TAG_FLAGS := $(if $(_test_tags),-tags $(subst $(space),$(comma),$(_test_tag
 test: fmt vet ## Run tests.
 	go test -race -count=1 $(TEST_TAG_FLAGS) ./...
 
+TEMPORAL_ADDRESS ?= localhost:7233
+TEMPORAL_NAMESPACE ?= default
+TEMPORAL_TASK_QUEUE ?= media-processor
+
 .PHONY: test-integration
-test-integration: hatchet-up ## Run integration tests against a local Hatchet server (starts server, generates token).
-	env $$(cat $(HATCHET_ENV_FILE)) go test -v -race -count=1 -tags=integration ./...
+test-integration: ## Run integration tests (requires a running Temporal server; use 'make temporal-up' to start one).
+	TEMPORAL_ADDRESS=$(TEMPORAL_ADDRESS) TEMPORAL_NAMESPACE=$(TEMPORAL_NAMESPACE) TEMPORAL_TASK_QUEUE=$(TEMPORAL_TASK_QUEUE) \
+		go test -v -race -count=1 -tags=integration ./...
 
 .PHONY: test-e2e
 test-e2e: build-images ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
@@ -171,40 +172,22 @@ clean: ## Clean up all build artifacts and loaded container images.
 
 ##@ Local Dev
 
-HATCHET_ENV_FILE := .env.hatchet
+TEMPORAL_PID_FILE := .temporal.pid
+TEMPORAL_DB_FILE := .temporal.db
 
-.PHONY: hatchet-up
-hatchet-up: ## Start Hatchet local dev server and generate API token (written to .env.hatchet).
-	docker compose up -d
-	@echo "Waiting for Hatchet setup-config to complete..."
-	@docker wait media-processor-setup-config-1
-	@if [ ! -f $(HATCHET_ENV_FILE) ]; then $(MAKE) hatchet-token; fi
-	@echo "Hatchet is ready. Dashboard: http://localhost:8080 (admin@example.com / Admin123!!)"
-	@echo "Run 'source $(HATCHET_ENV_FILE)' to load HATCHET_CLIENT_TOKEN into your current shell."
+.PHONY: temporal-up
+temporal-up: ## Start a local Temporal development server (requires 'temporal' CLI in PATH).
+	@temporal server start-dev --headless --db-filename $(TEMPORAL_DB_FILE) &
+	@echo $$! > $(TEMPORAL_PID_FILE)
+	@echo "Temporal server started (PID $$(cat $(TEMPORAL_PID_FILE))). Web UI: http://localhost:8233"
+	@echo "Run 'make test-integration' to run integration tests against it."
 
-.PHONY: hatchet-down
-hatchet-down: ## Stop Hatchet local dev server.
-	docker compose down
-
-.PHONY: hatchet-token
-hatchet-token: ## Generate a new Hatchet API token and write it to .env.hatchet.
-	@echo "Generating Hatchet API token..."
-	@TENANT_ID=$$(docker compose exec -T postgres \
-		psql -U hatchet -d hatchet -t -c \
-		"SELECT id FROM \"Tenant\" WHERE slug = 'default' LIMIT 1" \
-		2>/dev/null | tr -d ' \n'); \
-	if [ -z "$$TENANT_ID" ]; then \
-		echo "Error: could not query tenant ID — is Hatchet running? Try: make hatchet-up" >&2; \
-		exit 1; \
-	fi; \
-	TOKEN=$$(docker compose run --no-deps --rm -T setup-config \
-		/hatchet/hatchet-admin token create \
-		--config /hatchet/config \
-		--tenant-id "$$TENANT_ID" \
-		2>/dev/null | tr -d '\r\n'); \
-	if [ -z "$$TOKEN" ]; then \
-		echo "Error: token generation failed" >&2; \
-		exit 1; \
-	fi; \
-	printf 'HATCHET_CLIENT_TOKEN=%s\nHATCHET_CLIENT_TLS_STRATEGY=none\n' "$$TOKEN" > $(HATCHET_ENV_FILE); \
-	echo "Token written to $(HATCHET_ENV_FILE)"
+.PHONY: temporal-down
+temporal-down: ## Stop the local Temporal development server started by 'make temporal-up'.
+	@if [ -f $(TEMPORAL_PID_FILE) ]; then \
+		kill $$(cat $(TEMPORAL_PID_FILE)) 2>/dev/null || true; \
+		rm -f $(TEMPORAL_PID_FILE); \
+		echo "Temporal server stopped"; \
+	else \
+		echo "No running Temporal server found ($(TEMPORAL_PID_FILE) does not exist)"; \
+	fi

@@ -7,60 +7,80 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/hatchet-dev/hatchet/pkg/client/rest"
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
 
-// startMediaWorker creates a Hatchet worker with the given media workflow and starts it.
-// The worker is automatically stopped via t.Cleanup. The call blocks until the worker
-// appears as ACTIVE in the Hatchet server (with a 30s timeout) so tests never race
-// against a fixed sleep.
-func startMediaWorker(t *testing.T, client *hatchet.Client, wf *hatchet.Workflow) {
+// newTestClient creates a Temporal client for integration tests, skipping when
+// TEMPORAL_ADDRESS is not set.
+func newTestClient(t *testing.T) client.Client {
 	t.Helper()
-	worker, err := client.NewWorker("test-media-worker", hatchet.WithWorkflows(wf))
-	require.NoError(t, err, "create Hatchet worker")
 
-	cleanup, err := worker.Start()
-	require.NoError(t, err, "start worker")
-	t.Cleanup(func() { _ = cleanup() })
+	addr := os.Getenv("TEMPORAL_ADDRESS")
+	if addr == "" {
+		t.Skip("TEMPORAL_ADDRESS not set; run 'make temporal-up' first")
+	}
 
-	// Poll until the worker is registered and ACTIVE on the Hatchet server.
-	require.Eventually(t, func() bool {
-		list, listErr := client.Workers().List(t.Context())
-		if listErr != nil || list == nil || list.Rows == nil {
-			return false
-		}
-		for _, w := range *list.Rows {
-			if w.Name == "test-media-worker" && w.Status != nil && *w.Status == rest.ACTIVE {
-				return true
-			}
-		}
-		return false
-	}, 30*time.Second, 250*time.Millisecond, "media worker failed to register within 30s")
+	namespace := os.Getenv("TEMPORAL_NAMESPACE")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	c, err := client.NewLazyClient(client.Options{
+		HostPort:  addr,
+		Namespace: namespace,
+	})
+	require.NoError(t, err, "create Temporal client")
+	t.Cleanup(c.Close)
+
+	return c
+}
+
+const testTaskQueue = "test-media-worker"
+
+// startMediaWorker creates and starts a Temporal worker with the media workflow and
+// activities registered against testTaskQueue. The worker is stopped via t.Cleanup.
+func startMediaWorker(t *testing.T, c client.Client, mw *MediaWorkflows, ma *MediaActivities) {
+	t.Helper()
+
+	w := temporalworker.New(c, testTaskQueue, temporalworker.Options{})
+	w.RegisterWorkflowWithOptions(mw.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
+	w.RegisterActivity(ma)
+
+	require.NoError(t, w.Start(), "start media worker")
+	t.Cleanup(w.Stop)
+}
+
+// runMediaWorkflow executes the media workflow synchronously and returns any error.
+func runMediaWorkflow(t *testing.T, c client.Client, input MediaInput) error {
+	t.Helper()
+
+	run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{
+		TaskQueue: testTaskQueue,
+	}, MediaWorkflowName, input)
+	require.NoError(t, err, "execute workflow")
+
+	return run.Get(t.Context(), nil)
 }
 
 func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -73,20 +93,16 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 }
 
 func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -99,21 +115,17 @@ func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.
 }
 
 func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -124,20 +136,16 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 }
 
 func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -150,21 +158,17 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 }
 
 func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
 	sonarrStub := &stubLibraryClient{}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	inputBase := filepath.Base(inputPath)
@@ -175,21 +179,17 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 }
 
 func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := filepath.Join(t.TempDir(), "not-a-video.txt")
 	require.NoError(t, os.WriteFile(inputPath, []byte("not a video"), 0o600))
 	outputDir := t.TempDir()
 
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(inputPath)
@@ -201,22 +201,18 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 }
 
 func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 	remoteDir := "/remote/movies"
 
 	radarrStub := &stubLibraryClient{}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{
+	err := runMediaWorkflow(t, c, MediaInput{
 		FilePath:         inputPath,
 		MediaType:        medialib.MovieType,
 		OutputPath:       outputDir,
@@ -232,21 +228,17 @@ func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.
 }
 
 func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
-	}
-
-	client, err := hatchet.NewClient()
-	require.NoError(t, err)
+	c := newTestClient(t)
 
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{err: medialib.ErrNotFound}
-	wf := NewMediaWorkflow(client, MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
-	startMediaWorker(t, client, wf)
+	mw := NewMediaWorkflows(MediaWorkflowConfig{})
+	ma := NewMediaActivities(MediaWorkflowConfig{}, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, mw, ma)
 
-	_, err = wf.Run(t.Context(), MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	err := runMediaWorkflow(t, c, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
 	assert.Error(t, err, "workflow should fail when the movie is not found in Radarr")
 
 	_, statErr := os.Stat(inputPath)

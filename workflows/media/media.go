@@ -1,4 +1,4 @@
-// Package media provides the Hatchet workflow definition for processing media files
+// Package media provides the Temporal workflow definition for processing media files
 // (movies and TV episodes) using a single parameterised workflow.
 package media
 
@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hatchet-dev/hatchet/pkg/client/types"
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
@@ -26,14 +26,14 @@ import (
 const MediaWorkflowName = mediatypes.MediaWorkflowName
 
 const (
-	// defaultTaskRetries is the number of retry attempts for retriable workflow steps.
-	defaultTaskRetries = 3
+	// defaultActivityRetries is the number of retry attempts for retriable activities.
+	defaultActivityRetries int32 = 3
 
-	// DefaultDetectCropTimeout is the default Hatchet execution timeout for the
-	// detectcrop step, used when MediaWorkflowConfig.DetectCropTimeout is zero.
+	// DefaultDetectCropTimeout is the default Temporal StartToCloseTimeout for the
+	// detectcrop activity, used when MediaWorkflowConfig.DetectCropTimeout is zero.
 	DefaultDetectCropTimeout = 30 * time.Minute
-	// DefaultTranscodeTimeout is the default Hatchet execution timeout for the
-	// transcode step, used when MediaWorkflowConfig.TranscodeTimeout is zero.
+	// DefaultTranscodeTimeout is the default Temporal StartToCloseTimeout for the
+	// transcode activity, used when MediaWorkflowConfig.TranscodeTimeout is zero.
 	DefaultTranscodeTimeout = 4 * time.Hour
 )
 
@@ -52,31 +52,21 @@ type MediaWorkflowConfig struct {
 	HighCardinalityLabels bool
 	// MinCropX is the minimum number of pixels that must be trimmed horizontally
 	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// 0 means no minimum (any detected crop is applied). Defaults are applied by
-	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropX int
 	// MinCropY is the minimum number of pixels that must be trimmed vertically
 	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// 0 means no minimum (any detected crop is applied). Defaults are applied by
-	// the caller (e.g. cmd/worker via parseCropThreshold) before constructing this config.
 	MinCropY int
-	// DetectCropTimeout is the Hatchet execution timeout for the detectcrop step.
-	// When zero, NewMediaWorkflow applies a default of 30 minutes. Set by the caller
-	// (e.g. cmd/worker via parseTimeout from MEDIA_DETECT_CROP_TIMEOUT).
+	// DetectCropTimeout is the Temporal StartToCloseTimeout for the detectcrop activity.
+	// When zero, DefaultDetectCropTimeout is applied. Set by cmd/worker via parseTimeout.
 	DetectCropTimeout time.Duration
-	// TranscodeTimeout is the Hatchet execution timeout for the transcode step.
-	// When zero, NewMediaWorkflow applies a default of 4 hours. Set by the caller
-	// (e.g. cmd/worker via parseTimeout from MEDIA_TRANSCODE_TIMEOUT).
+	// TranscodeTimeout is the Temporal StartToCloseTimeout for the transcode activity.
+	// When zero, DefaultTranscodeTimeout is applied. Set by cmd/worker via parseTimeout.
 	TranscodeTimeout time.Duration
 	// H265CRF is the constant-quality value passed to H.265 encoders. 0 means
-	// use the encoder's built-in default. For libx265 this is the CRF; for
-	// hevc_nvenc it is the CQ value; for hevc_qsv and hevc_vaapi it is the
-	// global_quality (ICQ) value. Set by the caller (e.g. cmd/worker via
-	// MEDIA_H265_CRF).
+	// use the encoder's built-in default.
 	H265CRF int
 	// ProgressLogInterval controls how often a progress log line is emitted
-	// during transcoding. Zero disables progress logging. Set by the caller
-	// (e.g. cmd/worker via MEDIA_PROGRESS_LOG_INTERVAL).
+	// during transcoding. Zero disables progress logging.
 	ProgressLogInterval time.Duration
 }
 
@@ -84,21 +74,144 @@ type MediaWorkflowConfig struct {
 // package do not need to be updated.
 type MediaInput = mediatypes.MediaInput
 
-// NewMediaWorkflow returns a Hatchet workflow that transcodes a media file (movie or TV
-// episode) to the standard format, moves it to the output directory, and notifies the
-// appropriate library service (Radarr for movies, Sonarr for TV episodes).
+// FinalizeInput is the input to the Finalize activity.
+// When ProbeOut.IsValidMedia is false, TranscodeOut is the zero value and
+// the activity records the invalid-file metric and cleans up. When true,
+// it notifies the arr library, cleans up, and records run metrics.
+type FinalizeInput struct {
+	Input        MediaInput            `json:"input"`
+	ProbeOut     steps.ProbeOutput     `json:"probe_out"`
+	TranscodeOut steps.TranscodeOutput `json:"transcode_out,omitempty"`
+}
+
+// OnFailureInput is the input to the OnFailureWebhook activity.
+type OnFailureInput struct {
+	Input    MediaInput `json:"input"`
+	ErrorMsg string     `json:"error_msg"`
+}
+
+// MediaWorkflows holds workflow config and provides the Temporal workflow function.
+type MediaWorkflows struct {
+	cfg MediaWorkflowConfig
+}
+
+// NewMediaWorkflows creates a MediaWorkflows with defaults applied to the config.
+func NewMediaWorkflows(cfg MediaWorkflowConfig) *MediaWorkflows {
+	if cfg.DetectCropTimeout == 0 {
+		cfg.DetectCropTimeout = DefaultDetectCropTimeout
+	}
+
+	if cfg.TranscodeTimeout == 0 {
+		cfg.TranscodeTimeout = DefaultTranscodeTimeout
+	}
+
+	return &MediaWorkflows{cfg: cfg}
+}
+
+// MediaWorkflow is the Temporal workflow function for media file processing.
 //
-// Steps (in order): probe → transcode → notify → cleanup → record_metrics.
-// A parallel record_invalid step fires only when the file is not valid media.
-// If the source file is not a valid media file with a video stream the file is
-// deleted and all other steps are skipped without triggering the failure webhook.
-func NewMediaWorkflow(
-	client *hatchet.Client,
+// Execution path (valid media): Probe → DetectCrop → Transcode → Finalize
+// Execution path (invalid media): Probe → Finalize (record_invalid + cleanup)
+//
+// When the workflow returns a non-nil error, a deferred OnFailureWebhook activity
+// fires the failure webhook via MEDIA_WEBHOOK_URL.
+func (mw *MediaWorkflows) MediaWorkflow(ctx workflow.Context, input MediaInput) (retErr error) {
+	var ma *MediaActivities
+
+	defer func() {
+		if retErr == nil {
+			return
+		}
+
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+		fCtx := workflow.WithActivityOptions(disconnectedCtx, workflow.ActivityOptions{
+			StartToCloseTimeout: 2 * time.Minute,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+		_ = workflow.ExecuteActivity(fCtx, ma.OnFailureWebhook, OnFailureInput{
+			Input:    input,
+			ErrorMsg: retErr.Error(),
+		}).Get(fCtx, nil)
+	}()
+
+	var probeOut steps.ProbeOutput
+
+	pCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	if err := workflow.ExecuteActivity(pCtx, ma.Probe, input).Get(pCtx, &probeOut); err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+
+	finalizeOpts := workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultActivityRetries + 1},
+	}
+
+	if !probeOut.IsValidMedia {
+		fCtx := workflow.WithActivityOptions(ctx, finalizeOpts)
+		if err := workflow.ExecuteActivity(fCtx, ma.Finalize, FinalizeInput{
+			Input:    input,
+			ProbeOut: probeOut,
+		}).Get(fCtx, nil); err != nil {
+			return fmt.Errorf("finalize (invalid): %w", err)
+		}
+
+		return nil
+	}
+
+	var detectCropOut steps.DetectCropOutput
+
+	dCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: mw.cfg.DetectCropTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	if err := workflow.ExecuteActivity(dCtx, ma.DetectCrop, input, probeOut).Get(dCtx, &detectCropOut); err != nil {
+		return fmt.Errorf("detectcrop: %w", err)
+	}
+
+	var transcodeOut steps.TranscodeOutput
+
+	tCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: mw.cfg.TranscodeTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	if err := workflow.ExecuteActivity(tCtx, ma.Transcode, input, probeOut, detectCropOut).Get(tCtx, &transcodeOut); err != nil {
+		return fmt.Errorf("transcode: %w", err)
+	}
+
+	fCtx := workflow.WithActivityOptions(ctx, finalizeOpts)
+	if err := workflow.ExecuteActivity(fCtx, ma.Finalize, FinalizeInput{
+		Input:        input,
+		ProbeOut:     probeOut,
+		TranscodeOut: transcodeOut,
+	}).Get(fCtx, nil); err != nil {
+		return fmt.Errorf("finalize: %w", err)
+	}
+
+	return nil
+}
+
+// MediaActivities holds the dependencies for the media workflow activities.
+type MediaActivities struct {
+	cfg           MediaWorkflowConfig
+	radarrClient  medialib.ArrLibrary
+	sonarrClient  medialib.ArrLibrary
+	webhookClient *webhook.Client
+	recorder      *Recorder
+	// transcodeSem limits concurrent transcode activities to 1 per worker process.
+	transcodeSem chan struct{}
+}
+
+// NewMediaActivities creates a MediaActivities instance with defaults applied.
+// Recorder creation errors are non-fatal and fall back to a noop recorder.
+func NewMediaActivities(
 	cfg MediaWorkflowConfig,
 	radarrClient medialib.ArrLibrary,
 	sonarrClient medialib.ArrLibrary,
 	webhookClient *webhook.Client,
-) *hatchet.Workflow {
+) *MediaActivities {
 	if cfg.DetectCropTimeout == 0 {
 		cfg.DetectCropTimeout = DefaultDetectCropTimeout
 	}
@@ -114,8 +227,6 @@ func NewMediaWorkflow(
 
 	recorder, err := NewRecorder(meterProvider, cfg.HighCardinalityLabels)
 	if err != nil {
-		// Instrument registration errors are non-fatal: log for observability and fall
-		// back to a noop recorder so the workflow can still run without metrics.
 		slog.Warn("media: failed to create metrics recorder, falling back to noop", "error", err)
 
 		var noopErr error
@@ -129,277 +240,216 @@ func NewMediaWorkflow(
 		}
 	}
 
-	maxRuns := int32(1)
-	cancelNewest := types.CancelNewest
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
 
-	wf := client.NewWorkflow(MediaWorkflowName,
-		hatchet.WithWorkflowConcurrency(types.Concurrency{
-			Expression:    "input.file_path",
-			MaxRuns:       &maxRuns,
-			LimitStrategy: &cancelNewest,
-		}),
-	)
-
-	// probe: read codec/container info. Deletes the file and returns IsValidMedia=false
-	// (without error) when the file is not a recognisable media file or has no video stream,
-	// which causes all downstream steps to be skipped via WithSkipIf.
-	// StartedAt is set here (not inside RunProbe) so existing RunProbe tests are unaffected.
-	probeTask := wf.NewTask("probe", func(ctx hatchet.Context, input MediaInput) (steps.ProbeOutput, error) {
-		start := time.Now()
-
-		slog.InfoContext(ctx, "processing file", slog.String("file", input.FilePath))
-
-		out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-		logStepResult(ctx, "probe", input.FilePath, start, err)
-
-		if err != nil {
-			return out, err
-		}
-
-		out.StartedAt = start
-
-		return out, nil
-	})
-
-	// skipIfInvalid must list probeTask as a direct WithParents entry on every step that
-	// uses it. Hatchet only evaluates a PARENT_OVERRIDE (skip/wait) condition when the
-	// referenced task appears in the step's direct-parent list — indirect ancestors are
-	// not checked. Verified in hatchet/pkg/repository/trigger.go.
-	skipIfInvalid := hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == false"))
-
-	// detectcrop: run the ffmpeg cropdetect filter to find black bars. Returns a nil
-	// Crop pointer when no crop is warranted (both axes disabled or trim below threshold).
-	// cfg.MinCropX and cfg.MinCropY are passed directly; defaults are applied by the
-	// caller (cmd/worker) via parseCropThreshold before constructing MediaWorkflowConfig.
-	detectcropTask := wf.NewTask("detectcrop", func(ctx hatchet.Context, input MediaInput) (steps.DetectCropOutput, error) {
-		start := time.Now()
-
-		var probe steps.ProbeOutput
-		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			wrappedErr := fmt.Errorf("get probe output: %w", err)
-			logStepResult(ctx, "detectcrop", input.FilePath, start, wrappedErr)
-
-			return steps.DetectCropOutput{}, wrappedErr
-		}
-
-		crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, cfg.MinCropX, cfg.MinCropY)
-		logStepResult(ctx, "detectcrop", input.FilePath, start, err)
-
-		if err != nil {
-			return steps.DetectCropOutput{}, err
-		}
-
-		return steps.DetectCropOutput{Crop: crop}, nil
-	}, hatchet.WithParents(probeTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.DetectCropTimeout))
-
-	// transcode: re-encode or copy the video stream directly into cfg.OutputDir under a
-	// temp name, then atomically rename it to the final path. Writing to the output
-	// directory (rather than the system temp dir) means the rename is always within the
-	// same filesystem, so it is guaranteed to be atomic on Linux.
-	transcodeTask := wf.NewTask("transcode", func(ctx hatchet.Context, input MediaInput) (steps.TranscodeOutput, error) {
-		start := time.Now()
-
-		var probe steps.ProbeOutput
-		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			wrappedErr := fmt.Errorf("get probe output: %w", err)
-			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
-
-			return steps.TranscodeOutput{}, wrappedErr
-		}
-
-		var detectcrop steps.DetectCropOutput
-		if err := ctx.ParentOutput(detectcropTask, &detectcrop); err != nil {
-			wrappedErr := fmt.Errorf("get detectcrop output: %w", err)
-			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
-
-			return steps.TranscodeOutput{}, wrappedErr
-		}
-
-		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
-		if err != nil {
-			wrappedErr := fmt.Errorf("get arr library for artwork: %w", err)
-			logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
-
-			return steps.TranscodeOutput{}, wrappedErr
-		}
-
-		outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
-		if outputPath == "" || outputPath == "." {
-			err := fmt.Errorf("output_path is required")
-			logStepResult(ctx, "transcode", input.FilePath, start, err)
-
-			return steps.TranscodeOutput{}, err
-		}
-
-		out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectcrop.Crop, outputPath, input.WatchRoot, cfg.HardwareDevicePath, cfg.H265CRF, cfg.ProgressLogInterval, library)
-		if err == nil && out.ArtworkFetchSkipped {
-			recorder.RecordArtworkFetchSkipped(ctx)
-		}
-
-		logStepResult(ctx, "transcode", input.FilePath, start, err)
-
-		return out, err
-	}, hatchet.WithParents(probeTask, detectcropTask), skipIfInvalid, hatchet.WithExecutionTimeout(cfg.TranscodeTimeout))
-
-	// notify: send a DownloadedMoviesScan/DownloadedEpisodesScan command to Radarr/Sonarr
-	// for the processed output file, triggering import into the library. The import path is
-	// the transcoded output file path. When output.remotePath is set, the output.path prefix
-	// is replaced by output.remotePath so the arr service sees its own mount point.
-	notifyTask := wf.NewTask("notify", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		start := time.Now()
-
-		var transcode steps.TranscodeOutput
-		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
-			wrappedErr := fmt.Errorf("get transcode output: %w", err)
-			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
-
-			return struct{}{}, wrappedErr
-		}
-
-		library, err := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
-		if err != nil {
-			logStepResult(ctx, "notify", input.FilePath, start, err)
-			return struct{}{}, err
-		}
-
-		importPath := transcode.DestFilePath
-
-		if remotePath := strings.TrimSpace(input.OutputRemotePath); remotePath != "" {
-			outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
-
-			rel, relErr := filepath.Rel(outputPath, importPath)
-			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				wrappedErr := fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
-				logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
-
-				return struct{}{}, wrappedErr
-			}
-
-			importPath = filepath.Join(remotePath, rel)
-		}
-
-		if err := library.ImportByFilePath(ctx, importPath); err != nil {
-			wrappedErr := fmt.Errorf("notify library: %w", err)
-			logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
-
-			return struct{}{}, wrappedErr
-		}
-
-		logStepResult(ctx, "notify", input.FilePath, start, nil)
-
-		return struct{}{}, nil
-	}, hatchet.WithParents(probeTask, transcodeTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
-
-	// finalize: write a sentinel or delete the source file after successful processing.
-	// When PreserveSource is true, writes a .BASENAME.done sentinel so the watcher
-	// skips the file on subsequent scans. When false, deletes the source file.
-	finalizeTask := wf.NewTask("finalize", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		start := time.Now()
-
-		var err error
-		if input.PreserveSource {
-			err = steps.WriteSentinel(input.FilePath)
-		} else {
-			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-		}
-
-		logStepResult(ctx, "finalize", input.FilePath, start, err)
-
-		return struct{}{}, err
-	}, hatchet.WithParents(probeTask, notifyTask), skipIfInvalid, hatchet.WithRetries(defaultTaskRetries))
-
-	// record_metrics: record per-run OTel observations for valid-media completions.
-	// Runs after finalize so total_duration_seconds covers the full probe→finalize span.
-	_ = wf.NewTask("record_metrics", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		start := time.Now()
-
-		var probe steps.ProbeOutput
-		if err := ctx.ParentOutput(probeTask, &probe); err != nil {
-			wrappedErr := fmt.Errorf("get probe output for metrics: %w", err)
-			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
-
-			return struct{}{}, wrappedErr
-		}
-
-		var transcode steps.TranscodeOutput
-		if err := ctx.ParentOutput(transcodeTask, &transcode); err != nil {
-			wrappedErr := fmt.Errorf("get transcode output for metrics: %w", err)
-			logStepResult(ctx, "record_metrics", input.FilePath, start, wrappedErr)
-
-			return struct{}{}, wrappedErr
-		}
-
-		var mediaInfo medialib.MediaInfo
-
-		if cfg.HighCardinalityLabels {
-			library, libErr := getArrLibrary(input.MediaType, radarrClient, sonarrClient)
-			if libErr == nil {
-				info, infoErr := library.GetInfo(ctx, input.FilePath)
-				if infoErr != nil {
-					// GetInfo failure is best-effort: log it and count it, but do not
-					// return an error. The step continues and records metrics without
-					// high-cardinality labels rather than failing the workflow run.
-					recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
-				} else {
-					mediaInfo = info
-				}
-			}
-		}
-
-		hardwareAccelerated := transcode.HardwareAccelerated
-		totalElapsed := time.Since(probe.StartedAt)
-		recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, hardwareAccelerated, totalElapsed)
-
-		logStepResult(ctx, "record_metrics", input.FilePath, start, nil)
-
-		return struct{}{}, nil
-	}, hatchet.WithParents(probeTask, transcodeTask, notifyTask, finalizeTask), skipIfInvalid)
-
-	// record_invalid: increment the invalid-files counter and then write a sentinel or
-	// delete the source file when probe determines the file is not valid media.
-	// Skipped when the file is valid (i.e. the inverse of skipIfInvalid).
-	_ = wf.NewTask("record_invalid", func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		start := time.Now()
-
-		recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
-
-		var err error
-		if input.PreserveSource {
-			err = steps.WriteSentinel(input.FilePath)
-		} else {
-			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-		}
-
-		logStepResult(ctx, "record_invalid", input.FilePath, start, err)
-
-		return struct{}{}, err
-	}, hatchet.WithParents(probeTask),
-		hatchet.WithSkipIf(hatchet.ParentCondition(probeTask, "output.is_valid_media == true")))
-
-	// OnFailure: send a single aggregated failure notification to the configured webhook.
-	wf.OnFailure(func(ctx hatchet.Context, input MediaInput) (struct{}, error) {
-		start := time.Now()
-		err := steps.NotifyWorkflowFailure(ctx, ctx.StepRunErrors(), MediaWorkflowName, input.FilePath, webhookClient)
-		logStepResult(ctx, "onfailure", input.FilePath, start, err)
-
-		return struct{}{}, err
-	})
-
-	return wf
+	return &MediaActivities{
+		cfg:           cfg,
+		radarrClient:  radarrClient,
+		sonarrClient:  sonarrClient,
+		webhookClient: webhookClient,
+		recorder:      recorder,
+		transcodeSem:  sem,
+	}
 }
 
-func logStepResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {
+// Probe reads codec and container info for the file in input. If the file is not valid
+// media, RunProbe deletes it and returns IsValidMedia=false (without error); the workflow
+// skips to Finalize(invalid). Sets ProbeOutput.StartedAt for downstream elapsed-time metrics.
+func (ma *MediaActivities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOutput, error) {
+	start := time.Now()
+
+	slog.InfoContext(ctx, "processing file", slog.String("file", input.FilePath))
+
+	out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+	logActivityResult(ctx, "probe", input.FilePath, start, err)
+
 	if err != nil {
-		slog.ErrorContext(ctx, "step failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
+		return out, err
+	}
+
+	out.StartedAt = start
+
+	return out, nil
+}
+
+// DetectCrop runs the ffmpeg cropdetect filter to find black bars. Returns a zero-value
+// DetectCropOutput (nil Crop) when no crop is warranted.
+func (ma *MediaActivities) DetectCrop(ctx context.Context, input MediaInput, probe steps.ProbeOutput) (steps.DetectCropOutput, error) {
+	start := time.Now()
+
+	crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, ma.cfg.MinCropX, ma.cfg.MinCropY)
+	logActivityResult(ctx, "detectcrop", input.FilePath, start, err)
+
+	if err != nil {
+		return steps.DetectCropOutput{}, err
+	}
+
+	return steps.DetectCropOutput{Crop: crop}, nil
+}
+
+// Transcode re-encodes the media file into the output directory, acquiring a per-process
+// semaphore so that at most one transcode runs at a time on each worker.
+func (ma *MediaActivities) Transcode(ctx context.Context, input MediaInput, probe steps.ProbeOutput, detectCrop steps.DetectCropOutput) (steps.TranscodeOutput, error) {
+	select {
+	case <-ma.transcodeSem:
+	case <-ctx.Done():
+		return steps.TranscodeOutput{}, ctx.Err()
+	}
+
+	defer func() { ma.transcodeSem <- struct{}{} }()
+
+	start := time.Now()
+
+	library, err := getArrLibrary(input.MediaType, ma.radarrClient, ma.sonarrClient)
+	if err != nil {
+		wrappedErr := fmt.Errorf("get arr library for artwork: %w", err)
+		logActivityResult(ctx, "transcode", input.FilePath, start, wrappedErr)
+
+		return steps.TranscodeOutput{}, wrappedErr
+	}
+
+	outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
+	if outputPath == "" || outputPath == "." {
+		err := fmt.Errorf("output_path is required")
+		logActivityResult(ctx, "transcode", input.FilePath, start, err)
+
+		return steps.TranscodeOutput{}, err
+	}
+
+	out, err := steps.RunTranscode(ctx, input.FilePath, probe, detectCrop.Crop, outputPath, input.WatchRoot, ma.cfg.HardwareDevicePath, ma.cfg.H265CRF, ma.cfg.ProgressLogInterval, library)
+	if err == nil && out.ArtworkFetchSkipped {
+		ma.recorder.RecordArtworkFetchSkipped(ctx)
+	}
+
+	logActivityResult(ctx, "transcode", input.FilePath, start, err)
+
+	return out, err
+}
+
+// Finalize is the final activity for both the valid and invalid media paths.
+//
+// Invalid media (fin.ProbeOut.IsValidMedia == false): records the invalid-file metric
+// and writes a sentinel or deletes the source file.
+//
+// Valid media: notifies the arr library (Radarr/Sonarr), writes a sentinel or deletes
+// the source file, and records per-run OTel metrics.
+func (ma *MediaActivities) Finalize(ctx context.Context, fin FinalizeInput) error {
+	input := fin.Input
+	probe := fin.ProbeOut
+
+	if !probe.IsValidMedia {
+		start := time.Now()
+
+		ma.recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
+
+		var err error
+		if input.PreserveSource {
+			err = steps.WriteSentinel(input.FilePath)
+		} else {
+			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		}
+
+		logActivityResult(ctx, "finalize(invalid)", input.FilePath, start, err)
+
+		return err
+	}
+
+	transcodeOut := fin.TranscodeOut
+
+	// Notify the arr library to import the transcoded file.
+	notifyStart := time.Now()
+
+	library, err := getArrLibrary(input.MediaType, ma.radarrClient, ma.sonarrClient)
+	if err != nil {
+		logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, err)
+		return err
+	}
+
+	importPath := transcodeOut.DestFilePath
+
+	if remotePath := strings.TrimSpace(input.OutputRemotePath); remotePath != "" {
+		outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
+
+		rel, relErr := filepath.Rel(outputPath, importPath)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			err := fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
+			logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, err)
+
+			return err
+		}
+
+		importPath = filepath.Join(remotePath, rel)
+	}
+
+	if err := library.ImportByFilePath(ctx, importPath); err != nil {
+		wrappedErr := fmt.Errorf("notify library: %w", err)
+		logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, wrappedErr)
+
+		return wrappedErr
+	}
+
+	logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, nil)
+
+	// Write sentinel or delete source file.
+	cleanupStart := time.Now()
+
+	var cleanupErr error
+	if input.PreserveSource {
+		cleanupErr = steps.WriteSentinel(input.FilePath)
+	} else {
+		cleanupErr = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+	}
+
+	logActivityResult(ctx, "finalize(cleanup)", input.FilePath, cleanupStart, cleanupErr)
+
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+
+	// Record per-run OTel metrics. GetInfo failure is best-effort: log and count,
+	// but do not fail the activity.
+	var mediaInfo medialib.MediaInfo
+
+	if ma.cfg.HighCardinalityLabels {
+		if lib, libErr := getArrLibrary(input.MediaType, ma.radarrClient, ma.sonarrClient); libErr == nil {
+			info, infoErr := lib.GetInfo(ctx, input.FilePath)
+			if infoErr != nil {
+				ma.recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
+			} else {
+				mediaInfo = info
+			}
+		}
+	}
+
+	totalElapsed := time.Since(probe.StartedAt)
+	ma.recorder.RecordRun(ctx, input, probe, transcodeOut, mediaInfo, transcodeOut.HardwareAccelerated, totalElapsed)
+
+	return nil
+}
+
+// OnFailureWebhook fires the failure webhook when a workflow execution returns an error.
+// It is called via a deferred block in MediaWorkflow and runs in a disconnected context
+// so it executes even when the workflow context is cancelled.
+func (ma *MediaActivities) OnFailureWebhook(ctx context.Context, fin OnFailureInput) error {
+	start := time.Now()
+	stepErrors := map[string]string{"workflow": fin.ErrorMsg}
+	err := steps.NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, fin.Input.FilePath, ma.webhookClient)
+	logActivityResult(ctx, "onfailure", fin.Input.FilePath, start, err)
+
+	return err
+}
+
+func logActivityResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {
+	if err != nil {
+		slog.ErrorContext(ctx, "activity failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
 		return
 	}
 
-	slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
+	slog.InfoContext(ctx, "activity complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
 }
 
-// getArrLibrary returns the LibraryClient corresponding to mediaType, using
-// radarrClient for movies and sonarrClient for TV episodes. It is the single
-// dispatch point for media-type selection in the workflow.
+// getArrLibrary returns the ArrLibrary corresponding to mediaType.
 func getArrLibrary(mediaType medialib.MediaType, radarrClient, sonarrClient medialib.ArrLibrary) (medialib.ArrLibrary, error) {
 	switch mediaType {
 	case medialib.MovieType:
