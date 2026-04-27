@@ -74,14 +74,17 @@ type MediaWorkflowConfig struct {
 // package do not need to be updated.
 type MediaInput = mediatypes.MediaInput
 
-// FinalizeInput is the input to the Finalize activity.
-// When ProbeOut.IsValidMedia is false, TranscodeOut is the zero value and
-// the activity records the invalid-file metric and cleans up. When true,
-// it notifies the arr library, cleans up, and records run metrics.
-type FinalizeInput struct {
+// NotifyInput is the input to the Notify activity.
+type NotifyInput struct {
+	Input        MediaInput            `json:"input"`
+	TranscodeOut steps.TranscodeOutput `json:"transcode_out"`
+}
+
+// CleanupInput is the input to the Cleanup activity.
+type CleanupInput struct {
 	Input        MediaInput            `json:"input"`
 	ProbeOut     steps.ProbeOutput     `json:"probe_out"`
-	TranscodeOut steps.TranscodeOutput `json:"transcode_out,omitempty"`
+	TranscodeOut steps.TranscodeOutput `json:"transcode_out"`
 }
 
 // OnFailureInput is the input to the OnFailureWebhook activity.
@@ -110,8 +113,8 @@ func NewMediaWorkflows(cfg MediaWorkflowConfig) *MediaWorkflows {
 
 // MediaWorkflow is the Temporal workflow function for media file processing.
 //
-// Execution path (valid media): Probe → DetectCrop → Transcode → Finalize
-// Execution path (invalid media): Probe → Finalize (record_invalid + cleanup)
+// Execution path (valid media): Probe → DetectCrop → Transcode → Notify → Cleanup
+// Execution path (invalid media): Probe (records invalid metric and cleans up internally)
 //
 // When the workflow returns a non-nil error, a deferred OnFailureWebhook activity
 // fires the failure webhook via MEDIA_WEBHOOK_URL.
@@ -144,20 +147,7 @@ func (mw *MediaWorkflows) MediaWorkflow(ctx workflow.Context, input MediaInput) 
 		return fmt.Errorf("probe: %w", err)
 	}
 
-	finalizeOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultActivityRetries + 1},
-	}
-
 	if !probeOut.IsValidMedia {
-		fCtx := workflow.WithActivityOptions(ctx, finalizeOpts)
-		if err := workflow.ExecuteActivity(fCtx, ma.Finalize, FinalizeInput{
-			Input:    input,
-			ProbeOut: probeOut,
-		}).Get(fCtx, nil); err != nil {
-			return fmt.Errorf("finalize (invalid): %w", err)
-		}
-
 		return nil
 	}
 
@@ -181,13 +171,27 @@ func (mw *MediaWorkflows) MediaWorkflow(ctx workflow.Context, input MediaInput) 
 		return fmt.Errorf("transcode: %w", err)
 	}
 
-	fCtx := workflow.WithActivityOptions(ctx, finalizeOpts)
-	if err := workflow.ExecuteActivity(fCtx, ma.Finalize, FinalizeInput{
+	nCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultActivityRetries + 1},
+	})
+	if err := workflow.ExecuteActivity(nCtx, ma.Notify, NotifyInput{
+		Input:        input,
+		TranscodeOut: transcodeOut,
+	}).Get(nCtx, nil); err != nil {
+		return fmt.Errorf("notify: %w", err)
+	}
+
+	cCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 10 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	if err := workflow.ExecuteActivity(cCtx, ma.Cleanup, CleanupInput{
 		Input:        input,
 		ProbeOut:     probeOut,
 		TranscodeOut: transcodeOut,
-	}).Get(fCtx, nil); err != nil {
-		return fmt.Errorf("finalize: %w", err)
+	}).Get(cCtx, nil); err != nil {
+		return fmt.Errorf("cleanup: %w", err)
 	}
 
 	return nil
@@ -254,21 +258,36 @@ func NewMediaActivities(
 }
 
 // Probe reads codec and container info for the file in input. If the file is not valid
-// media, RunProbe deletes it and returns IsValidMedia=false (without error); the workflow
-// skips to Finalize(invalid). Sets ProbeOutput.StartedAt for downstream elapsed-time metrics.
+// media, RunProbe deletes it and returns IsValidMedia=false; in that case the invalid-file
+// metric is recorded and (when PreserveSource is true) a sentinel is written. The workflow
+// then returns nil without running any further activities.
 func (ma *MediaActivities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOutput, error) {
 	start := time.Now()
 
 	slog.InfoContext(ctx, "processing file", slog.String("file", input.FilePath))
 
 	out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-	logActivityResult(ctx, "probe", input.FilePath, start, err)
-
 	if err != nil {
+		logActivityResult(ctx, "probe", input.FilePath, start, err)
+
 		return out, err
 	}
 
+	if !out.IsValidMedia {
+		ma.recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
+
+		var sentinelErr error
+		if input.PreserveSource {
+			sentinelErr = steps.WriteSentinel(input.FilePath)
+		}
+
+		logActivityResult(ctx, "probe(invalid)", input.FilePath, start, sentinelErr)
+
+		return out, sentinelErr
+	}
+
 	out.StartedAt = start
+	logActivityResult(ctx, "probe", input.FilePath, start, nil)
 
 	return out, nil
 }
@@ -327,54 +346,28 @@ func (ma *MediaActivities) Transcode(ctx context.Context, input MediaInput, prob
 	return out, err
 }
 
-// Finalize is the final activity for both the valid and invalid media paths.
-//
-// Invalid media (fin.ProbeOut.IsValidMedia == false): records the invalid-file metric
-// and writes a sentinel or deletes the source file.
-//
-// Valid media: notifies the arr library (Radarr/Sonarr), writes a sentinel or deletes
-// the source file, and records per-run OTel metrics.
-func (ma *MediaActivities) Finalize(ctx context.Context, fin FinalizeInput) error {
-	input := fin.Input
-	probe := fin.ProbeOut
+// Notify notifies the arr library (Radarr or Sonarr) to import the transcoded file.
+// When OutputRemotePath is set, the local output path is rewritten to the remote path
+// before the import call is made. Retries are safe because ImportByFilePath is idempotent.
+func (ma *MediaActivities) Notify(ctx context.Context, in NotifyInput) error {
+	start := time.Now()
 
-	if !probe.IsValidMedia {
-		start := time.Now()
-
-		ma.recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
-
-		var err error
-		if input.PreserveSource {
-			err = steps.WriteSentinel(input.FilePath)
-		} else {
-			err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
-		}
-
-		logActivityResult(ctx, "finalize(invalid)", input.FilePath, start, err)
-
-		return err
-	}
-
-	transcodeOut := fin.TranscodeOut
-
-	// Notify the arr library to import the transcoded file.
-	notifyStart := time.Now()
-
-	library, err := getArrLibrary(input.MediaType, ma.radarrClient, ma.sonarrClient)
+	library, err := getArrLibrary(in.Input.MediaType, ma.radarrClient, ma.sonarrClient)
 	if err != nil {
-		logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, err)
+		logActivityResult(ctx, "notify", in.Input.FilePath, start, err)
+
 		return err
 	}
 
-	importPath := transcodeOut.DestFilePath
+	importPath := in.TranscodeOut.DestFilePath
 
-	if remotePath := strings.TrimSpace(input.OutputRemotePath); remotePath != "" {
-		outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
+	if remotePath := strings.TrimSpace(in.Input.OutputRemotePath); remotePath != "" {
+		outputPath := filepath.Clean(strings.TrimSpace(in.Input.OutputPath))
 
 		rel, relErr := filepath.Rel(outputPath, importPath)
 		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			err := fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
-			logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, err)
+			err := fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, in.Input.OutputPath)
+			logActivityResult(ctx, "notify", in.Input.FilePath, start, err)
 
 			return err
 		}
@@ -384,36 +377,41 @@ func (ma *MediaActivities) Finalize(ctx context.Context, fin FinalizeInput) erro
 
 	if err := library.ImportByFilePath(ctx, importPath); err != nil {
 		wrappedErr := fmt.Errorf("notify library: %w", err)
-		logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, wrappedErr)
+		logActivityResult(ctx, "notify", in.Input.FilePath, start, wrappedErr)
 
 		return wrappedErr
 	}
 
-	logActivityResult(ctx, "finalize(notify)", input.FilePath, notifyStart, nil)
+	logActivityResult(ctx, "notify", in.Input.FilePath, start, nil)
 
-	// Write sentinel or delete source file.
-	cleanupStart := time.Now()
+	return nil
+}
 
-	var cleanupErr error
-	if input.PreserveSource {
-		cleanupErr = steps.WriteSentinel(input.FilePath)
+// Cleanup writes a sentinel or deletes the source file after a successful transcode and
+// notify, then records per-run OTel metrics. GetInfo failure is best-effort: logged and
+// counted, but does not fail the activity. No retries are used because metrics emission
+// is not idempotent.
+func (ma *MediaActivities) Cleanup(ctx context.Context, in CleanupInput) error {
+	start := time.Now()
+
+	var err error
+	if in.Input.PreserveSource {
+		err = steps.WriteSentinel(in.Input.FilePath)
 	} else {
-		cleanupErr = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		err = steps.RunCleanup(in.Input.FilePath, in.Input.WatchRoot, in.Input.RetainEmptyDirectories)
 	}
 
-	logActivityResult(ctx, "finalize(cleanup)", input.FilePath, cleanupStart, cleanupErr)
+	logActivityResult(ctx, "cleanup", in.Input.FilePath, start, err)
 
-	if cleanupErr != nil {
-		return cleanupErr
+	if err != nil {
+		return err
 	}
 
-	// Record per-run OTel metrics. GetInfo failure is best-effort: log and count,
-	// but do not fail the activity.
 	var mediaInfo medialib.MediaInfo
 
 	if ma.cfg.HighCardinalityLabels {
-		if lib, libErr := getArrLibrary(input.MediaType, ma.radarrClient, ma.sonarrClient); libErr == nil {
-			info, infoErr := lib.GetInfo(ctx, input.FilePath)
+		if lib, libErr := getArrLibrary(in.Input.MediaType, ma.radarrClient, ma.sonarrClient); libErr == nil {
+			info, infoErr := lib.GetInfo(ctx, in.Input.FilePath)
 			if infoErr != nil {
 				ma.recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
 			} else {
@@ -422,8 +420,8 @@ func (ma *MediaActivities) Finalize(ctx context.Context, fin FinalizeInput) erro
 		}
 	}
 
-	totalElapsed := time.Since(probe.StartedAt)
-	ma.recorder.RecordRun(ctx, input, probe, transcodeOut, mediaInfo, transcodeOut.HardwareAccelerated, totalElapsed)
+	totalElapsed := time.Since(in.ProbeOut.StartedAt)
+	ma.recorder.RecordRun(ctx, in.Input, in.ProbeOut, in.TranscodeOut, mediaInfo, in.TranscodeOut.HardwareAccelerated, totalElapsed)
 
 	return nil
 }

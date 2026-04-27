@@ -205,6 +205,10 @@ func buildTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
+	if (certFile == "") != (keyFile == "") {
+		return nil, fmt.Errorf("TEMPORAL_TLS_CERT and TEMPORAL_TLS_KEY must both be set or both be unset")
+	}
+
 	tlsCfg := &tls.Config{
 		ServerName:         serverName,
 		InsecureSkipVerify: disableVerify, //nolint:gosec // operator-controlled opt-in
