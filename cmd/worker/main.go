@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
@@ -19,7 +19,6 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	"github.com/solidDoWant/media-processor/workflows"
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
@@ -36,8 +35,9 @@ func main() {
 func run(ctx context.Context) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
+	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
+	if taskQueue == "" {
+		return fmt.Errorf("TEMPORAL_TASK_QUEUE is not set")
 	}
 
 	const defaultHealthAddr = ":8080"
@@ -92,15 +92,6 @@ func run(ctx context.Context) error {
 		URL: os.Getenv("MEDIA_WEBHOOK_URL"),
 	}
 
-	clientLogger := logging.NewZerologLogger("client")
-
-	client, err := hatchet.NewClient(
-		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
-	)
-	if err != nil {
-		return fmt.Errorf("create Hatchet client: %w", err)
-	}
-
 	minCropX, err := parseCropThreshold("MEDIA_MIN_CROP_X", 10)
 	if err != nil {
 		return err
@@ -131,8 +122,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	mediaWorkflow := media.NewMediaWorkflow(client, media.MediaWorkflowConfig{
-		WebhookURL:            webhookClient.URL,
+	activities, err := media.NewActivities(media.MediaWorkflowConfig{
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
@@ -143,25 +133,45 @@ func run(ctx context.Context) error {
 		H265CRF:               h265CRF,
 		ProgressLogInterval:   progressLogInterval,
 	}, radarrClient, sonarrClient, webhookClient)
-
-	workerLogger := logging.NewZerologLogger("worker")
-
-	worker, err := client.NewWorker(
-		"mediaprocessor-worker",
-		hatchet.WithLogger(&workerLogger),
-		hatchet.WithWorkflows(workflows.NewPlaceholder(client), mediaWorkflow),
-	)
 	if err != nil {
-		return fmt.Errorf("create Hatchet worker: %w", err)
+		return fmt.Errorf("init activities: %w", err)
 	}
 
-	slog.InfoContext(ctx, "connected to Hatchet, starting worker")
+	temporalClient, err := client.Dial(client.Options{
+		HostPort:  os.Getenv("TEMPORAL_ADDRESS"),
+		Namespace: os.Getenv("TEMPORAL_NAMESPACE"),
+	})
+	if err != nil {
+		return fmt.Errorf("dial Temporal: %w", err)
+	}
+	defer temporalClient.Close()
 
+	// CheckHealth verifies the gRPC connection to the frontend before the
+	// worker starts processing tasks; without it, Dial returns successfully
+	// even when the server is unreachable and the worker silently spins.
+	healthCheckCtx, healthCheckCancel := context.WithTimeout(ctx, 10*time.Second)
+
+	_, healthErr := temporalClient.CheckHealth(healthCheckCtx, &client.CheckHealthRequest{})
+
+	healthCheckCancel()
+
+	if healthErr != nil {
+		return fmt.Errorf("temporal health check failed: %w", healthErr)
+	}
+
+	w := worker.New(temporalClient, taskQueue, worker.Options{})
+
+	activities.Register(w)
+
+	if err := w.Start(); err != nil {
+		return fmt.Errorf("start Temporal worker: %w", err)
+	}
+	defer w.Stop()
+
+	slog.InfoContext(ctx, "connected to Temporal, worker running", slog.String("task_queue", taskQueue))
 	healthServer.SetReady()
 
-	if err := worker.StartBlocking(ctx); err != nil {
-		return fmt.Errorf("worker stopped: %w", err)
-	}
+	<-ctx.Done()
 
 	return nil
 }
