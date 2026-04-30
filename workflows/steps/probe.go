@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
@@ -125,7 +126,7 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 	}
 
 	for _, s := range info.Streams {
-		if s.CodecType == ffprobe.CodecTypeVideo {
+		if s.CodecType == ffprobe.CodecTypeVideo && !isStillImageFormat(info.Format) {
 			return ProbeOutput{
 				IsValidMedia:    true,
 				VideoCodec:      s.CodecName,
@@ -149,4 +150,13 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 	}
 
 	return ProbeOutput{IsValidMedia: false}, nil
+}
+
+// isStillImageFormat reports whether the FFmpeg format name identifies a
+// still-image demuxer. These demuxers expose a codec_type=video stream but the
+// file is not a motion-picture video container. All image-pipe demuxers carry a
+// "_pipe" suffix (e.g. "png_pipe", "jpeg_pipe"); "image2" is the generic
+// image-file/sequence demuxer.
+func isStillImageFormat(format string) bool {
+	return strings.HasSuffix(format, "_pipe") || format == "image2"
 }

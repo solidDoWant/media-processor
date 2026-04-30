@@ -1,7 +1,11 @@
 package steps
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -167,4 +171,56 @@ func TestRunProbe_RetainEmptyDirsSkipsPruning(t *testing.T) {
 
 	_, statErr = os.Stat(subdir)
 	assert.NoError(t, statErr, "empty parent should be kept when retainEmptyDirs is true")
+}
+
+// TestRunProbe_StillImageIsDeletedAndMarkedInvalid verifies that still image
+// files (e.g. PNG) are rejected even though FFmpeg reports them as having a
+// video stream. The format name "png_pipe" (and the broader "*_pipe" / "image2"
+// family) identifies image-only demuxers and must not be treated as video.
+func TestRunProbe_StillImageIsDeletedAndMarkedInvalid(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+
+	filePath := filepath.Join(t.TempDir(), "artwork.png")
+	require.NoError(t, os.WriteFile(filePath, buf.Bytes(), 0o600))
+
+	got, err := RunProbe(t.Context(), filePath, "", false)
+	require.NoError(t, err)
+	assert.False(t, got.IsValidMedia, "PNG file must not be treated as valid media")
+
+	_, statErr := os.Stat(filePath)
+	assert.True(t, os.IsNotExist(statErr), "PNG file should be deleted by the probe step")
+}
+
+func TestIsStillImageFormat(t *testing.T) {
+	tests := []struct {
+		format   string
+		expected bool
+	}{
+		// Image-pipe demuxers — all must be rejected.
+		{"png_pipe", true},
+		{"jpeg_pipe", true},
+		{"bmp_pipe", true},
+		{"webp_pipe", true},
+		{"tga_pipe", true},
+		{"dpx_pipe", true},
+		{"exr_pipe", true},
+		// Generic image demuxer.
+		{"image2", true},
+		// Real video container formats — must not be rejected.
+		{"matroska,webm", false},
+		{"mov,mp4,m4a,3gp,3g2,mj2", false},
+		{"avi", false},
+		{"mpegts", false},
+		{"asf", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isStillImageFormat(tt.format))
+		})
+	}
 }
