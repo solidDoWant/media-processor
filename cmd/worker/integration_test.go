@@ -25,18 +25,21 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// TestWorkerConnectsToHatchet verifies that the worker successfully connects to a
-// running Hatchet server and stays running until signalled to stop.
+// TestWorkerConnectsToTemporal verifies that the worker successfully connects
+// to a running Temporal server and stays running until signalled to stop.
 //
-// Requires a running Hatchet server. Run `make hatchet-up` and `source .env.hatchet`
-// before executing these tests, or use `make test-integration`.
-func TestWorkerConnectsToHatchet(t *testing.T) {
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		t.Skip("HATCHET_CLIENT_TOKEN not set; run 'make hatchet-up' and 'source .env.hatchet' first")
+// Requires a running Temporal server reachable at TEMPORAL_ADDRESS.
+func TestWorkerConnectsToTemporal(t *testing.T) {
+	if os.Getenv("TEMPORAL_ADDRESS") == "" {
+		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")
 	}
 
-	// Provide the env vars required by run(). Neither Radarr nor Sonarr is exercised
-	// by this test — dummy values are sufficient.
+	if os.Getenv("TEMPORAL_TASK_QUEUE") == "" {
+		t.Setenv("TEMPORAL_TASK_QUEUE", "media-processor-test")
+	}
+
+	// Provide the env vars required by run(). Neither Radarr nor Sonarr is
+	// exercised by this test — dummy values are sufficient.
 	t.Setenv("RADARR_URL", "http://localhost:9999")
 	t.Setenv("RADARR_API_KEY", "test-key")
 	t.Setenv("SONARR_URL", "http://localhost:9998")
