@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -17,6 +18,11 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
+
+// errTypeNonRetryable tags ApplicationErrors raised for pure-data problems
+// (unknown media type, malformed remote-path config) so Temporal will not
+// burn the activity's retry budget on inputs that cannot recover.
+const errTypeNonRetryable = "MediaInputError"
 
 // Activities holds the dependencies needed by the four activity methods. A
 // single instance is registered with the worker; all activities share its
@@ -147,22 +153,30 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 }
 
 // Finalize is the Temporal activity that handles all post-probe / post-failure
-// side effects. The Mode field of FinalizeInput selects between the valid,
-// invalid, and failure-webhook code paths.
+// side effects. The Mode field of FinalizeInput selects which sub-path runs;
+// the workflow gives each invocation its own retry policy.
 func (a *Activities) Finalize(ctx context.Context, fin FinalizeInput) error {
 	start := time.Now()
 
 	var err error
 
 	switch fin.Mode {
-	case FinalizeValid:
-		err = a.finalizeValid(ctx, fin)
+	case FinalizeNotify:
+		err = a.finalizeNotify(ctx, fin)
+	case FinalizeCleanup:
+		err = a.finalizeCleanup(ctx, fin)
+	case FinalizeMetrics:
+		err = a.finalizeMetrics(ctx, fin)
 	case FinalizeInvalid:
 		err = a.finalizeInvalid(ctx, fin)
 	case FinalizeFailure:
 		err = a.finalizeFailure(ctx, fin)
 	default:
-		err = fmt.Errorf("finalize: unknown mode %d", fin.Mode)
+		err = temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("finalize: unknown mode %d", fin.Mode),
+			errTypeNonRetryable,
+			nil,
+		)
 	}
 
 	logStepResult(ctx, "finalize", fin.Input.FilePath, start, err)
@@ -170,18 +184,19 @@ func (a *Activities) Finalize(ctx context.Context, fin FinalizeInput) error {
 	return err
 }
 
-// finalizeValid runs the success path for a transcoded file. Operations are
-// ordered so that the non-idempotent metrics emission only runs after the
-// idempotent steps (library import, cleanup) have completed: an activity retry
-// triggered by an earlier failure cannot double-count metrics.
-func (a *Activities) finalizeValid(ctx context.Context, fin FinalizeInput) error {
+// finalizeNotify issues the library import (Sonarr/Radarr scan command). The
+// import is idempotent in practice — re-issuing the same scan for an already-
+// imported file is a no-op — so the workflow retries this mode on transient
+// failures. Pure-data errors (unknown media type, output_remote_path outside
+// the output tree) are returned as non-retryable so Temporal does not burn the
+// retry budget on inputs that cannot recover.
+func (a *Activities) finalizeNotify(ctx context.Context, fin FinalizeInput) error {
 	input := fin.Input
-	probe := fin.Probe
 	transcode := fin.Transcode
 
 	library, err := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient)
 	if err != nil {
-		return err
+		return temporal.NewNonRetryableApplicationError(err.Error(), errTypeNonRetryable, err)
 	}
 
 	importPath := transcode.DestFilePath
@@ -191,7 +206,11 @@ func (a *Activities) finalizeValid(ctx context.Context, fin FinalizeInput) error
 
 		rel, relErr := filepath.Rel(outputPath, importPath)
 		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath)
+			return temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath),
+				errTypeNonRetryable,
+				nil,
+			)
 		}
 
 		importPath = filepath.Join(remotePath, rel)
@@ -201,13 +220,40 @@ func (a *Activities) finalizeValid(ctx context.Context, fin FinalizeInput) error
 		return fmt.Errorf("notify library: %w", err)
 	}
 
+	return nil
+}
+
+// finalizeCleanup deletes the source file or writes the .done sentinel.
+// RunCleanup tolerates ErrNotExist so retrying after a partial cleanup is
+// safe; WriteSentinel re-writes the same zero-byte file.
+func (a *Activities) finalizeCleanup(_ context.Context, fin FinalizeInput) error {
+	input := fin.Input
+
 	if input.PreserveSource {
 		if err := steps.WriteSentinel(input.FilePath); err != nil {
 			return err
 		}
-	} else if err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories); err != nil {
+
+		return nil
+	}
+
+	if err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+// finalizeMetrics records per-run histograms and (when high-cardinality labels
+// are enabled) attaches Sonarr/Radarr metadata via GetInfo. This mode is
+// invoked by the workflow with MaximumAttempts: 1 because histogram emission
+// is not idempotent — every Record() call adds a fresh sample — and the
+// workflow ignores the returned error so a metrics issue does not fail the
+// run after the file has already been imported and cleaned up.
+func (a *Activities) finalizeMetrics(ctx context.Context, fin FinalizeInput) error {
+	input := fin.Input
+	probe := fin.Probe
+	transcode := fin.Transcode
 
 	var mediaInfo medialib.MediaInfo
 
@@ -235,7 +281,8 @@ func (a *Activities) finalizeValid(ctx context.Context, fin FinalizeInput) error
 // activity determined was not valid media. The probe activity has already
 // removed the source file in this case; cleanup here is a no-op for the file
 // itself (RunCleanup tolerates ErrNotExist) but preserves the existing
-// PreserveSource sentinel semantics.
+// PreserveSource sentinel semantics. Invoked with MaximumAttempts: 1 because
+// the counter increment that follows is not idempotent.
 func (a *Activities) finalizeInvalid(ctx context.Context, fin FinalizeInput) error {
 	input := fin.Input
 

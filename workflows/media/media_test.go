@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -55,21 +56,22 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(cropOut, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
 
-	var seenFinalize FinalizeInput
+	var seenModes []FinalizeMode
 
 	env.OnActivity(FinalizeActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, fin FinalizeInput) error {
-			seenFinalize = fin
+			seenModes = append(seenModes, fin.Mode)
 			return nil
-		}).Once()
+		}).Times(3)
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 
-	assert.Equal(t, FinalizeValid, seenFinalize.Mode)
-	assert.Equal(t, transOut.DestFilePath, seenFinalize.Transcode.DestFilePath)
+	// Valid path: notify, then cleanup, then metrics — each is its own
+	// Finalize invocation with mode-appropriate retry options.
+	assert.Equal(t, []FinalizeMode{FinalizeNotify, FinalizeCleanup, FinalizeMetrics}, seenModes)
 	env.AssertExpectations(t)
 }
 
@@ -154,7 +156,10 @@ func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 	assert.Equal(t, "probe", seenFinalize.FailureStep)
 }
 
-func TestMediaWorkflow_FinalizeValidPathRetriesUpToThreeTimes(t *testing.T) {
+// TestMediaWorkflow_FinalizeNotifyAndCleanupRetry verifies that the notify and
+// cleanup sub-modes each retry up to 3 times when their first attempts fail
+// transiently, and that metrics still emits exactly once afterwards.
+func TestMediaWorkflow_FinalizeNotifyAndCleanupRetry(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
@@ -165,40 +170,126 @@ func TestMediaWorkflow_FinalizeValidPathRetriesUpToThreeTimes(t *testing.T) {
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
 
-	finalizeAttempts := 0
+	notifyAttempts := 0
+	cleanupAttempts := 0
+	metricsAttempts := 0
 
 	env.OnActivity(FinalizeActivityName, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, fin FinalizeInput) error {
-			if fin.Mode != FinalizeValid {
-				return nil
-			}
-
-			finalizeAttempts++
-			if finalizeAttempts < 3 {
-				return errors.New("transient finalize failure")
+			switch fin.Mode {
+			case FinalizeNotify:
+				notifyAttempts++
+				if notifyAttempts < 3 {
+					return errors.New("transient notify failure")
+				}
+			case FinalizeCleanup:
+				cleanupAttempts++
+				if cleanupAttempts < 3 {
+					return errors.New("transient cleanup failure")
+				}
+			case FinalizeMetrics:
+				metricsAttempts++
 			}
 
 			return nil
-		}).Times(3)
+		})
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
 	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError(), "workflow should succeed when finalize succeeds within retry budget")
-	assert.Equal(t, 3, finalizeAttempts, "valid-mode finalize should be invoked up to 3 times before succeeding")
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, 3, notifyAttempts, "notify should retry up to 3 times")
+	assert.Equal(t, 3, cleanupAttempts, "cleanup should retry up to 3 times")
+	assert.Equal(t, 1, metricsAttempts, "metrics should fire exactly once after the retried steps succeed")
+}
+
+// TestMediaWorkflow_FinalizeMetricsDoesNotRetryAndDoesNotFailWorkflow verifies
+// that a metrics activity error does not propagate to the workflow result and
+// that the activity is invoked exactly once. Histogram emission is not
+// idempotent, so retries would double-count.
+func TestMediaWorkflow_FinalizeMetricsDoesNotRetryAndDoesNotFailWorkflow(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	registerWorkflow(env, newWorkflowActivities(t))
+
+	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
+	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
+
+	metricsAttempts := 0
+	finalizeFailureCalled := false
+
+	env.OnActivity(FinalizeActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, fin FinalizeInput) error {
+			switch fin.Mode {
+			case FinalizeNotify, FinalizeCleanup:
+				return nil
+			case FinalizeMetrics:
+				metricsAttempts++
+				return errors.New("OTel sdk panic")
+			case FinalizeFailure:
+				finalizeFailureCalled = true
+			}
+
+			return nil
+		})
+
+	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError(), "metrics failure must not fail the workflow")
+	assert.Equal(t, 1, metricsAttempts, "metrics activity should not be retried")
+	assert.False(t, finalizeFailureCalled, "failure-webhook must not fire when only metrics fail")
+}
+
+// TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry verifies that
+// the workflow does not burn the notify retry budget on a pure-data error
+// (unknown media type). The non-retryable ApplicationError stops Temporal at
+// the first attempt.
+func TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	registerWorkflow(env, newWorkflowActivities(t))
+
+	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
+	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
+
+	notifyAttempts := 0
+
+	env.OnActivity(FinalizeActivityName, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, fin FinalizeInput) error {
+			switch fin.Mode {
+			case FinalizeNotify:
+				notifyAttempts++
+				return temporal.NewNonRetryableApplicationError("unknown media type", errTypeNonRetryable, nil)
+			case FinalizeFailure:
+				return nil
+			}
+
+			return nil
+		})
+
+	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	assert.Equal(t, 1, notifyAttempts, "non-retryable application error should stop Temporal at the first attempt")
 }
 
 func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 	tests := []struct {
-		name         string
-		failingStep  string
-		expectedMode FinalizeMode
-		setupMocks   func(env *testsuite.TestWorkflowEnvironment, attempts *int)
+		name        string
+		failingStep string
+		setupMocks  func(env *testsuite.TestWorkflowEnvironment, attempts *int)
 	}{
 		{
-			name:         "probe is invoked exactly once on failure (no retries)",
-			failingStep:  "probe",
-			expectedMode: FinalizeFailure,
+			name:        "probe is invoked exactly once on failure (no retries)",
+			failingStep: "probe",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(func(_ context.Context, _ MediaInput) (steps.ProbeOutput, error) {
@@ -208,9 +299,8 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			},
 		},
 		{
-			name:         "detectcrop is invoked exactly once on failure (no retries)",
-			failingStep:  "detectcrop",
-			expectedMode: FinalizeFailure,
+			name:        "detectcrop is invoked exactly once on failure (no retries)",
+			failingStep: "detectcrop",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(steps.ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
@@ -222,9 +312,8 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			},
 		},
 		{
-			name:         "transcode is invoked exactly once on failure (no retries)",
-			failingStep:  "transcode",
-			expectedMode: FinalizeFailure,
+			name:        "transcode is invoked exactly once on failure (no retries)",
+			failingStep: "transcode",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(steps.ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
@@ -261,7 +350,7 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			require.True(t, env.IsWorkflowCompleted())
 			require.Error(t, env.GetWorkflowError())
 			assert.Equal(t, 1, attempts, "%s should not be retried", test.failingStep)
-			assert.Equal(t, test.expectedMode, seenFinalize.Mode)
+			assert.Equal(t, FinalizeFailure, seenFinalize.Mode)
 			assert.Equal(t, test.failingStep, seenFinalize.FailureStep)
 		})
 	}

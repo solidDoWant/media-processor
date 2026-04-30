@@ -41,15 +41,17 @@ const (
 	defaultFinalizeTimeout = 10 * time.Minute
 
 	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
-	// detectcrop, and transcode: these activities are not retried because their
-	// failure modes (corrupt input, missing crop region, ffmpeg crash) generally
-	// will not recover on a retry.
+	// detectcrop, transcode, the metrics finalize sub-mode, the invalid path,
+	// and the failure-webhook. Single attempt: retry would either repeat
+	// expensive work that will not recover (probe / detectcrop / transcode) or
+	// duplicate a non-idempotent side effect (metrics emission, webhook).
 	defaultMaxAttempts = 1
-	// finalizeValidMaxAttempts is the RetryPolicy MaximumAttempts applied to
-	// the valid-path Finalize invocation. Library import and source cleanup are
-	// idempotent and benefit from retries when the arr service or filesystem is
-	// transiently unavailable.
-	finalizeValidMaxAttempts = 3
+	// finalizeRetryableMaxAttempts is the RetryPolicy MaximumAttempts applied
+	// to the notify and cleanup finalize sub-modes. Both are idempotent — the
+	// arr scan command is a no-op when re-issued for an already-imported file,
+	// and RunCleanup tolerates ErrNotExist — so retries are safe and useful
+	// when the arr service or filesystem is transiently unavailable.
+	finalizeRetryableMaxAttempts = 3
 )
 
 // MediaInput is an alias for the shared input type so existing callers within
@@ -90,18 +92,32 @@ type MediaWorkflowConfig struct {
 	ProgressLogInterval time.Duration
 }
 
-// FinalizeMode discriminates the three branches of the Finalize activity.
-// Folding three short side-effecting tasks (record_metrics, record_invalid,
-// finalize/cleanup) plus the failure-webhook into one activity keeps the
-// workflow at four registered activities total.
+// FinalizeMode discriminates the branches of the Finalize activity. The valid
+// path is split into three sub-modes (Notify, Cleanup, Metrics) so the
+// workflow can give each sub-step the retry policy that matches its
+// idempotency profile, instead of coupling all three to one shared retry
+// budget. The invalid path stays as a single non-retryable mode because
+// invalid files are rare and the cleanup-then-metrics window is tiny.
+// Folding everything into one registered activity keeps the workflow at four
+// registered activities total.
 type FinalizeMode int
 
 const (
-	// FinalizeValid runs the post-transcode work for a successfully processed
-	// file: library import, source cleanup or sentinel, and per-run metrics.
-	FinalizeValid FinalizeMode = iota + 1
+	// FinalizeNotify performs the library import (Sonarr/Radarr scan command).
+	// Idempotent in practice, so the workflow retries this mode on transient
+	// failures.
+	FinalizeNotify FinalizeMode = iota + 1
+	// FinalizeCleanup deletes the source file or writes the .done sentinel.
+	// Idempotent (RunCleanup tolerates ErrNotExist), so the workflow retries
+	// this mode on transient failures.
+	FinalizeCleanup
+	// FinalizeMetrics records per-run histograms and the optional GetInfo-
+	// driven counters. Histograms are not idempotent — every Record() emits a
+	// fresh observation — so the workflow invokes this mode without retries
+	// and ignores its error.
+	FinalizeMetrics
 	// FinalizeInvalid runs the cleanup-and-metrics path for a file that the
-	// probe activity determined was not valid media.
+	// probe activity determined was not valid media. Single attempt.
 	FinalizeInvalid
 	// FinalizeFailure runs from the workflow's defer block to send a single
 	// aggregated failure notification when the workflow returns an error.
