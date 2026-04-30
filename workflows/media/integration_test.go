@@ -96,7 +96,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	assert.NoError(t, statErr, "transcoded output file should exist in outputDir")
 
 	_, statErr = os.Stat(inputPath)
-	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by finalize step")
+	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by Cleanup activity")
 }
 
 func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.T) {
@@ -170,7 +170,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	assert.NoError(t, statErr, "transcoded output file should exist in outputDir")
 
 	_, statErr = os.Stat(inputPath)
-	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by finalize step")
+	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by Cleanup activity")
 }
 
 func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T) {
