@@ -23,9 +23,17 @@ func (e *stepError) Error() string { return e.step + ": " + e.err.Error() }
 
 func (e *stepError) Unwrap() error { return e.err }
 
-// MediaWorkflow processes one media file: probe, optional detectcrop and
-// transcode, finalize. A defer block sends a failure-webhook notification
-// when the workflow exits with an error.
+// MediaWorkflow processes one media file end-to-end. The body is straight-line
+// Go: probe, branch on validity, run the per-path activities. A defer block
+// invokes the failure-webhook activity when the workflow returns an error.
+//
+// Each activity is invoked with the retry policy that fits its idempotency
+// profile: idempotent operations (Notify, Cleanup) use retryableMaxAttempts
+// so transient flakes do not fail the run; non-idempotent operations
+// (RecordRunMetrics, RecordInvalid, NotifyFailure) use defaultMaxAttempts
+// (single attempt) so retries cannot duplicate side effects, and the workflow
+// swallows their errors so a metrics or webhook issue does not fail an
+// otherwise-successful run.
 func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err error) {
 	log := workflow.GetLogger(ctx)
 	log.Info("processing file", "file", input.FilePath)
@@ -53,12 +61,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 		})
 
-		notifyErr := workflow.ExecuteActivity(failureCtx, FinalizeActivityName, FinalizeInput{
-			Mode:        FinalizeFailure,
-			Input:       input,
-			FailureStep: step,
-			FailureErr:  message,
-		}).Get(failureCtx, nil)
+		notifyErr := workflow.ExecuteActivity(failureCtx, NotifyFailureActivityName, input, step, message).Get(failureCtx, nil)
 		if notifyErr != nil {
 			log.Error("failure-webhook activity failed", "error", notifyErr.Error())
 		}
@@ -75,17 +78,25 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 	}
 
 	if !probe.IsValidMedia {
-		invalidCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		// Invalid path. Probe has already removed the source file; Cleanup
+		// here is a near-no-op for the file (RunCleanup tolerates ErrNotExist)
+		// but still writes the .done sentinel when PreserveSource is set.
+		invalidCleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: defaultFinalizeTimeout,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
+		})
+
+		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input).Get(invalidCleanupCtx, nil); err != nil {
+			return &stepError{step: "cleanup", err: err}
+		}
+
+		invalidMetricsCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 			StartToCloseTimeout: defaultFinalizeTimeout,
 			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 		})
 
-		if err := workflow.ExecuteActivity(invalidCtx, FinalizeActivityName, FinalizeInput{
-			Mode:  FinalizeInvalid,
-			Input: input,
-			Probe: probe,
-		}).Get(invalidCtx, nil); err != nil {
-			return &stepError{step: "finalize", err: err}
+		if invalidErr := workflow.ExecuteActivity(invalidMetricsCtx, RecordInvalidActivityName, input).Get(invalidMetricsCtx, nil); invalidErr != nil {
+			log.Warn("invalid-metrics activity failed; workflow proceeds", "error", invalidErr.Error())
 		}
 
 		return nil
@@ -111,52 +122,33 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		return &stepError{step: "transcode", err: err}
 	}
 
-	// The valid path is split across three Finalize invocations so each
-	// sub-step gets the retry policy that matches its idempotency profile:
-	// notify and cleanup retry on transient failures; metrics never retries
-	// because histogram emission is not idempotent.
-
 	notifyCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: finalizeRetryableMaxAttempts},
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
 	})
 
-	if err := workflow.ExecuteActivity(notifyCtx, FinalizeActivityName, FinalizeInput{
-		Mode:      FinalizeNotify,
-		Input:     input,
-		Probe:     probe,
-		Transcode: transcode,
-	}).Get(notifyCtx, nil); err != nil {
+	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
 		return &stepError{step: "notify", err: err}
 	}
 
 	cleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: finalizeRetryableMaxAttempts},
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
 	})
 
-	if err := workflow.ExecuteActivity(cleanupCtx, FinalizeActivityName, FinalizeInput{
-		Mode:  FinalizeCleanup,
-		Input: input,
-	}).Get(cleanupCtx, nil); err != nil {
+	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input).Get(cleanupCtx, nil); err != nil {
 		return &stepError{step: "cleanup", err: err}
 	}
 
-	// Metrics: best-effort. A failure here means an OTel SDK panic or the
+	// Metrics are best-effort: a failure here means an OTel SDK panic or the
 	// activity being killed mid-record — neither is worth failing the
-	// workflow over (and the firehose of possibly-partial samples already
-	// emitted on the failed attempt cannot be unsent). Log and proceed.
+	// workflow over after the file has already been imported and cleaned up.
 	metricsCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: defaultFinalizeTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 	})
 
-	if metricsErr := workflow.ExecuteActivity(metricsCtx, FinalizeActivityName, FinalizeInput{
-		Mode:      FinalizeMetrics,
-		Input:     input,
-		Probe:     probe,
-		Transcode: transcode,
-	}).Get(metricsCtx, nil); metricsErr != nil {
+	if metricsErr := workflow.ExecuteActivity(metricsCtx, RecordRunMetricsActivityName, input, probe, transcode).Get(metricsCtx, nil); metricsErr != nil {
 		log.Warn("metrics activity failed; workflow proceeds", "error", metricsErr.Error())
 	}
 

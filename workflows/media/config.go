@@ -8,7 +8,6 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // MediaWorkflowName is the registered Temporal workflow name. Re-exported from
@@ -16,12 +15,20 @@ import (
 const MediaWorkflowName = mediatypes.MediaWorkflowName
 
 // Registered activity names. Workflows reference activities by these strings
-// so registration and invocation cannot drift from one another.
+// so registration and invocation cannot drift from one another. Each name maps
+// 1:1 to a method on Activities; the operational boundary (idempotency, retry
+// policy, data inputs) is what determines the split, so each activity owns
+// exactly one concern and each concern is invoked under the retry policy that
+// fits it.
 const (
-	ProbeActivityName      = "Probe"
-	DetectCropActivityName = "DetectCrop"
-	TranscodeActivityName  = "Transcode"
-	FinalizeActivityName   = "Finalize"
+	ProbeActivityName            = "Probe"
+	DetectCropActivityName       = "DetectCrop"
+	TranscodeActivityName        = "Transcode"
+	NotifyActivityName           = "Notify"
+	CleanupActivityName          = "Cleanup"
+	RecordRunMetricsActivityName = "RecordRunMetrics"
+	RecordInvalidActivityName    = "RecordInvalid"
+	NotifyFailureActivityName    = "NotifyFailure"
 )
 
 const (
@@ -36,27 +43,23 @@ const (
 
 	// defaultProbeTimeout is the StartToCloseTimeout applied to the probe activity.
 	defaultProbeTimeout = 5 * time.Minute
-	// defaultFinalizeTimeout is the StartToCloseTimeout applied to the finalize
-	// activity in all three modes (valid / invalid / failure).
+	// defaultFinalizeTimeout is the StartToCloseTimeout applied to the
+	// post-transcode activities (notify, cleanup, metrics, invalid, failure-webhook).
 	defaultFinalizeTimeout = 10 * time.Minute
 
 	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
-	// detectcrop, transcode, the metrics finalize sub-mode, the invalid path,
-	// and the failure-webhook. Single attempt: retry would either repeat
-	// expensive work that will not recover (probe / detectcrop / transcode) or
-	// duplicate a non-idempotent side effect (metrics emission, webhook).
+	// detectcrop, transcode, the metrics activities, the invalid path, and the
+	// failure-webhook. Single attempt: retry would either repeat expensive
+	// work that will not recover (probe / detectcrop / transcode) or duplicate
+	// a non-idempotent side effect (metrics emission, webhook).
 	defaultMaxAttempts = 1
-	// finalizeRetryableMaxAttempts is the RetryPolicy MaximumAttempts applied
-	// to the notify and cleanup finalize sub-modes. Both are idempotent — the
-	// arr scan command is a no-op when re-issued for an already-imported file,
-	// and RunCleanup tolerates ErrNotExist — so retries are safe and useful
-	// when the arr service or filesystem is transiently unavailable.
-	finalizeRetryableMaxAttempts = 3
+	// retryableMaxAttempts is the RetryPolicy MaximumAttempts applied to the
+	// notify and cleanup activities. Both are idempotent — the arr scan
+	// command is a no-op when re-issued for an already-imported file, and
+	// RunCleanup tolerates ErrNotExist — so retries are safe and useful when
+	// the arr service or filesystem is transiently unavailable.
+	retryableMaxAttempts = 3
 )
-
-// MediaInput is an alias for the shared input type so existing callers within
-// this package do not need to be updated.
-type MediaInput = mediatypes.MediaInput
 
 // MediaWorkflowConfig holds the configuration for the media processing workflow
 // and its activities.
@@ -92,50 +95,6 @@ type MediaWorkflowConfig struct {
 	ProgressLogInterval time.Duration
 }
 
-// FinalizeMode discriminates the branches of the Finalize activity. The valid
-// path is split into three sub-modes (Notify, Cleanup, Metrics) so the
-// workflow can give each sub-step the retry policy that matches its
-// idempotency profile, instead of coupling all three to one shared retry
-// budget. The invalid path stays as a single non-retryable mode because
-// invalid files are rare and the cleanup-then-metrics window is tiny.
-// Folding everything into one registered activity keeps the workflow at four
-// registered activities total.
-type FinalizeMode int
-
-const (
-	// FinalizeNotify performs the library import (Sonarr/Radarr scan command).
-	// Idempotent in practice, so the workflow retries this mode on transient
-	// failures.
-	FinalizeNotify FinalizeMode = iota + 1
-	// FinalizeCleanup deletes the source file or writes the .done sentinel.
-	// Idempotent (RunCleanup tolerates ErrNotExist), so the workflow retries
-	// this mode on transient failures.
-	FinalizeCleanup
-	// FinalizeMetrics records per-run histograms and the optional GetInfo-
-	// driven counters. Histograms are not idempotent — every Record() emits a
-	// fresh observation — so the workflow invokes this mode without retries
-	// and ignores its error.
-	FinalizeMetrics
-	// FinalizeInvalid runs the cleanup-and-metrics path for a file that the
-	// probe activity determined was not valid media. Single attempt.
-	FinalizeInvalid
-	// FinalizeFailure runs from the workflow's defer block to send a single
-	// aggregated failure notification when the workflow returns an error.
-	FinalizeFailure
-)
-
-// FinalizeInput is the activity payload for Finalize. Only the fields relevant
-// to the chosen Mode are read.
-type FinalizeInput struct {
-	Mode      FinalizeMode
-	Input     MediaInput
-	Probe     steps.ProbeOutput     // valid + invalid modes
-	Transcode steps.TranscodeOutput // valid mode
-
-	// FailureStep is the activity name where the workflow error originated.
-	// Only set when Mode == FinalizeFailure.
-	FailureStep string
-	// FailureErr is the error message from the failed activity. Only set when
-	// Mode == FinalizeFailure.
-	FailureErr string
-}
+// MediaInput is an alias for the shared input type so existing callers within
+// this package do not need to be updated.
+type MediaInput = mediatypes.MediaInput

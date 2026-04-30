@@ -24,9 +24,8 @@ import (
 // burn the activity's retry budget on inputs that cannot recover.
 const errTypeNonRetryable = "MediaInputError"
 
-// Activities holds the dependencies needed by the four activity methods. A
-// single instance is registered with the worker; all activities share its
-// fields.
+// Activities holds the dependencies needed by the activity methods. A single
+// instance is registered with the worker; all activities share its fields.
 type Activities struct {
 	cfg           MediaWorkflowConfig
 	radarrClient  medialib.ArrLibrary
@@ -76,19 +75,23 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 	}, nil
 }
 
-// Register attaches the workflow function and the four activities to the given
-// Temporal worker.
+// Register attaches the workflow function and the eight activities to the
+// given Temporal worker.
 func (a *Activities) Register(w worker.Worker) {
 	w.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
 	w.RegisterActivityWithOptions(a.Probe, activity.RegisterOptions{Name: ProbeActivityName})
 	w.RegisterActivityWithOptions(a.DetectCrop, activity.RegisterOptions{Name: DetectCropActivityName})
 	w.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
-	w.RegisterActivityWithOptions(a.Finalize, activity.RegisterOptions{Name: FinalizeActivityName})
+	w.RegisterActivityWithOptions(a.Notify, activity.RegisterOptions{Name: NotifyActivityName})
+	w.RegisterActivityWithOptions(a.Cleanup, activity.RegisterOptions{Name: CleanupActivityName})
+	w.RegisterActivityWithOptions(a.RecordRunMetrics, activity.RegisterOptions{Name: RecordRunMetricsActivityName})
+	w.RegisterActivityWithOptions(a.RecordInvalid, activity.RegisterOptions{Name: RecordInvalidActivityName})
+	w.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
 }
 
 // Probe is the Temporal activity that wraps steps.RunProbe. It records the
 // step start time on the returned ProbeOutput so downstream metrics can compute
-// the full probe→finalize wall-clock duration.
+// the full probe→cleanup wall-clock duration.
 func (a *Activities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOutput, error) {
 	start := time.Now()
 
@@ -152,51 +155,21 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 	return out, err
 }
 
-// Finalize is the Temporal activity that handles all post-probe / post-failure
-// side effects. The Mode field of FinalizeInput selects which sub-path runs;
-// the workflow gives each invocation its own retry policy.
-func (a *Activities) Finalize(ctx context.Context, fin FinalizeInput) error {
-	start := time.Now()
-
-	var err error
-
-	switch fin.Mode {
-	case FinalizeNotify:
-		err = a.finalizeNotify(ctx, fin)
-	case FinalizeCleanup:
-		err = a.finalizeCleanup(ctx, fin)
-	case FinalizeMetrics:
-		err = a.finalizeMetrics(ctx, fin)
-	case FinalizeInvalid:
-		err = a.finalizeInvalid(ctx, fin)
-	case FinalizeFailure:
-		err = a.finalizeFailure(ctx, fin)
-	default:
-		err = temporal.NewNonRetryableApplicationError(
-			fmt.Sprintf("finalize: unknown mode %d", fin.Mode),
-			errTypeNonRetryable,
-			nil,
-		)
-	}
-
-	logStepResult(ctx, "finalize", fin.Input.FilePath, start, err)
-
-	return err
-}
-
-// finalizeNotify issues the library import (Sonarr/Radarr scan command). The
-// import is idempotent in practice — re-issuing the same scan for an already-
-// imported file is a no-op — so the workflow retries this mode on transient
+// Notify issues the library import (Sonarr/Radarr scan command). The import is
+// idempotent in practice — re-issuing the same scan for an already-imported
+// file is a no-op — so the workflow retries this activity on transient
 // failures. Pure-data errors (unknown media type, output_remote_path outside
 // the output tree) are returned as non-retryable so Temporal does not burn the
 // retry budget on inputs that cannot recover.
-func (a *Activities) finalizeNotify(ctx context.Context, fin FinalizeInput) error {
-	input := fin.Input
-	transcode := fin.Transcode
+func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode steps.TranscodeOutput) error {
+	start := time.Now()
 
 	library, err := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient)
 	if err != nil {
-		return temporal.NewNonRetryableApplicationError(err.Error(), errTypeNonRetryable, err)
+		nonRetryable := temporal.NewNonRetryableApplicationError(err.Error(), errTypeNonRetryable, err)
+		logStepResult(ctx, "notify", input.FilePath, start, nonRetryable)
+
+		return nonRetryable
 	}
 
 	importPath := transcode.DestFilePath
@@ -206,54 +179,60 @@ func (a *Activities) finalizeNotify(ctx context.Context, fin FinalizeInput) erro
 
 		rel, relErr := filepath.Rel(outputPath, importPath)
 		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return temporal.NewNonRetryableApplicationError(
+			nonRetryable := temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("output file %q is not under output_path %q; cannot apply output_remote_path substitution", importPath, input.OutputPath),
 				errTypeNonRetryable,
 				nil,
 			)
+			logStepResult(ctx, "notify", input.FilePath, start, nonRetryable)
+
+			return nonRetryable
 		}
 
 		importPath = filepath.Join(remotePath, rel)
 	}
 
 	if err := library.ImportByFilePath(ctx, importPath); err != nil {
-		return fmt.Errorf("notify library: %w", err)
+		wrappedErr := fmt.Errorf("notify library: %w", err)
+		logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+
+		return wrappedErr
 	}
+
+	logStepResult(ctx, "notify", input.FilePath, start, nil)
 
 	return nil
 }
 
-// finalizeCleanup deletes the source file or writes the .done sentinel.
-// RunCleanup tolerates ErrNotExist so retrying after a partial cleanup is
-// safe; WriteSentinel re-writes the same zero-byte file.
-func (a *Activities) finalizeCleanup(_ context.Context, fin FinalizeInput) error {
-	input := fin.Input
+// Cleanup deletes the source file or writes the .done sentinel. RunCleanup
+// tolerates ErrNotExist so retrying after a partial cleanup is safe;
+// WriteSentinel re-writes the same zero-byte file. Shared between the valid
+// and invalid paths — in the invalid path the source has already been removed
+// by Probe and Cleanup is a near-no-op, but the sentinel branch is still
+// exercised when PreserveSource is set.
+func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
+	start := time.Now()
 
+	var err error
 	if input.PreserveSource {
-		if err := steps.WriteSentinel(input.FilePath); err != nil {
-			return err
-		}
-
-		return nil
+		err = steps.WriteSentinel(input.FilePath)
+	} else {
+		err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 	}
 
-	if err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories); err != nil {
-		return err
-	}
+	logStepResult(ctx, "cleanup", input.FilePath, start, err)
 
-	return nil
+	return err
 }
 
-// finalizeMetrics records per-run histograms and (when high-cardinality labels
-// are enabled) attaches Sonarr/Radarr metadata via GetInfo. This mode is
-// invoked by the workflow with MaximumAttempts: 1 because histogram emission
-// is not idempotent — every Record() call adds a fresh sample — and the
-// workflow ignores the returned error so a metrics issue does not fail the
-// run after the file has already been imported and cleaned up.
-func (a *Activities) finalizeMetrics(ctx context.Context, fin FinalizeInput) error {
-	input := fin.Input
-	probe := fin.Probe
-	transcode := fin.Transcode
+// RecordRunMetrics records per-run histograms and (when high-cardinality
+// labels are enabled) attaches Sonarr/Radarr metadata via GetInfo. Histogram
+// emission is not idempotent — every Record() call adds a fresh sample — so
+// the workflow invokes this activity with MaximumAttempts: 1 and ignores the
+// returned error. A metrics issue must not fail an otherwise-successful run
+// after the file has already been imported and cleaned up.
+func (a *Activities) RecordRunMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput) error {
+	start := time.Now()
 
 	var mediaInfo medialib.MediaInfo
 
@@ -274,41 +253,41 @@ func (a *Activities) finalizeMetrics(ctx context.Context, fin FinalizeInput) err
 	totalElapsed := time.Since(probe.StartedAt)
 	a.recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, transcode.HardwareAccelerated, totalElapsed)
 
+	logStepResult(ctx, "record_run_metrics", input.FilePath, start, nil)
+
 	return nil
 }
 
-// finalizeInvalid runs the cleanup-and-metrics path for a file that the probe
-// activity determined was not valid media. The probe activity has already
-// removed the source file in this case; cleanup here is a no-op for the file
-// itself (RunCleanup tolerates ErrNotExist) but preserves the existing
-// PreserveSource sentinel semantics. Invoked with MaximumAttempts: 1 because
-// the counter increment that follows is not idempotent.
-func (a *Activities) finalizeInvalid(ctx context.Context, fin FinalizeInput) error {
-	input := fin.Input
-
-	if input.PreserveSource {
-		if err := steps.WriteSentinel(input.FilePath); err != nil {
-			return err
-		}
-	} else if err := steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories); err != nil {
-		return err
-	}
+// RecordInvalid increments the invalid-files counter for files that the probe
+// activity determined were not valid media. Counter increment is not
+// idempotent so the workflow invokes this activity with MaximumAttempts: 1
+// and ignores the returned error.
+func (a *Activities) RecordInvalid(ctx context.Context, input MediaInput) error {
+	start := time.Now()
 
 	a.recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
 
+	logStepResult(ctx, "record_invalid", input.FilePath, start, nil)
+
 	return nil
 }
 
-// finalizeFailure sends the configured failure webhook for a workflow that
-// returned an error. The single failed step + error message are wrapped in the
-// existing map[string]string shape so the wire payload matches today's.
-func (a *Activities) finalizeFailure(ctx context.Context, fin FinalizeInput) error {
+// NotifyFailure sends the configured failure webhook for a workflow that
+// returned an error. Invoked from the workflow's defer block on any non-nil
+// return; the failed step name and error message are sourced from the
+// stepError that the workflow body returned.
+func (a *Activities) NotifyFailure(ctx context.Context, input MediaInput, failedStep, failureMsg string) error {
+	start := time.Now()
+
 	stepErrors := map[string]string{}
-	if fin.FailureStep != "" {
-		stepErrors[fin.FailureStep] = fin.FailureErr
+	if failedStep != "" {
+		stepErrors[failedStep] = failureMsg
 	}
 
-	return steps.NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, fin.Input.FilePath, a.webhookClient)
+	err := steps.NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, input.FilePath, a.webhookClient)
+	logStepResult(ctx, "notify_failure", input.FilePath, start, err)
+
+	return err
 }
 
 func logStepResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {

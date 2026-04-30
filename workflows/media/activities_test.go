@@ -46,81 +46,71 @@ func collectActivityMetrics(t *testing.T, reader *sdkmetric.ManualReader) metric
 	return rm
 }
 
-func TestFinalize_Notify_CallsLibraryImport(t *testing.T) {
+func TestNotify_CallsLibraryImport(t *testing.T) {
 	radarr := &stubLibraryClient{}
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:      FinalizeNotify,
-		Input:     MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
-		Probe:     steps.ProbeOutput{IsValidMedia: true},
-		Transcode: steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
-	})
+	err := a.Notify(t.Context(),
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
+		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+	)
 	require.NoError(t, err)
 
 	require.Len(t, radarr.importCalls, 1)
 	assert.Equal(t, "/out/movie.mkv", radarr.importCalls[0])
 }
 
-func TestFinalize_Notify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
+func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 	radarr := &stubLibraryClient{}
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode: FinalizeNotify,
-		Input: MediaInput{
+	err := a.Notify(t.Context(),
+		MediaInput{
 			FilePath: "/in/movie.mkv", MediaType: medialib.MovieType,
 			OutputPath: "/processed", OutputRemotePath: "/remote/movies",
 		},
-		Probe:     steps.ProbeOutput{IsValidMedia: true},
-		Transcode: steps.TranscodeOutput{DestFilePath: "/processed/movie.mkv"},
-	})
+		steps.TranscodeOutput{DestFilePath: "/processed/movie.mkv"},
+	)
 	require.NoError(t, err)
 
 	require.Len(t, radarr.importCalls, 1)
 	assert.Equal(t, "/remote/movies/movie.mkv", radarr.importCalls[0])
 }
 
-func TestFinalize_Notify_LibraryImportFailurePropagates(t *testing.T) {
+func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 	radarr := &stubLibraryClient{err: errors.New("radarr unreachable")}
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:      FinalizeNotify,
-		Input:     MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
-		Probe:     steps.ProbeOutput{IsValidMedia: true},
-		Transcode: steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
-	})
+	err := a.Notify(t.Context(),
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
+		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+	)
 	require.Error(t, err, "library import failure should propagate")
 }
 
-func TestFinalize_Cleanup_DeletesSource(t *testing.T) {
+func TestCleanup_DeletesSource(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:  FinalizeCleanup,
-		Input: MediaInput{FilePath: srcPath, MediaType: medialib.MovieType},
-	})
+	err := a.Cleanup(t.Context(), MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
-	assert.True(t, os.IsNotExist(statErr), "source should be deleted by cleanup mode")
+	assert.True(t, os.IsNotExist(statErr), "source should be deleted")
 }
 
-func TestFinalize_Cleanup_PreserveSourceWritesSentinel(t *testing.T) {
+func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:  FinalizeCleanup,
-		Input: MediaInput{FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true},
+	err := a.Cleanup(t.Context(), MediaInput{
+		FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true,
 	})
 	require.NoError(t, err)
 
@@ -132,7 +122,7 @@ func TestFinalize_Cleanup_PreserveSourceWritesSentinel(t *testing.T) {
 	assert.NoError(t, sentErr, "sentinel should be written next to the preserved source")
 }
 
-func TestFinalize_Cleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
+func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	// Do NOT create the file: simulate a retried cleanup after the previous
@@ -140,44 +130,32 @@ func TestFinalize_Cleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:  FinalizeCleanup,
-		Input: MediaInput{FilePath: srcPath, MediaType: medialib.MovieType},
-	})
+	err := a.Cleanup(t.Context(), MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err, "cleanup must be idempotent so retries do not fail when the file is already gone")
 }
 
-func TestFinalize_Metrics_RecordsRunHistograms(t *testing.T) {
+func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
 	a, reader := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:  FinalizeMetrics,
-		Input: MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType},
-		Probe: steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"},
-		Transcode: steps.TranscodeOutput{
+	err := a.RecordRunMetrics(t.Context(),
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType},
+		steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"},
+		steps.TranscodeOutput{
 			DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/movie.mkv",
 		},
-	})
+	)
 	require.NoError(t, err)
 
 	rm := collectActivityMetrics(t, reader)
-	require.NotNil(t, rm.ScopeMetrics, "metrics mode should record per-run histograms")
+	require.NotNil(t, rm.ScopeMetrics, "metrics activity should record per-run histograms")
 	require.NotNil(t, findMetric(rm, "media_workflow_total_duration_seconds"))
 }
 
-func TestFinalize_Invalid_RecordsInvalidFileMetric(t *testing.T) {
-	srcDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "not-a-video.txt")
-	// Probe deletes the file before this activity runs in the real flow; the
-	// activity must tolerate the missing source.
+func TestRecordInvalid_RecordsInvalidFileMetric(t *testing.T) {
 	a, reader := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode: FinalizeInvalid,
-		Input: MediaInput{
-			FilePath: srcPath, MediaType: medialib.MovieType, MappingName: "downloads",
-		},
-		Probe: steps.ProbeOutput{IsValidMedia: false},
+	err := a.RecordInvalid(t.Context(), MediaInput{
+		FilePath: "/in/not-a-video.txt", MediaType: medialib.MovieType, MappingName: "downloads",
 	})
 	require.NoError(t, err)
 
@@ -191,7 +169,7 @@ func TestFinalize_Invalid_RecordsInvalidFileMetric(t *testing.T) {
 	assert.EqualValues(t, 1, sum.DataPoints[0].Value)
 }
 
-func TestFinalize_Failure_SendsWebhookPayload(t *testing.T) {
+func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
 	var (
 		called    bool
 		payload   map[string]string
@@ -208,15 +186,10 @@ func TestFinalize_Failure_SendsWebhookPayload(t *testing.T) {
 
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{URL: srv.URL})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:        FinalizeFailure,
-		Input:       MediaInput{FilePath: "/in/movie.mkv"},
-		FailureStep: "transcode",
-		FailureErr:  "ffmpeg exited with code 1",
-	})
+	err := a.NotifyFailure(t.Context(), MediaInput{FilePath: "/in/movie.mkv"}, "transcode", "ffmpeg exited with code 1")
 	require.NoError(t, err)
 	require.NoError(t, bodyError)
-	require.True(t, called, "webhook should be invoked for failure mode")
+	require.True(t, called, "webhook should be invoked")
 
 	assert.Equal(t, MediaWorkflowName, payload["workflow"])
 	assert.Equal(t, "/in/movie.mkv", payload["file_path"])
@@ -224,14 +197,9 @@ func TestFinalize_Failure_SendsWebhookPayload(t *testing.T) {
 	assert.Equal(t, "transcode: ffmpeg exited with code 1", payload["error"])
 }
 
-func TestFinalize_Failure_NoWebhookUrlIsNoop(t *testing.T) {
+func TestNotifyFailure_NoWebhookUrlIsNoop(t *testing.T) {
 	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Finalize(t.Context(), FinalizeInput{
-		Mode:        FinalizeFailure,
-		Input:       MediaInput{FilePath: "/in/movie.mkv"},
-		FailureStep: "probe",
-		FailureErr:  "boom",
-	})
+	err := a.NotifyFailure(t.Context(), MediaInput{FilePath: "/in/movie.mkv"}, "probe", "boom")
 	require.NoError(t, err, "missing webhook URL is acceptable; activity must not error")
 }
