@@ -1,5 +1,3 @@
-// Package media provides the Temporal workflow definition for processing media files
-// (movies and TV episodes) using a single parameterised workflow.
 package media
 
 import (
@@ -10,129 +8,15 @@ import (
 	"strings"
 	"time"
 
-	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
-
-// MediaWorkflowName is the registered Temporal workflow name. Re-exported from the
-// types package for callers that import workflows/media directly.
-const MediaWorkflowName = mediatypes.MediaWorkflowName
-
-// Registered activity names. Workflows reference activities by these strings so
-// that registration and invocation cannot drift from one another.
-const (
-	ProbeActivityName      = "Probe"
-	DetectCropActivityName = "DetectCrop"
-	TranscodeActivityName  = "Transcode"
-	FinalizeActivityName   = "Finalize"
-)
-
-const (
-	// DefaultDetectCropTimeout is the default Temporal StartToCloseTimeout for the
-	// detectcrop activity, used when MediaWorkflowConfig.DetectCropTimeout is zero.
-	DefaultDetectCropTimeout = 30 * time.Minute
-	// DefaultTranscodeTimeout is the default Temporal StartToCloseTimeout for the
-	// transcode activity, used when MediaWorkflowConfig.TranscodeTimeout is zero.
-	DefaultTranscodeTimeout = 4 * time.Hour
-
-	// defaultProbeTimeout is the StartToCloseTimeout applied to the probe activity.
-	defaultProbeTimeout = 5 * time.Minute
-	// defaultFinalizeTimeout is the StartToCloseTimeout applied to the finalize
-	// activity in all three modes (valid / invalid / failure).
-	defaultFinalizeTimeout = 10 * time.Minute
-
-	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
-	// detectcrop, and transcode: these activities are not retried because their
-	// failure modes (corrupt input, missing crop region, ffmpeg crash) generally
-	// will not recover on a retry.
-	defaultMaxAttempts = 1
-	// finalizeValidMaxAttempts is the RetryPolicy MaximumAttempts applied to
-	// the valid-path Finalize invocation. Library import and source cleanup are
-	// idempotent and benefit from retries when the arr service or filesystem is
-	// transiently unavailable.
-	finalizeValidMaxAttempts = 3
-)
-
-// MediaWorkflowConfig holds the configuration for the media processing workflow
-// and its activities.
-type MediaWorkflowConfig struct {
-	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
-	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
-	HardwareDevicePath string
-	// MeterProvider is the OTel MeterProvider used for per-run metrics. When nil,
-	// a no-op provider is used and no metrics are emitted.
-	MeterProvider otelmetric.MeterProvider
-	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
-	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
-	HighCardinalityLabels bool
-	// MinCropX is the minimum number of pixels that must be trimmed horizontally
-	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// 0 means no minimum (any detected crop is applied).
-	MinCropX int
-	// MinCropY is the minimum number of pixels that must be trimmed vertically
-	// for a crop to be applied. -1 disables the threshold (any crop is accepted).
-	// 0 means no minimum (any detected crop is applied).
-	MinCropY int
-	// DetectCropTimeout is the Temporal StartToCloseTimeout for the detectcrop
-	// activity. When zero, NewActivities applies a default of 30 minutes.
-	DetectCropTimeout time.Duration
-	// TranscodeTimeout is the Temporal StartToCloseTimeout for the transcode
-	// activity. When zero, NewActivities applies a default of 4 hours.
-	TranscodeTimeout time.Duration
-	// H265CRF is the constant-quality value passed to H.265 encoders. 0 means
-	// use the encoder's built-in default.
-	H265CRF int
-	// ProgressLogInterval controls how often a progress log line is emitted
-	// during transcoding. Zero disables progress logging.
-	ProgressLogInterval time.Duration
-}
-
-// MediaInput is an alias for the shared input type so existing callers within
-// this package do not need to be updated.
-type MediaInput = mediatypes.MediaInput
-
-// FinalizeMode discriminates the three branches of the Finalize activity.
-// Folding three short side-effecting tasks (record_metrics, record_invalid,
-// finalize/cleanup) plus the failure-webhook into one activity keeps the
-// workflow at four registered activities total.
-type FinalizeMode int
-
-const (
-	// FinalizeValid runs the post-transcode work for a successfully processed
-	// file: library import, source cleanup or sentinel, and per-run metrics.
-	FinalizeValid FinalizeMode = iota + 1
-	// FinalizeInvalid runs the cleanup-and-metrics path for a file that the
-	// probe activity determined was not valid media.
-	FinalizeInvalid
-	// FinalizeFailure runs from the workflow's defer block to send a single
-	// aggregated failure notification when the workflow returns an error.
-	FinalizeFailure
-)
-
-// FinalizeInput is the activity payload for Finalize. Only the fields relevant
-// to the chosen Mode are read.
-type FinalizeInput struct {
-	Mode      FinalizeMode
-	Input     MediaInput
-	Probe     steps.ProbeOutput     // valid + invalid modes
-	Transcode steps.TranscodeOutput // valid mode
-
-	// FailureStep is the activity name where the workflow error originated.
-	// Only set when Mode == FinalizeFailure.
-	FailureStep string
-	// FailureErr is the error message from the failed activity. Only set when
-	// Mode == FinalizeFailure.
-	FailureErr string
-}
 
 // Activities holds the dependencies needed by the four activity methods. A
 // single instance is registered with the worker; all activities share its
@@ -194,113 +78,6 @@ func (a *Activities) Register(w worker.Worker) {
 	w.RegisterActivityWithOptions(a.DetectCrop, activity.RegisterOptions{Name: DetectCropActivityName})
 	w.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
 	w.RegisterActivityWithOptions(a.Finalize, activity.RegisterOptions{Name: FinalizeActivityName})
-}
-
-// MediaWorkflow processes one media file: probe, optional detectcrop and
-// transcode, finalize. A defer block sends a failure-webhook notification when
-// the workflow exits with an error.
-func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err error) {
-	log := workflow.GetLogger(ctx)
-	log.Info("processing file", "file", input.FilePath)
-
-	// failedStep names the activity whose error caused the workflow to return.
-	// The defer block reads it to label the failure-webhook payload.
-	failedStep := ""
-
-	defer func() {
-		if err == nil {
-			return
-		}
-
-		// The workflow's context is cancelled when the workflow returns an
-		// error, so further activities must be scheduled on a disconnected
-		// context to actually run.
-		disconnected, cancel := workflow.NewDisconnectedContext(ctx)
-		defer cancel()
-
-		failureCtx := workflow.WithActivityOptions(disconnected, workflow.ActivityOptions{
-			StartToCloseTimeout: defaultFinalizeTimeout,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-		})
-
-		notifyErr := workflow.ExecuteActivity(failureCtx, FinalizeActivityName, FinalizeInput{
-			Mode:        FinalizeFailure,
-			Input:       input,
-			FailureStep: failedStep,
-			FailureErr:  err.Error(),
-		}).Get(failureCtx, nil)
-		if notifyErr != nil {
-			log.Error("failure-webhook activity failed", "error", notifyErr.Error())
-		}
-	}()
-
-	probeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultProbeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
-
-	var probe steps.ProbeOutput
-	if probeErr := workflow.ExecuteActivity(probeCtx, ProbeActivityName, input).Get(probeCtx, &probe); probeErr != nil {
-		failedStep = "probe"
-		return probeErr
-	}
-
-	if !probe.IsValidMedia {
-		invalidCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: defaultFinalizeTimeout,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-		})
-
-		if finErr := workflow.ExecuteActivity(invalidCtx, FinalizeActivityName, FinalizeInput{
-			Mode:  FinalizeInvalid,
-			Input: input,
-			Probe: probe,
-		}).Get(invalidCtx, nil); finErr != nil {
-			failedStep = "finalize"
-			return finErr
-		}
-
-		return nil
-	}
-
-	cropCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: a.cfg.DetectCropTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
-
-	var crop steps.DetectCropOutput
-	if cropErr := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); cropErr != nil {
-		failedStep = "detectcrop"
-		return cropErr
-	}
-
-	transcodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: a.cfg.TranscodeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
-
-	var transcode steps.TranscodeOutput
-	if tErr := workflow.ExecuteActivity(transcodeCtx, TranscodeActivityName, input, probe, crop).Get(transcodeCtx, &transcode); tErr != nil {
-		failedStep = "transcode"
-		return tErr
-	}
-
-	finalizeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: finalizeValidMaxAttempts},
-	})
-
-	if finErr := workflow.ExecuteActivity(finalizeCtx, FinalizeActivityName, FinalizeInput{
-		Mode:      FinalizeValid,
-		Input:     input,
-		Probe:     probe,
-		Transcode: transcode,
-	}).Get(finalizeCtx, nil); finErr != nil {
-		failedStep = "finalize"
-		return finErr
-	}
-
-	return nil
 }
 
 // Probe is the Temporal activity that wraps steps.RunProbe. It records the

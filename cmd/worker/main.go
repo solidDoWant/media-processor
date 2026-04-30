@@ -163,15 +163,24 @@ func run(ctx context.Context) error {
 
 	activities.Register(w)
 
-	if err := w.Start(); err != nil {
-		return fmt.Errorf("start Temporal worker: %w", err)
-	}
-	defer w.Stop()
+	// Forward context cancellation (SIGINT/SIGTERM via signal.NotifyContext)
+	// onto the worker's interrupt channel. worker.Run starts the worker, blocks
+	// until the channel receives, and then performs a graceful Stop that drains
+	// in-flight activities.
+	interrupt := make(chan interface{}, 1)
 
-	slog.InfoContext(ctx, "connected to Temporal, worker running", slog.String("task_queue", taskQueue))
+	go func() {
+		<-ctx.Done()
+
+		interrupt <- struct{}{}
+	}()
+
+	slog.InfoContext(ctx, "connected to Temporal, starting worker", slog.String("task_queue", taskQueue))
 	healthServer.SetReady()
 
-	<-ctx.Done()
+	if err := w.Run(interrupt); err != nil {
+		return fmt.Errorf("worker stopped: %w", err)
+	}
 
 	return nil
 }
