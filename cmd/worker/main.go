@@ -10,8 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/envconfig"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
@@ -19,6 +17,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
+	"github.com/solidDoWant/media-processor/pkg/temporalclient"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
@@ -138,29 +137,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init activities: %w", err)
 	}
 
-	clientOpts, err := envconfig.LoadDefaultClientOptions()
+	temporalClient, err := temporalclient.Dial(ctx)
 	if err != nil {
-		return fmt.Errorf("get client configuration: %w", err)
-	}
-
-	temporalClient, err := client.Dial(clientOpts)
-	if err != nil {
-		return fmt.Errorf("dial Temporal: %w", err)
+		return err
 	}
 	defer temporalClient.Close()
-
-	// CheckHealth verifies the gRPC connection to the frontend before the
-	// worker starts processing tasks; without it, Dial returns successfully
-	// even when the server is unreachable and the worker silently spins.
-	healthCheckCtx, healthCheckCancel := context.WithTimeout(ctx, 10*time.Second)
-
-	_, healthErr := temporalClient.CheckHealth(healthCheckCtx, &client.CheckHealthRequest{})
-
-	healthCheckCancel()
-
-	if healthErr != nil {
-		return fmt.Errorf("temporal health check failed: %w", healthErr)
-	}
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{})
 

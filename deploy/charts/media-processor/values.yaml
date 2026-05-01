@@ -21,6 +21,13 @@ config:
     # both watcher and worker. Use secretKeyRef in production; value is intended for dev only.
     # Setting both is rejected. When both name and key under secretKeyRef are empty, no API key
     # env var is set.
+    #
+    # File-mounted keys: a value of the form "file:///absolute/path" tells the binary to read
+    # the API key from disk on every Temporal RPC, picking up external rotators (Vault Agent,
+    # external-secrets refresh, etc.) without a process restart. To use this, mount the
+    # backing Secret yourself via the resources.controllers.{watcher,worker}.{persistence,…}
+    # passthrough and set apiKey.value to the resulting in-container path with the file://
+    # prefix. The path must be absolute.
     apiKey:
       value: ""
       secretKeyRef:

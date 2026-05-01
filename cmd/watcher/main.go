@@ -8,14 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-
-	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/envconfig"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
+	"github.com/solidDoWant/media-processor/pkg/temporalclient"
 )
 
 func main() {
@@ -74,29 +71,11 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}
 
-	clientOpts, err := envconfig.LoadDefaultClientOptions()
+	temporalClient, err := temporalclient.Dial(ctx)
 	if err != nil {
-		return fmt.Errorf("get client configuration: %w", err)
-	}
-
-	temporalClient, err := client.Dial(clientOpts)
-	if err != nil {
-		return fmt.Errorf("dial Temporal: %w", err)
+		return err
 	}
 	defer temporalClient.Close()
-
-	// CheckHealth verifies the gRPC connection to the frontend before the
-	// scan loop begins; without it, Dial returns successfully even when the
-	// server is unreachable and the watcher silently spins.
-	healthCheckCtx, healthCheckCancel := context.WithTimeout(ctx, 10*time.Second)
-
-	_, healthErr := temporalClient.CheckHealth(healthCheckCtx, &client.CheckHealthRequest{})
-
-	healthCheckCancel()
-
-	if healthErr != nil {
-		return fmt.Errorf("temporal health check failed: %w", healthErr)
-	}
 
 	slog.InfoContext(ctx, "connected to Temporal, starting scan loop",
 		slog.String("task_queue", taskQueue),
