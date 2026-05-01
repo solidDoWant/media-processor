@@ -137,7 +137,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init activities: %w", err)
 	}
 
-	temporalClient, err := temporalclient.Dial(ctx)
+	temporalClient, err := temporalclient.Dial(ctx, temporalclient.WithMeterProvider(metricsProvider.MeterProvider()))
 	if err != nil {
 		return err
 	}

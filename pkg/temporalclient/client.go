@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/envconfig"
 )
@@ -23,16 +24,37 @@ import (
 // healthCheckTimeout is how long Dial waits for the startup CheckHealth probe.
 const healthCheckTimeout = 10 * time.Second
 
+// Option configures a Dial call.
+type Option func(*config)
+
+type config struct {
+	meterProvider otelmetric.MeterProvider
+}
+
+// WithMeterProvider supplies the OTel MeterProvider that the Temporal SDK
+// will record its internal counters/gauges/timers into. Callers should pass
+// the provider returned by pkg/metrics so SDK metrics surface on the same
+// /metrics endpoint as application metrics. When omitted, SDK metrics are
+// discarded.
+func WithMeterProvider(mp otelmetric.MeterProvider) Option {
+	return func(c *config) { c.meterProvider = mp }
+}
+
 // Dial loads Temporal client options via envconfig, expands a file:// API key
 // into dynamic credentials when present, and verifies the gRPC connection via
 // CheckHealth before returning. Callers must close the returned client.
-func Dial(ctx context.Context) (client.Client, error) {
-	opts, err := buildOptions()
+func Dial(ctx context.Context, opts ...Option) (client.Client, error) {
+	cfg := &config{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	clientOpts, err := buildOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	c, err := client.Dial(opts)
+	c, err := client.Dial(clientOpts)
 	if err != nil {
 		return nil, fmt.Errorf("dial Temporal: %w", err)
 	}
@@ -49,8 +71,9 @@ func Dial(ctx context.Context) (client.Client, error) {
 }
 
 // buildOptions loads client.Options via envconfig, replacing a file:// API
-// key with dynamic credentials backed by os.ReadFile.
-func buildOptions() (client.Options, error) {
+// key with dynamic credentials backed by os.ReadFile, and wiring the SDK's
+// MetricsHandler/Logger to the host application's observability stack.
+func buildOptions(cfg *config) (client.Options, error) {
 	profile, err := envconfig.LoadClientConfigProfile(envconfig.LoadClientConfigProfileOptions{})
 	if err != nil {
 		return client.Options{}, fmt.Errorf("load temporal profile: %w", err)
@@ -69,6 +92,12 @@ func buildOptions() (client.Options, error) {
 	if apiKeyFile != "" {
 		opts.Credentials = client.NewAPIKeyDynamicCredentials(apiKeyFileCallback(apiKeyFile))
 	}
+
+	if cfg.meterProvider != nil {
+		opts.MetricsHandler = newMetricsHandler(cfg.meterProvider)
+	}
+
+	opts.Logger = newLogger()
 
 	return opts, nil
 }

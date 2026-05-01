@@ -65,6 +65,18 @@ Emitted by the worker during media workflow execution.
 | `media_workflow_artwork_fetch_skipped_total` | Transcode runs where artwork fetch was attempted but yielded no embeddable image       |
 | `media_workflow_metrics_errors_total`        | Errors encountered while collecting per-run metrics (e.g. Radarr/Sonarr API lookup failures) |
 
+### Temporal SDK metrics (worker and watcher)
+
+When `METRICS_ADDR` is set, the Temporal Go SDK's internal counters, gauges, and timers are recorded onto the same MeterProvider that backs the application metrics, so they surface on the same `/metrics` endpoint. Their names are emitted unchanged by the SDK and follow a `temporal_*` prefix; common examples include:
+
+| Metric                                            | Kind      | Description                                                                |
+| ------------------------------------------------- | --------- | -------------------------------------------------------------------------- |
+| `temporal_request`                                | counter   | gRPC requests issued by the SDK to the Temporal frontend.                 |
+| `temporal_long_request_latency_milliseconds`      | histogram | Latency of long-poll RPCs (e.g. workflow/activity task pollers).          |
+| `temporal_activity_schedule_to_start_latency_milliseconds` | histogram | Time between an activity being scheduled and a worker picking it up.    |
+
+Timers are recorded in milliseconds and exported with the `_milliseconds` Prometheus suffix (per OTel unit-naming conventions). Refer to the [Temporal Go SDK metrics reference](https://docs.temporal.io/references/sdk-metrics) for the full catalogue and descriptions, since the exact set of instruments depends on the SDK version in use.
+
 ### Watcher metrics
 
 Emitted by the watcher on every scheduled directory scan.
@@ -127,3 +139,5 @@ These labels significantly increase the cardinality of your metrics. Enable them
 ## Logging
 
 Both binaries write plain-text logs to stderr. Set `LOG_LEVEL` to one of `debug`, `info`, `warn`, or `error` (default: `info`).
+
+Temporal Go SDK internal log lines are forwarded through the same `slog` handler, so `LOG_LEVEL` controls SDK verbosity as well as application verbosity. At `info` and above the SDK is generally quiet; setting `LOG_LEVEL=debug` surfaces SDK debug messages alongside application debug output.

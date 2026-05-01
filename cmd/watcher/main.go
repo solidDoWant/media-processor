@@ -71,7 +71,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}
 
-	temporalClient, err := temporalclient.Dial(ctx)
+	temporalClient, err := temporalclient.Dial(ctx, temporalclient.WithMeterProvider(metricsProvider.MeterProvider()))
 	if err != nil {
 		return err
 	}
