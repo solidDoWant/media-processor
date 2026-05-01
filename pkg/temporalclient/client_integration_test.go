@@ -5,6 +5,7 @@ package temporalclient_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,7 +68,10 @@ func TestDialFailsWhenServerUnreachable(t *testing.T) {
 
 	_, err := temporalclient.Dial(t.Context())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "Temporal")
+	// Accept either error path: "dial Temporal:" wraps an immediate connection
+	// failure, "temporal health check failed:" wraps a CheckHealth timeout
+	// after a lazy gRPC dial. A case-insensitive substring matches both.
+	assert.Contains(t, strings.ToLower(err.Error()), "temporal")
 }
 
 func TestDialWithFileBackedAPIKey(t *testing.T) {

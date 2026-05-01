@@ -45,10 +45,14 @@ func TestExtractAPIKeyFile(t *testing.T) {
 			errFunc: require.Error,
 		},
 		{
-			name:        "single-slash file: form is treated as a literal value",
-			input:       "file:/etc/key",
-			expected:    "",
-			expectedKey: "file:/etc/key",
+			name:    "single-slash file: form is rejected",
+			input:   "file:/etc/key",
+			errFunc: require.Error,
+		},
+		{
+			name:    "bare file: scheme without slashes is rejected",
+			input:   "file:",
+			errFunc: require.Error,
 		},
 	}
 
