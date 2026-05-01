@@ -177,12 +177,14 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 	if vss.decoder.hwDevCtx != nil && vss.cropParams != nil {
 		profile := hwProfiles[hwAccel]
 		framesCtx := astiav.AllocHardwareFramesContext(vss.decoder.hwDevCtx)
+
 		if framesCtx != nil {
 			framesCtx.SetHardwarePixelFormat(profile.hwPixFmt)
 			framesCtx.SetSoftwarePixelFormat(profile.swPixFmt)
 			framesCtx.SetWidth(inStream.CodecParameters().Width())
 			framesCtx.SetHeight(inStream.CodecParameters().Height())
 			framesCtx.SetInitialPoolSize(20)
+
 			if err := framesCtx.Initialize(); err != nil {
 				framesCtx.Free()
 				slog.Debug("ffmpeg: pre-allocating hw_frames_ctx for crop filter failed, lazy init will be used",
