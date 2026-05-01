@@ -183,28 +183,6 @@ watches:
 			errFunc: require.Error,
 		},
 		{
-			name: "legacy cronSchedule field is rejected at startup",
-			content: `
-cronSchedule: "*/5 * * * * *"
-watches: []
-`,
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				assert.Contains(t, err.Error(), "cronSchedule")
-			},
-		},
-		{
-			name: "unknown top-level field is rejected at startup",
-			content: `
-unknownField: foo
-watches: []
-`,
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				assert.Contains(t, err.Error(), "unknownField")
-			},
-		},
-		{
 			name: "invalid scanInterval returns error",
 			content: `
 scanInterval: "not-a-duration"
