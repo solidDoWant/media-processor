@@ -84,7 +84,7 @@ The worker is configured entirely via environment variables. Required variables:
 | `SONARR_URL`          | Sonarr base URL (e.g. `http://sonarr:8989`)                                              |
 | `SONARR_API_KEY`      | Sonarr API key                                                                           |
 
-See [docs/configuration.md](docs/configuration.md) for all variables including optional ones.
+`TEMPORAL_TASK_QUEUE`, `RADARR_*`, and `SONARR_*` are explicitly checked as non-empty at startup; `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` silently fall back to the Temporal Go SDK defaults (`localhost:7233` and `default`) when empty, so production deployments must set them explicitly. See [docs/configuration.md](docs/configuration.md) for the full reference including optional variables.
 
 ## Metrics and observability
 
