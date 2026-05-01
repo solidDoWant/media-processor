@@ -49,9 +49,13 @@ func readAPIKeyFile(path string) (string, error) {
 
 // logAPIKeyClaims emits the decoded JWT claims at debug level so an operator
 // can confirm which credential is in use after a rotation. Decode failures
-// log at error level; the token still flows to the server. Only the claims
+// log at debug level; the token still flows to the server. Only the claims
 // payload is logged — never the signature — so logs can't be replayed.
 func logAPIKeyClaims(ctx context.Context, path, apiKey string) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+
 	claims, err := decodeJWTClaims(apiKey)
 	if err != nil {
 		slog.DebugContext(ctx, "temporal api key is not a decodable JWT",
