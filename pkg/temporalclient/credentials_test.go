@@ -107,27 +107,29 @@ func TestDecodeJWTClaims(t *testing.T) {
 			"scope": "workflow:write",
 		}
 
-		got, ok := decodeJWTClaims(validJWT(t, claims))
-		require.True(t, ok)
+		got, err := decodeJWTClaims(validJWT(t, claims))
+		require.NoError(t, err)
 		assert.Equal(t, claims, got)
 	})
 
 	tests := []struct {
-		name  string
-		input string
+		name        string
+		input       string
+		errContains string
 	}{
-		{name: "empty string", input: ""},
-		{name: "no dots (opaque key)", input: "tmprl_abcdef"},
-		{name: "two segments", input: "header.payload"},
-		{name: "four segments", input: "a.b.c.d"},
-		{name: "middle segment is not base64url", input: "header.!!!.signature"},
-		{name: "middle segment is base64 of non-JSON", input: "header." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".sig"},
+		{name: "empty string", input: "", errContains: "expected 3"},
+		{name: "no dots (opaque key)", input: "tmprl_abcdef", errContains: "expected 3"},
+		{name: "two segments", input: "header.payload", errContains: "expected 3"},
+		{name: "four segments", input: "a.b.c.d", errContains: "expected 3"},
+		{name: "middle segment is not base64url", input: "header.!!!.signature", errContains: "base64-decode"},
+		{name: "middle segment is base64 of non-JSON", input: "header." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".sig", errContains: "unmarshal"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, ok := decodeJWTClaims(test.input)
-			assert.False(t, ok)
+			got, err := decodeJWTClaims(test.input)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, test.errContains)
 			assert.Nil(t, got)
 		})
 	}

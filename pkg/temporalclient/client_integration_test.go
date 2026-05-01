@@ -105,9 +105,12 @@ func TestDialFailsWhenAPIKeyFileMissing(t *testing.T) {
 	t.Setenv("TEMPORAL_API_KEY", "file://"+missing)
 	t.Setenv("TEMPORAL_TLS", "false")
 
+	// The misconfiguration surfaces during Dial's CheckHealth: the dynamic-
+	// credentials callback is invoked by the gRPC interceptor, fails its
+	// os.ReadFile, and that error propagates back through CheckHealth.
 	_, err := temporalclient.Dial(t.Context())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "validate api key file")
+	assert.ErrorContains(t, err, "read api key file")
 }
 
 func TestDialFailsWhenAPIKeyFilePathRelative(t *testing.T) {
