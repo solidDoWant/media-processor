@@ -27,11 +27,50 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 Temporal frontend connection settings. `address` is required; `namespace` and `taskQueue` have defaults but `helm template` still fails if they are explicitly set to an empty string.
 
+Non-secret fields (`address`, `namespace`, `tls.*`, `grpcMeta`) are rendered into a `temporal.toml` ConfigMap consumed by the [Temporal Go SDK envconfig package](https://pkg.go.dev/go.temporal.io/sdk/contrib/envconfig). The file is mounted on both controllers at `/etc/temporal/temporal.toml` and pointed at via the `TEMPORAL_CONFIG_FILE` env var. Secret material — the API key and TLS cert/key/CA bytes — is delivered separately: the API key as a `valueFrom.secretKeyRef` env var, cert material as Secret-volume mounts. See [`docs/configuration.md`](configuration.md#temporal-client-configuration-file) for the file schema and per-field semantics.
+
 | Field                       | Type   | Default             | Description                                                                                                      |
 | --------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `config.temporal.address`   | string | `""`                | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker                      |
-| `config.temporal.namespace` | string | `"default"`         | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker                |
+| `config.temporal.address`   | string | `""`                | Temporal frontend host:port (no scheme). Written to `address` in the rendered `temporal.toml`                    |
+| `config.temporal.namespace` | string | `"default"`         | Temporal namespace the workflows execute in. Written to `namespace` in the rendered `temporal.toml`              |
 | `config.temporal.taskQueue` | string | `"media-processor"` | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both watcher and worker |
+
+#### `config.temporal.apiKey`
+
+API key for authenticated Temporal frontends (e.g. Temporal Cloud). Sets `TEMPORAL_API_KEY` on both watcher and worker. Setting both `value` and `secretKeyRef` is rejected; setting neither leaves the env var unset.
+
+| Field                                      | Type   | Default | Description                            |
+| ------------------------------------------ | ------ | ------- | -------------------------------------- |
+| `config.temporal.apiKey.value`             | string | `""`    | Literal API key. Intended for dev only |
+| `config.temporal.apiKey.secretKeyRef.name` | string | `""`    | Secret name holding the API key        |
+| `config.temporal.apiKey.secretKeyRef.key`  | string | `""`    | Key within the Secret                  |
+
+#### `config.temporal.tls`
+
+Transport security to the Temporal frontend. The entire `[tls]` table is omitted from `temporal.toml` when `enabled: false` — the SDK falls back to plaintext gRPC. When `enabled: true`, the chart writes the resolved cert file paths into the TOML and mounts each referenced Secret read-only on both controllers under `/etc/temporal-tls/<secret-name>/`. Multiple references that share a Secret name share a single volume mount.
+
+`clientCertificate` enables mTLS by pointing at a `kubernetes.io/tls` Secret — the standard k8s tls Secret format with `tls.crt` and `tls.key` keys, produced by `kubectl create secret tls` and cert-manager `Certificate` resources. `caCert` is a free-form `secretKeyRef` because CA bundles aren't standardised on a single layout; leave it empty to use the system trust roots. Any cert reference set while `enabled: false` causes `helm template` to fail, so a forgotten flag does not silently disable mTLS or CA verification.
+
+| Field                                              | Type   | Default  | Description                                                                                                                      |
+| -------------------------------------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `config.temporal.tls.enabled`                      | bool   | `false`  | When true, render the `[tls]` table in `temporal.toml`                                                                           |
+| `config.temporal.tls.serverName`                   | string | `""`     | Override SNI / cert-verification hostname. Useful when `address` is an IP or service DNS name that does not match the cert's SAN |
+| `config.temporal.tls.disableHostVerification`      | bool   | `false`  | Skip server certificate hostname verification. Development-only; do not use against production frontends                         |
+| `config.temporal.tls.clientCertificate.secretName` | string | `""`     | Name of a `kubernetes.io/tls` Secret containing the client cert and key for mTLS. Leave empty to skip mTLS                       |
+| `config.temporal.tls.caCert.secretKeyRef.name`     | string | `""`     | Secret name holding a custom CA certificate. Leave empty to use the system trust roots                                           |
+| `config.temporal.tls.caCert.secretKeyRef.key`      | string | `ca.crt` | Key inside the Secret. Defaults to the cert-manager / k8s convention; override only if the Secret uses a different key name      |
+
+#### `config.temporal.grpcMeta`
+
+Map of gRPC metadata headers added to every Temporal RPC. Keys are passed through verbatim — the Temporal SDK lowercases and hyphenates them on load (so e.g. `X-Tenant-ID` and `x-tenant-id` are equivalent). Rendered under `[profile.default.grpc_meta]` in `temporal.toml`.
+
+```yaml
+config:
+  temporal:
+    grpcMeta:
+      X-Tenant-ID: media-processor
+      X-Trace-Origin: helm
+```
 
 ### `config.inputVolume`
 
@@ -195,15 +234,17 @@ Default image repositories are set here:
 
 These values are intentionally not configurable in `values.yaml`:
 
-| Setting              | Value                   |
-| -------------------- | ----------------------- |
-| Input mount path     | `/media/input`          |
-| Watcher config mount | `/etc/media-processor/` |
-| Watcher health port  | `8081`                  |
-| Worker health port   | `8080`                  |
-| Metrics port         | `9090`                  |
-| Liveness probe path  | `/healthz`              |
-| Readiness probe path | `/readyz`               |
+| Setting               | Value                       |
+| --------------------- | --------------------------- |
+| Input mount path      | `/media/input`              |
+| Watcher config mount  | `/etc/media-processor/`     |
+| Temporal config mount | `/etc/temporal/`            |
+| Temporal TLS root     | `/etc/temporal-tls/<name>/` |
+| Watcher health port   | `8081`                      |
+| Worker health port    | `8080`                      |
+| Metrics port          | `9090`                      |
+| Liveness probe path   | `/healthz`                  |
+| Readiness probe path  | `/readyz`                   |
 
 ## Using Secrets for credentials
 

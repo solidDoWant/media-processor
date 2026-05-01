@@ -21,11 +21,13 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.43.0
 	go.temporal.io/api v1.62.11
 	go.temporal.io/sdk v1.43.0
+	go.temporal.io/sdk/contrib/envconfig v1.0.1
 	golift.io/starr v1.3.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/asticode/go-astikit v0.59.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

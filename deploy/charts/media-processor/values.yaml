@@ -2,16 +2,70 @@
 config:
   # temporal selects the Temporal frontend the watcher and worker connect to. address is required
   # and helm template fails when empty; namespace and taskQueue have sensible defaults.
+  #
+  # Non-secret fields (address, namespace, tls.*, grpcMeta) are rendered into a temporal.toml
+  # ConfigMap consumed by the Temporal Go SDK envconfig package. Secret material (apiKey, TLS
+  # cert/key/CA bytes) comes from k8s Secrets, surfaced as either env vars or mounted files.
   temporal:
-    # address is the Temporal frontend host:port (no scheme). Sets TEMPORAL_ADDRESS on both
-    # watcher and worker. Example: "temporal-frontend.temporal.svc.cluster.local:7233".
+    # address is the Temporal frontend host:port (no scheme). Written to address in the rendered
+    # temporal.toml. Example: "temporal-frontend.temporal.svc.cluster.local:7233".
     address: ""
-    # namespace is the Temporal namespace the workflows execute in. Sets TEMPORAL_NAMESPACE on
-    # both watcher and worker. Defaults to Temporal's built-in "default" namespace.
+    # namespace is the Temporal namespace the workflows execute in. Written to namespace in the
+    # rendered temporal.toml. Defaults to Temporal's built-in "default" namespace.
     namespace: "default"
     # taskQueue is the Temporal task queue the worker polls and the watcher dispatches to. Sets
-    # TEMPORAL_TASK_QUEUE on both watcher and worker.
+    # TEMPORAL_TASK_QUEUE on both watcher and worker. Not a Temporal client option, so it stays
+    # an env var rather than going into temporal.toml.
     taskQueue: "media-processor"
+    # apiKey is the Temporal Cloud / authenticated frontend API key. Sets TEMPORAL_API_KEY on
+    # both watcher and worker. Use secretKeyRef in production; value is intended for dev only.
+    # Setting both is rejected. When both name and key under secretKeyRef are empty, no API key
+    # env var is set.
+    #
+    # File-mounted keys: a value of the form "file:///absolute/path" tells the binary to read
+    # the API key from disk on every Temporal RPC, picking up external rotators (Vault Agent,
+    # external-secrets refresh, etc.) without a process restart. To use this, mount the
+    # backing Secret yourself via the resources.controllers.{watcher,worker}.{persistence,…}
+    # passthrough and set apiKey.value to the resulting in-container path with the file://
+    # prefix. The path must be absolute.
+    apiKey:
+      value: ""
+      secretKeyRef:
+        name: ""
+        key: ""
+    # tls configures transport security to the Temporal frontend. When enabled is false, the
+    # entire [tls] table is omitted from temporal.toml — the SDK falls back to plaintext gRPC.
+    # When enabled is true, server-side TLS is on; mTLS and a custom CA are optional. Cert
+    # references point at existing k8s Secrets (e.g. produced by cert-manager); the chart mounts
+    # them read-only and writes the resolved file paths into temporal.toml. References that
+    # share a Secret name share one volume mount.
+    tls:
+      enabled: false
+      # serverName overrides the SNI / cert-verification hostname (TEMPORAL_TLS_SERVER_NAME).
+      # Useful when address is an IP or a service name that doesn't match the cert's SAN.
+      serverName: ""
+      # disableHostVerification skips server certificate hostname verification. Should only be
+      # used in development against self-signed certs. Maps to TEMPORAL_TLS_DISABLE_HOST_VERIFICATION.
+      disableHostVerification: false
+      # clientCertificate enables mTLS by pointing at a kubernetes.io/tls Secret containing the
+      # client cert and private key. The Secret must have the standard "tls.crt" and "tls.key"
+      # keys (cert-manager and `kubectl create secret tls` produce these by default). Leave
+      # secretName empty to skip mTLS.
+      clientCertificate:
+        secretName: ""
+      # caCert overrides the trusted CA pool. Unlike clientCertificate this is a free-form
+      # secretKeyRef because CA bundles aren't standardised on a single Secret layout, but
+      # key defaults to "ca.crt" (the convention used by cert-manager and most k8s tooling)
+      # so usually only secretKeyRef.name needs to be set. Leave name empty to use the
+      # system roots.
+      caCert:
+        secretKeyRef:
+          name: ""
+          key: "ca.crt"
+    # grpcMeta is a map of gRPC metadata headers added to every Temporal RPC. Keys are passed
+    # through verbatim (the Temporal SDK lowercases and hyphenates them at load time). Rendered
+    # under [profile.default.grpc_meta] in temporal.toml.
+    grpcMeta: {}
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
