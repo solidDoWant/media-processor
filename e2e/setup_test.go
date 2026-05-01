@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/client"
 )
 
 // ---- directory management -----------------------------------------------
@@ -95,15 +97,15 @@ func composeUp() error {
 }
 
 // composeUpWatcherWorker starts the watcher and worker containers (profile
-// "app"), injecting the Hatchet client token into the environment so the
-// compose interpolation of ${HATCHET_CLIENT_TOKEN} resolves correctly.
-func composeUpWatcherWorker(ctx context.Context, token string) error {
+// "app"). Compose blocks until temporal-create-namespace exits successfully
+// (their depends_on condition), so the Temporal namespace is guaranteed to be
+// registered before either app container starts.
+func composeUpWatcherWorker(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "docker", composeArgs("--profile", "app", "up", "-d", "watcher", "worker")...)
-
-	cmd.Env = append(composeEnv(), "HATCHET_CLIENT_TOKEN="+token)
+	cmd.Env = composeEnv()
 	stdout := newSlogWriter(slog.LevelInfo, "docker")
 	stderr := newSlogWriter(slog.LevelWarn, "docker")
 	cmd.Stdout = stdout
@@ -212,7 +214,10 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 	return ready, fail
 }
 
-// waitForServices polls until Radarr, Sonarr, and the Hatchet gRPC port are up.
+// waitForServices polls until Radarr, Sonarr, and Temporal are reachable.
+// The Temporal check both dials the frontend and confirms that the configured
+// namespace has been registered, which proves the temporal-create-namespace
+// bootstrap container has completed successfully.
 func waitForServices(ctx context.Context) error {
 	type svc struct {
 		name string
@@ -222,7 +227,7 @@ func waitForServices(ctx context.Context) error {
 	services := []svc{
 		{"radarr", func() error { return checkHTTP(radarrBase + "/ping") }},
 		{"sonarr", func() error { return checkHTTP(sonarrBase + "/ping") }},
-		{"hatchet-grpc", func() error { return checkTCP("localhost:7079") }},
+		{"temporal", func() error { return checkTemporal(ctx) }},
 	}
 
 	for _, service := range services {
@@ -255,47 +260,32 @@ func checkHTTP(url string) error {
 	return nil
 }
 
-func checkTCP(addr string) error {
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+// ---- Temporal readiness -------------------------------------------------
+
+// checkTemporal dials the Temporal frontend on the host-mapped port and
+// confirms the default namespace is registered. A successful DescribeNamespace
+// proves both that the gRPC service is reachable AND that the bootstrap
+// container has registered the namespace.
+func checkTemporal(ctx context.Context) error {
+	c, err := client.Dial(client.Options{
+		HostPort:  temporalHostPort,
+		Namespace: temporalNamespace,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("dial temporal: %w", err)
 	}
+	defer c.Close()
 
-	return conn.Close()
-}
-
-// ---- Hatchet token ------------------------------------------------------
-
-// generateHatchetToken generates a long-lived Hatchet API token by running
-// hatchet-admin inside the setup-config container. The default tenant ID
-// (707d0855-80ab-4e1f-a156-f1c4546cbf52) seeded by the migration is used.
-func generateHatchetToken() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	describeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	tokenCmd := exec.CommandContext(ctx, "docker", composeArgs(
-		"run", "--no-deps", "--rm", "-T", "setup-config",
-		"/hatchet/hatchet-admin", "token", "create",
-		"--config", "/hatchet/config",
-		"-e", "87600h",
-	)...)
-	tokenCmd.Env = composeEnv()
-
-	tokenOut, err := tokenCmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("generate token: %w\noutput: %s", err, tokenOut)
+	if _, err := c.WorkflowService().DescribeNamespace(describeCtx, &workflowservice.DescribeNamespaceRequest{
+		Namespace: temporalNamespace,
+	}); err != nil {
+		return fmt.Errorf("describe namespace %q: %w", temporalNamespace, err)
 	}
 
-	// Extract the JWT token line (starts with "eyJ") in case log lines are
-	// interleaved on stdout.
-	for _, line := range strings.Split(string(tokenOut), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "eyJ") {
-			return line, nil
-		}
-	}
-
-	return "", fmt.Errorf("no JWT token found in hatchet-admin output")
+	return nil
 }
 
 // ---- polling helpers ----------------------------------------------------

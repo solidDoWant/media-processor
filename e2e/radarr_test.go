@@ -116,7 +116,7 @@ func assertRadarrPipelineMetrics(t *testing.T) {
 	assert.Greater(t, watcherSeries.sum("watcher_files_discovered_total", filter), 0.0,
 		"watcher should have discovered the radarr source file")
 	assert.Greater(t, watcherSeries.sum("watcher_dispatches_total", filter), 0.0,
-		"watcher should have dispatched the radarr workflow to Hatchet")
+		"watcher should have dispatched the radarr workflow to Temporal")
 
 	assert.GreaterOrEqual(t, workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter), 1.0,
 		"worker should have recorded the radarr transcode duration")

@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e_test contains end-to-end tests for the media-processor pipeline.
-// It spins up Radarr, Sonarr, Hatchet, the watcher, and the worker via Docker
+// It spins up Radarr, Sonarr, Temporal, the watcher, and the worker via Docker
 // Compose, and verifies the full happy-path flow.
 //
 // Run with: make test-e2e
@@ -47,6 +47,12 @@ const (
 	// bound by the compose services (127.0.0.1:19092 and 127.0.0.1:19093).
 	watcherHealthBase = "http://127.0.0.1:19092"
 	workerHealthBase  = "http://127.0.0.1:19093"
+
+	// Host-mapped Temporal frontend port (compose binds 127.0.0.1:17233:7233).
+	// A non-default host port avoids colliding with a developer's local
+	// `make temporal-up` dev stack which binds host port 7233.
+	temporalHostPort  = "127.0.0.1:17233"
+	temporalNamespace = "default"
 )
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
@@ -120,7 +126,7 @@ func run(m *testing.M) error {
 		return fmt.Errorf("compose pull: %w", err)
 	}
 
-	// 5. Docker Compose up (infrastructure: postgres, hatchet, radarr, sonarr).
+	// 5. Docker Compose up (infrastructure: postgres, temporal, radarr, sonarr).
 	if err = composeUp(); err != nil {
 		composeDown()
 
@@ -129,7 +135,7 @@ func run(m *testing.M) error {
 
 	defer composeDown()
 
-	// 6. Wait for Radarr, Sonarr, and Hatchet to be healthy.
+	// 6. Wait for Radarr, Sonarr, and Temporal to be healthy.
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 
 	if err = waitForServices(healthCtx); err != nil {
@@ -140,13 +146,7 @@ func run(m *testing.M) error {
 
 	healthCancel()
 
-	// 7. Generate Hatchet client token.
-	hatchetToken, err := generateHatchetToken()
-	if err != nil {
-		return fmt.Errorf("generateHatchetToken: %w", err)
-	}
-
-	// 8. Configure Radarr (root folder, quality profile, download client, movie).
+	// 7. Configure Radarr (root folder, quality profile, download client, movie).
 	radarrMovieID, err = configureRadarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureRadarr: %w", err)
@@ -154,7 +154,7 @@ func run(m *testing.M) error {
 
 	log.Info("Radarr configured", "movieID", radarrMovieID)
 
-	// 9. Configure Sonarr (root folder, quality profile, download client, series).
+	// 8. Configure Sonarr (root folder, quality profile, download client, series).
 	sonarrSeriesID, err = configureSonarr(context.Background(), qbtStub.Port())
 	if err != nil {
 		return fmt.Errorf("configureSonarr: %w", err)
@@ -170,12 +170,13 @@ func run(m *testing.M) error {
 
 	log.Info("Sonarr S01E01 fetched", "episodeID", sonarrEpisodeID)
 
-	// 10. Start watcher and worker containers with the generated Hatchet token.
-	if err = composeUpWatcherWorker(context.Background(), hatchetToken); err != nil {
+	// 9. Start watcher and worker containers. Compose blocks until the
+	// temporal-create-namespace bootstrap container has exited successfully.
+	if err = composeUpWatcherWorker(context.Background()); err != nil {
 		return fmt.Errorf("composeUpWatcherWorker: %w", err)
 	}
 
-	// 11. Stream watcher/worker logs to stdout and monitor health until both
+	// 10. Stream watcher/worker logs to stdout and monitor health until both
 	// services report /readyz before running any tests.
 	monCtx, monCancel := context.WithCancel(context.Background())
 	streamAppLogs(monCtx)
