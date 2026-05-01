@@ -29,11 +29,11 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 Temporal frontend connection settings. All three fields are required; `helm template` fails when any are empty.
 
-| Field                       | Type   | Default | Description                                                                                                |
-| --------------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `config.temporal.address`   | string | `""`    | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker                |
-| `config.temporal.namespace` | string | `""`    | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker          |
-| `config.temporal.taskQueue` | string | `""`    | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both              |
+| Field                       | Type   | Default | Description                                                                                       |
+| --------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------- |
+| `config.temporal.address`   | string | `""`    | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker       |
+| `config.temporal.namespace` | string | `""`    | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker |
+| `config.temporal.taskQueue` | string | `""`    | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both     |
 
 ### `config.inputVolume`
 
@@ -66,14 +66,14 @@ Shared observability settings applied to both watcher and worker.
 
 ### `config.watcher`
 
-| Field                            | Type   | Default     | Description                                                                                                                                                                                                       |
-| -------------------------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                            |
-| `config.watcher.scanInterval`    | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config        |
-| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                             |
-| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                        |
-| `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                         |
-| `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                                                                                                                     |
+| Field                            | Type   | Default     | Description                                                                                                                                                                                              |
+| -------------------------------- | ------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                   |
+| `config.watcher.scanInterval`    | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config |
+| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                    |
+| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                               |
+| `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                |
+| `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                                                                                                            |
 
 The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `configType: Secret`) and mounted read-only at `/etc/media-processor/`. The watcher container receives `--config /etc/media-processor/watcher.yaml`.
 
