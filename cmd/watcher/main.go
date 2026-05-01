@@ -71,11 +71,11 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}
 
-	temporalClient, err := temporalclient.Dial(ctx)
+	temporalClient, shutdownTemporal, err := temporalclient.Dial(ctx, metricsProvider.PrometheusRegisterer())
 	if err != nil {
 		return err
 	}
-	defer temporalClient.Close()
+	defer shutdownTemporal()
 
 	slog.InfoContext(ctx, "connected to Temporal, starting scan loop",
 		slog.String("task_queue", taskQueue),

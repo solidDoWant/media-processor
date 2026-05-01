@@ -3,15 +3,21 @@
 package temporalclient_test
 
 import (
+	"context"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/client"
 
+	"github.com/solidDoWant/media-processor/pkg/metrics"
 	"github.com/solidDoWant/media-processor/pkg/temporalclient"
 )
 
@@ -43,10 +49,10 @@ func TestDialHappyPath(t *testing.T) {
 	requireTemporalAddress(t)
 	isolateTemporalConfig(t)
 
-	c, err := temporalclient.Dial(t.Context())
+	c, shutdown, err := temporalclient.Dial(t.Context(), nil)
 	require.NoError(t, err)
 
-	defer c.Close()
+	defer shutdown()
 
 	// Sanity-check the client beyond Dial's internal CheckHealth: a fresh
 	// CheckHealth round-trip from the test confirms the returned client is
@@ -67,7 +73,8 @@ func TestDialFailsWhenServerUnreachable(t *testing.T) {
 	// the frontend is unreachable, so we assert on neither prefix specifically.
 	t.Setenv("TEMPORAL_ADDRESS", "127.0.0.1:1")
 
-	_, err := temporalclient.Dial(t.Context())
+	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
+	defer shutdown()
 	require.Error(t, err)
 	// Accept either error path: "dial Temporal:" wraps an immediate connection
 	// failure, "temporal health check failed:" wraps a CheckHealth timeout
@@ -88,10 +95,10 @@ func TestDialWithFileBackedAPIKey(t *testing.T) {
 	// call — the dev server just doesn't enforce it.
 	t.Setenv("TEMPORAL_TLS", "false")
 
-	c, err := temporalclient.Dial(t.Context())
+	c, shutdown, err := temporalclient.Dial(t.Context(), nil)
 	require.NoError(t, err)
 
-	defer c.Close()
+	defer shutdown()
 
 	_, err = c.CheckHealth(t.Context(), &client.CheckHealthRequest{})
 	assert.NoError(t, err)
@@ -109,7 +116,8 @@ func TestDialFailsWhenAPIKeyFileMissing(t *testing.T) {
 	// The misconfiguration surfaces during Dial's CheckHealth: the dynamic-
 	// credentials callback is invoked by the gRPC interceptor, fails its
 	// os.ReadFile, and that error propagates back through CheckHealth.
-	_, err := temporalclient.Dial(t.Context())
+	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
+	defer shutdown()
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "read api key file")
 }
@@ -121,7 +129,86 @@ func TestDialFailsWhenAPIKeyFilePathRelative(t *testing.T) {
 	t.Setenv("TEMPORAL_API_KEY", "file://relative/path")
 	t.Setenv("TEMPORAL_TLS", "false")
 
-	_, err := temporalclient.Dial(t.Context())
+	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
+	defer shutdown()
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "must be absolute")
+}
+
+// TestDialEmitsTemporalSDKMetrics verifies the end-to-end path described by
+// AC1: when Dial is wired with a Prometheus registerer that backs the
+// /metrics endpoint, SDK-internal instruments (e.g. temporal_request_total,
+// temporal_long_request_latency_seconds) appear on that endpoint after
+// exercising the client.
+func TestDialEmitsTemporalSDKMetrics(t *testing.T) {
+	requireTemporalAddress(t)
+	isolateTemporalConfig(t)
+
+	addr := freeAddr(t)
+
+	provider, err := metrics.New(t.Context(), metrics.WithMetricsAddr(addr))
+	require.NoError(t, err)
+
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(shutdownCtx)
+	}()
+
+	c, shutdown, err := temporalclient.Dial(t.Context(), provider.PrometheusRegisterer())
+	require.NoError(t, err)
+	defer shutdown()
+
+	// Issue an extra RPC beyond Dial's startup CheckHealth so the SDK has
+	// definitely populated its long-request-latency timer at least once.
+	_, err = c.CheckHealth(t.Context(), &client.CheckHealthRequest{})
+	require.NoError(t, err)
+
+	// Force a synchronous flush of the tally scope so the SDK metrics are
+	// guaranteed to be on the registry before we scrape (instead of waiting
+	// up to one report interval). The deferred shutdown is idempotent.
+	shutdown()
+
+	body := scrapeMetrics(t, addr)
+
+	// The SDK emits `temporal_request_*` on every outbound gRPC call. Match
+	// on this prefix specifically (rather than the broader `temporal_`) so
+	// the assertion can't be satisfied by a stray HELP/TYPE comment line.
+	assert.Contains(t, body, "temporal_request", "Temporal SDK metrics should be present on /metrics; got:\n"+body)
+}
+
+// freeAddr returns a local TCP address with an available port.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+
+	return addr
+}
+
+// scrapeMetrics fetches the /metrics endpoint and returns the raw body. Any
+// non-200 response or read error fails the test.
+func scrapeMetrics(t *testing.T, addr string) string {
+	t.Helper()
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/metrics", nil)
+	require.NoError(t, err)
+
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	return string(body)
 }

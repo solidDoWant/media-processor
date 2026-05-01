@@ -137,11 +137,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init activities: %w", err)
 	}
 
-	temporalClient, err := temporalclient.Dial(ctx)
+	temporalClient, shutdownTemporal, err := temporalclient.Dial(ctx, metricsProvider.PrometheusRegisterer())
 	if err != nil {
 		return err
 	}
-	defer temporalClient.Close()
+	defer shutdownTemporal()
 
 	w := worker.New(temporalClient, taskQueue, worker.Options{})
 
