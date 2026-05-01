@@ -122,7 +122,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	workerStopTimeout, err := parseTimeout("WORKER_STOP_TIMEOUT", media.DefaultTranscodeTimeout)
+	// Default to the effective transcodeTimeout (not media.DefaultTranscodeTimeout)
+	// so an operator who raises MEDIA_TRANSCODE_TIMEOUT does not also have to set
+	// WORKER_STOP_TIMEOUT to keep the drain ceiling above the longest activity.
+	workerStopTimeout, err := parseTimeout("WORKER_STOP_TIMEOUT", transcodeTimeout)
 	if err != nil {
 		return err
 	}
