@@ -1,9 +1,9 @@
 ---
 apiVersion: v2
 name: media-processor
-description: Helm chart for the media-processor watcher and worker (Temporal-based)
+description: Helm chart for the media-processor watcher and worker
 type: application
-version: 0.1.0-dev
+version: 0.0.1-dev
 appVersion: 0.0.1-dev
 dependencies:
   - name: common
