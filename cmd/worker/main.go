@@ -122,6 +122,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Default to the effective transcodeTimeout (not media.DefaultTranscodeTimeout)
+	// so an operator who raises MEDIA_TRANSCODE_TIMEOUT does not also have to set
+	// WORKER_STOP_TIMEOUT to keep the drain ceiling above the longest activity.
+	workerStopTimeout, err := parseTimeout("WORKER_STOP_TIMEOUT", transcodeTimeout)
+	if err != nil {
+		return err
+	}
+
 	activities, err := media.NewActivities(media.MediaWorkflowConfig{
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
@@ -143,7 +151,9 @@ func run(ctx context.Context) error {
 	}
 	defer shutdownTemporal()
 
-	w := worker.New(temporalClient, taskQueue, worker.Options{})
+	w := worker.New(temporalClient, taskQueue, worker.Options{
+		WorkerStopTimeout: workerStopTimeout,
+	})
 
 	activities.Register(w)
 

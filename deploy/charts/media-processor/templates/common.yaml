@@ -188,6 +188,11 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $workerEnv "MEDIA_TRANSCODE_TIMEOUT" .Values.config.worker.media.transcode.timeout -}}
 {{- end -}}
 
+{{/* WORKER_STOP_TIMEOUT */}}
+{{- if .Values.config.worker.stopTimeout -}}
+  {{- $_ := set $workerEnv "WORKER_STOP_TIMEOUT" .Values.config.worker.stopTimeout -}}
+{{- end -}}
+
 {{/* MEDIA_H265_CRF */}}
 {{- if .Values.config.worker.media.transcode.videoQuality -}}
   {{- $_ := set $workerEnv "MEDIA_H265_CRF" (.Values.config.worker.media.transcode.videoQuality | toString) -}}

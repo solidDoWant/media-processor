@@ -103,6 +103,11 @@ config:
 
   worker:
     logLevel: info
+    # stopTimeout bounds the SIGTERM-triggered drain of in-flight Temporal activities, as a
+    # Go duration string (e.g. "30m", "2h"). Sets WORKER_STOP_TIMEOUT on the worker. When
+    # empty, the worker binary defaults to its own ceiling (the MEDIA_TRANSCODE_TIMEOUT
+    # default), so the longest expected activity has a chance to complete before exit.
+    stopTimeout: ""
     metrics:
       enabled: false
       otel:
