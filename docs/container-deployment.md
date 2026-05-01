@@ -25,7 +25,7 @@ Both images run as UID/GID `1000:1000` by default. If the host directories you b
 
 ## Running the watcher
 
-The watcher scans one or more download directories at a configurable interval and starts a Temporal workflow execution for each file it finds. It reads its YAML config from the path supplied via `--config` (the image has no baked-in default).
+The watcher scans one or more download directories at a configurable interval and starts a Temporal workflow execution for each file it finds. It reads its YAML config from the path supplied via `--config`; the binary defaults `--config` to `config.yaml`, but the container image does not ship a config file at that path, so you typically mount one and/or pass `--config` explicitly.
 
 ### Required volume mounts
 
@@ -42,7 +42,7 @@ The watcher scans one or more download directories at a configurable interval an
 | `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (for example `default`).                     |
 | `TEMPORAL_TASK_QUEUE` | Task queue the watcher dispatches to. Must match the worker's `TEMPORAL_TASK_QUEUE`.     |
 
-The watcher dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE`, runs a health check against the frontend at startup, and exits immediately if any of the three variables are empty.
+The watcher dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before the scan loop starts. Of the three variables, only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`), which production deployments will need to override so the dial and health check succeed.
 
 For the watcher, the health server (`/healthz` liveness, `/readyz` readiness) always runs on `:8081` by default; set `HEALTH_ADDR` to override the listen address. `METRICS_ADDR` (for example `:9090`) enables an optional Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher and worker environment variables.
 
@@ -79,7 +79,7 @@ The worker polls a Temporal task queue, transcodes each file, writes the output 
 | `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                         |
 | `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                         |
 
-As with the watcher, the worker dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE`, runs a health check against the frontend at startup, and exits immediately if any of the three Temporal variables are empty.
+As with the watcher, the worker dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before it starts polling. Only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`).
 
 See [configuration.md](configuration.md) for the full list of worker environment variables, including crop-detection tuning, webhook notifications, and quality settings.
 

@@ -20,7 +20,7 @@ Scans configured filesystem paths on a fixed interval and starts a Temporal work
 
 Responsibilities:
 - Load and parse the watcher YAML config at startup
-- On each `scanInterval` tick, walk all configured watch directories and call `client.ExecuteWorkflow` per file found, using a deterministic workflow ID derived from the file path so duplicate dispatches for the same file are rejected by Temporal
+- On each `scanInterval` tick, walk all configured watch directories and call `client.ExecuteWorkflow` per file found, using a deterministic workflow ID derived from the file path so concurrent duplicate dispatches are rejected by Temporal while an execution with that workflow ID is already in progress (the reuse policy is `ALLOW_DUPLICATE`, the conflict policy is `FAIL`; once a previous run has closed, a later tick is allowed to re-run)
 - Apply ignore patterns to skip files and directory subtrees
 - Reconnect and retry on transient failures
 
@@ -142,9 +142,9 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `LOG_LEVEL` | string | `info` | Optional | Log verbosity: `debug`, `info`, `warn`, or `error`. An unrecognised value falls back to `info`. |
-| `TEMPORAL_ADDRESS` | string (`host:port`) | — | **Required** | Temporal frontend address dialed by `client.Dial` (e.g. `temporal-frontend:7233`). |
-| `TEMPORAL_NAMESPACE` | string | — | **Required** | Temporal namespace the workflows execute in (e.g. `default`). |
-| `TEMPORAL_TASK_QUEUE` | string | — | **Required** | Task queue the worker polls and the watcher dispatches to. The watcher and worker exit immediately at startup if this is empty. |
+| `TEMPORAL_ADDRESS` | string (`host:port`) | `localhost:7233` | Optional | Temporal frontend address passed to `client.Dial` (e.g. `temporal-frontend:7233`). When empty, the Temporal Go SDK uses its built-in default `localhost:7233`; production deployments must set this explicitly so the startup health check can reach the frontend. |
+| `TEMPORAL_NAMESPACE` | string | `default` | Optional | Temporal namespace the workflows execute in. When empty, the Temporal Go SDK uses its built-in default `default`. |
+| `TEMPORAL_TASK_QUEUE` | string | — | **Required** | Task queue the worker polls and the watcher dispatches to. Both binaries explicitly check this at startup and exit immediately if it is empty. |
 | `HEALTH_ADDR` | string (TCP address) | `:8080` (worker) / `:8081` (watcher) | Optional | TCP address for the HTTP health server. Exposes `/healthz` (liveness) and `/readyz` (readiness). Always enabled; override to change the listen address. |
 | `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | string (URL) | `""` | Optional | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty. Follows the standard OpenTelemetry convention. |
