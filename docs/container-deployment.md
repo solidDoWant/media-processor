@@ -25,7 +25,7 @@ Both images run as UID/GID `1000:1000` by default. If the host directories you b
 
 ## Running the watcher
 
-The watcher scans one or more download directories on a cron schedule and submits a Hatchet job for each file it finds. It reads its YAML config from the path supplied via `--config` (the image has no baked-in default).
+The watcher scans one or more download directories at a configurable interval and starts a Temporal workflow execution for each file it finds. It reads its YAML config from the path supplied via `--config`; the binary defaults `--config` to `config.yaml`, but the container image does not ship a config file at that path, so you typically mount one and/or pass `--config` explicitly.
 
 ### Required volume mounts
 
@@ -36,11 +36,13 @@ The watcher scans one or more download directories on a cron schedule and submit
 
 ### Required environment variables
 
-| Variable               | Description                                           |
-| ---------------------- | ----------------------------------------------------- |
-| `HATCHET_CLIENT_TOKEN` | Hatchet API token. Issue one via your Hatchet server. |
+| Variable              | Description                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| `TEMPORAL_ADDRESS`    | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                    |
+| `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (for example `default`).                     |
+| `TEMPORAL_TASK_QUEUE` | Task queue the watcher dispatches to. Must match the worker's `TEMPORAL_TASK_QUEUE`.     |
 
-Other Hatchet client settings (engine address, TLS mode, etc.) are configured via the standard `HATCHET_CLIENT_*` environment variables read by the Hatchet Go SDK — set `HATCHET_CLIENT_HOST_PORT` to `host:port` of your engine's gRPC endpoint (for example `hatchet-engine:7070`) when it is not running on the default `127.0.0.1:7077`, and set `HATCHET_CLIENT_TLS_STRATEGY=none` when talking to an insecure engine.
+The watcher dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before the scan loop starts. Of the three variables, only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`), which production deployments will need to override so the dial and health check succeed.
 
 For the watcher, the health server (`/healthz` liveness, `/readyz` readiness) always runs on `:8081` by default; set `HEALTH_ADDR` to override the listen address. `METRICS_ADDR` (for example `:9090`) enables an optional Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher and worker environment variables.
 
@@ -50,15 +52,15 @@ For the watcher, the health server (`/healthz` liveness, `/readyz` readiness) al
 docker run --rm \
   -v /srv/media/downloads:/downloads \
   -v /srv/media/watcher.yaml:/etc/watcher.yaml:ro \
-  -e HATCHET_CLIENT_TOKEN=... \
-  -e HATCHET_CLIENT_HOST_PORT=hatchet-engine:7070 \
-  -e HATCHET_CLIENT_TLS_STRATEGY=none \
+  -e TEMPORAL_ADDRESS=temporal-frontend:7233 \
+  -e TEMPORAL_NAMESPACE=default \
+  -e TEMPORAL_TASK_QUEUE=media-processor \
   watcher:latest --config /etc/watcher.yaml
 ```
 
 ## Running the worker
 
-The worker pulls jobs from Hatchet, transcodes each file, writes the output to the directory specified by `output.path` in the watcher config, and notifies Radarr or Sonarr.
+The worker polls a Temporal task queue, transcodes each file, writes the output to the directory specified by `output.path` in the watcher config, and notifies Radarr or Sonarr.
 
 ### Required volume mounts
 
@@ -69,13 +71,15 @@ The worker pulls jobs from Hatchet, transcodes each file, writes the output to t
 
 ### Required environment variables
 
-| Variable                       | Description                  |
-| ------------------------------ | ---------------------------- |
-| `HATCHET_CLIENT_TOKEN`         | Hatchet API token.           |
-| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key. |
-| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key. |
+| Variable                       | Description                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| `TEMPORAL_ADDRESS`             | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                |
+| `TEMPORAL_NAMESPACE`           | Temporal namespace the workflows execute in (for example `default`).                 |
+| `TEMPORAL_TASK_QUEUE`          | Task queue the worker polls. Must match the watcher's `TEMPORAL_TASK_QUEUE`.         |
+| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                         |
+| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                         |
 
-As with the watcher, non-default Hatchet engines are reached by setting the standard `HATCHET_CLIENT_HOST_PORT` and (optionally) `HATCHET_CLIENT_TLS_STRATEGY=none` environment variables.
+As with the watcher, the worker dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before it starts polling. Only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`).
 
 See [configuration.md](configuration.md) for the full list of worker environment variables, including crop-detection tuning, webhook notifications, and quality settings.
 
@@ -113,9 +117,9 @@ docker run --rm \
   --group-add $(getent group render | cut -d: -f3) \
   -v /srv/media/downloads:/downloads \
   -v /srv/media/processed-output:/processed-output \
-  -e HATCHET_CLIENT_TOKEN=... \
-  -e HATCHET_CLIENT_HOST_PORT=hatchet-engine:7070 \
-  -e HATCHET_CLIENT_TLS_STRATEGY=none \
+  -e TEMPORAL_ADDRESS=temporal-frontend:7233 \
+  -e TEMPORAL_NAMESPACE=default \
+  -e TEMPORAL_TASK_QUEUE=media-processor \
   -e RADARR_URL=http://radarr:7878 \
   -e RADARR_API_KEY=... \
   -e SONARR_URL=http://sonarr:8989 \
@@ -125,7 +129,7 @@ docker run --rm \
 
 ## Example: Docker Compose
 
-A minimal compose file that runs both services against an existing Hatchet engine. The render-node GID is supplied via the `RENDER_GID` environment variable because Docker resolves `group_add` names inside the container and the Nix-built images do not define a `render` group. Export it on the host before `docker compose up`:
+A minimal compose file that runs both services against an existing Temporal cluster. The render-node GID is supplied via the `RENDER_GID` environment variable because Docker resolves `group_add` names inside the container and the Nix-built images do not define a `render` group. Export it on the host before `docker compose up`:
 
 ```sh
 export RENDER_GID=$(getent group render | cut -d: -f3)
@@ -140,9 +144,9 @@ services:
       - /srv/media/downloads:/downloads
       - /srv/media/watcher.yaml:/etc/watcher.yaml:ro
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
-      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
-      HATCHET_CLIENT_TLS_STRATEGY: none
+      TEMPORAL_ADDRESS: temporal-frontend:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor
       HEALTH_ADDR: ":9091"
       METRICS_ADDR: ":9090"
     command: ["--config", "/etc/watcher.yaml"]
@@ -160,9 +164,9 @@ services:
       - /srv/media/downloads:/downloads
       - /srv/media/processed-output:/processed-output
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN}"
-      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
-      HATCHET_CLIENT_TLS_STRATEGY: none
+      TEMPORAL_ADDRESS: temporal-frontend:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor
       RADARR_URL: http://radarr:7878
       RADARR_API_KEY: "${RADARR_API_KEY}"
       SONARR_URL: http://sonarr:8989

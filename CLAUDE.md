@@ -6,7 +6,7 @@
 - Don't put line breaks within individual paragraph in markdown documents, or anything posted to GitHub (bodies, comments). These don't render well in some markdown renderes, such as GitHub issues.
 
 ## Tech Stack
-- Go 1.26, Hatchet (workflow orchestration; backed by PostgreSQL via the Hatchet server — the Go code does not connect to Postgres directly)
+- Go 1.26, Temporal (workflow orchestration; self-hosted Temporal server backed by PostgreSQL — the Go code does not connect to Postgres directly)
 - CGO + FFmpeg 8 shared libraries (media processing via `github.com/asticode/go-astiav`)
 - `golangci-lint` for static analysis
 - Nix (flake.nix) for reproducible dev environments
@@ -21,14 +21,14 @@ media-processor/
 ├── Makefile
 ├── go.mod
 ├── .golangci.yml
-├── docker-compose.yml         # Local Hatchet dev stack
+├── docker-compose.yml         # Local Temporal dev stack
 ├── .claude/
 │   ├── commands/              # Slash commands
 │   └── tasks/                 # Per-issue working files (gitignored)
 ├── bin/                       # Build outputs (gitignored)
 ├── cmd/
-│   ├── watcher/               # Cron-driven directory scanner + Hatchet job submission binary
-│   ├── worker/                # Hatchet worker + workflow handlers binary
+│   ├── watcher/               # Interval-driven directory scanner + Temporal workflow dispatch binary
+│   ├── worker/                # Temporal worker + workflow/activity handlers binary
 │   └── gen-config-schema/     # Emits the watcher YAML JSON Schema (see schemas/)
 ├── docs/                      # Operator-facing documentation (configuration, hardware accel, metrics)
 ├── e2e/                       # End-to-end test suite (Docker-based, build tag `e2e`)
@@ -42,8 +42,7 @@ media-processor/
 │   ├── metrics/               # Prometheus + OTLP metrics provider
 │   └── webhook/               # Outbound failure-notification HTTP client
 ├── schemas/                   # Generated JSON schema(s) for config files
-├── workflows/                 # Hatchet workflow definitions and step handlers
-│   ├── placeholder.go         # No-op standalone task registered with the worker to verify Hatchet connectivity
+├── workflows/                 # Temporal workflow definitions and activity handlers
 │   ├── media/                 # Top-level media workflow
 │   └── steps/                 # Individual workflow step handlers (probe, detectcrop, transcode, etc.)
 └── deploy/                    # Deployment configs (Helm charts)

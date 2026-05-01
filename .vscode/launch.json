@@ -9,16 +9,14 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/cmd/worker",
-            "envFile": "${workspaceFolder}/.env.hatchet"
+            "program": "${workspaceFolder}/cmd/worker"
         },
         {
             "name": "Launch watcher",
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/cmd/watcher",
-            "envFile": "${workspaceFolder}/.env.hatchet"
+            "program": "${workspaceFolder}/cmd/watcher"
         }
     ]
 }
