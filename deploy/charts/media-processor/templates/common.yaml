@@ -258,7 +258,10 @@
   {{- end -}}
   {{- $cleanWatches = append $cleanWatches $entry -}}
 {{- end -}}
-{{- $watcherConfigContent := dict "cronSchedule" .Values.config.watcher.schedule "watches" $cleanWatches -}}
+{{- $watcherConfigContent := dict "watches" $cleanWatches -}}
+{{- if .Values.config.watcher.scanInterval -}}
+  {{- $_ := set $watcherConfigContent "scanInterval" .Values.config.watcher.scanInterval -}}
+{{- end -}}
 {{- $watcherConfigYaml := toYaml $watcherConfigContent -}}
 
 {{- $watcherConfigMount := dict "path" $configMountPath "readOnly" true -}}

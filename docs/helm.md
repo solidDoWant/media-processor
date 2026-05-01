@@ -69,7 +69,7 @@ Shared observability settings applied to both watcher and worker.
 | Field                            | Type   | Default     | Description                                                                                                                                                                                                       |
 | -------------------------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                            |
-| `config.watcher.schedule`        | string | `""`        | 6-field Hatchet cron expression for the scan schedule (e.g. `*/30 * * * * *`). When empty, the watcher uses the built-in default (`*/5 * * * * *`, every 5 seconds). Written to `cronSchedule` in the config file |
+| `config.watcher.scanInterval`    | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config        |
 | `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                             |
 | `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                        |
 | `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                         |
@@ -252,7 +252,7 @@ config:
     existingClaim: downloads-pvc
 
   watcher:
-    schedule: "*/30 * * * * *"
+    scanInterval: "30s"
     volumes:
       processed-output:
         type: nfs

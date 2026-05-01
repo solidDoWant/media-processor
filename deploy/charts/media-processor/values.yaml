@@ -26,8 +26,10 @@ config:
   watcher:
     # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
     configType: ConfigMap
-    # schedule is the 6-field Hatchet cron expression (seconds-leading) for the watcher scan.
-    schedule: ""
+    # scanInterval is the duration between directory scans, as a Go duration string (e.g. "5s",
+    # "1m30s"). Defaults to "5s" when empty (the watcher binary applies the default). Written to
+    # scanInterval in the rendered watcher YAML config.
+    scanInterval: ""
     watches: []
     # volumes is a map of volume names to bjw-s persistence items (type, existingClaim, server/path,
     # etc.) without globalMounts or advancedMounts; the chart manages mounts. Keys become bjw-s
