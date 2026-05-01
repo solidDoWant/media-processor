@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/envconfig"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
@@ -137,10 +138,12 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init activities: %w", err)
 	}
 
-	temporalClient, err := client.Dial(client.Options{
-		HostPort:  os.Getenv("TEMPORAL_ADDRESS"),
-		Namespace: os.Getenv("TEMPORAL_NAMESPACE"),
-	})
+	clientOpts, err := envconfig.LoadDefaultClientOptions()
+	if err != nil {
+		return fmt.Errorf("get client configuration: %w", err)
+	}
+
+	temporalClient, err := client.Dial(clientOpts)
 	if err != nil {
 		return fmt.Errorf("dial Temporal: %w", err)
 	}

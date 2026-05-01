@@ -2,9 +2,12 @@
 {{/* ============================================================ */}}
 {{/* Hard-coded chart internals (not exposed in values)           */}}
 {{/* ============================================================ */}}
-{{- $inputMountPath  := "/media/input" -}}
-{{- $configMountPath := "/etc/media-processor" -}}
-{{- $metricsPort     := 9090 -}}
+{{- $inputMountPath     := "/media/input" -}}
+{{- $configMountPath    := "/etc/media-processor" -}}
+{{- $temporalConfigDir  := "/etc/temporal" -}}
+{{- $temporalTLSRoot    := "/etc/temporal-tls" -}}
+{{- $temporalConfigFile := printf "%s/temporal.toml" $temporalConfigDir -}}
+{{- $metricsPort        := 9090 -}}
 
 {{/* ============================================================ */}}
 {{/* Image tag: evaluate tpl strings (e.g. {{ .Chart.AppVersion }}) */}}
@@ -45,15 +48,71 @@
   {{- fail "config.worker.sonarr.apiKey.secretKeyRef.name and config.worker.sonarr.apiKey.secretKeyRef.key must both be set when using secretKeyRef" -}}
 {{- end -}}
 
+{{- $temporalAPIKeyValue      := .Values.config.temporal.apiKey.value             | default "" -}}
+{{- $temporalAPIKeySecretName := .Values.config.temporal.apiKey.secretKeyRef.name | default "" -}}
+{{- $temporalAPIKeySecretKey  := .Values.config.temporal.apiKey.secretKeyRef.key  | default "" -}}
+{{- if or (and $temporalAPIKeySecretName (not $temporalAPIKeySecretKey)) (and $temporalAPIKeySecretKey (not $temporalAPIKeySecretName)) -}}
+  {{- fail "config.temporal.apiKey.secretKeyRef.name and config.temporal.apiKey.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
+{{- if and $temporalAPIKeyValue $temporalAPIKeySecretName -}}
+  {{- fail "config.temporal.apiKey.value and config.temporal.apiKey.secretKeyRef are mutually exclusive — set only one" -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Temporal TLS cert reference resolution                       */}}
+{{/* ============================================================ */}}
+{{/*
+For each present cert reference, compute the file path the chart will mount it at
+(<tls-root>/<secret>/<key>) and track unique Secret names so the chart can dedupe
+volume mounts. References are only honoured when tls.enabled=true; setting one
+otherwise is a config error so a forgotten enabled flag doesn't silently disable
+mTLS or CA verification.
+
+clientCertificate points at a kubernetes.io/tls Secret with the standard "tls.crt"
+and "tls.key" keys, so a single secretName covers the cert+key pair. caCert is a
+free-form secretKeyRef because CA bundles use varying Secret layouts.
+*/}}
+{{- $temporalTLSEnabled := .Values.config.temporal.tls.enabled -}}
+{{- $tlsResolvedPaths := dict -}}
+{{- $tlsSecretMounts  := dict -}}
+
+{{- $clientCertSecretName := .Values.config.temporal.tls.clientCertificate.secretName | default "" -}}
+{{- if $clientCertSecretName -}}
+  {{- if not $temporalTLSEnabled -}}
+    {{- fail "config.temporal.tls.clientCertificate.secretName is set but config.temporal.tls.enabled is false — enable TLS or remove the reference" -}}
+  {{- end -}}
+  {{- $mountDir := printf "%s/%s" $temporalTLSRoot $clientCertSecretName -}}
+  {{- $_ := set $tlsResolvedPaths "clientCert" (printf "%s/tls.crt" $mountDir) -}}
+  {{- $_ := set $tlsResolvedPaths "clientKey" (printf "%s/tls.key" $mountDir) -}}
+  {{- $_ := set $tlsSecretMounts $clientCertSecretName $mountDir -}}
+{{- end -}}
+
+{{- $caCertRef := .Values.config.temporal.tls.caCert.secretKeyRef | default dict -}}
+{{- $caCertSecretName := $caCertRef.name | default "" -}}
+{{- $caCertSecretKey  := $caCertRef.key  | default "" -}}
+{{- if $caCertSecretName -}}
+  {{- if not $caCertSecretKey -}}
+    {{- fail "config.temporal.tls.caCert.secretKeyRef.key must not be empty when name is set (chart default is \"ca.crt\")" -}}
+  {{- end -}}
+  {{- if not $temporalTLSEnabled -}}
+    {{- fail "config.temporal.tls.caCert.secretKeyRef is set but config.temporal.tls.enabled is false — enable TLS or remove the reference" -}}
+  {{- end -}}
+  {{- $mountDir := printf "%s/%s" $temporalTLSRoot $caCertSecretName -}}
+  {{- $_ := set $tlsResolvedPaths "caCert" (printf "%s/%s" $mountDir $caCertSecretKey) -}}
+  {{- $_ := set $tlsSecretMounts $caCertSecretName $mountDir -}}
+{{- end -}}
+
 {{/* ============================================================ */}}
 {{/* Watcher env vars                                             */}}
 {{/* ============================================================ */}}
 {{- $watcherEnv := dict -}}
 
-{{/* TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE / TEMPORAL_TASK_QUEUE */}}
-{{- $_ := set $watcherEnv "TEMPORAL_ADDRESS"    $temporalAddress   -}}
-{{- $_ := set $watcherEnv "TEMPORAL_NAMESPACE"  $temporalNamespace -}}
-{{- $_ := set $watcherEnv "TEMPORAL_TASK_QUEUE" $temporalTaskQueue -}}
+{{/* TEMPORAL_TASK_QUEUE / TEMPORAL_CONFIG_FILE
+   Address, namespace, TLS, and grpc_meta come from the rendered temporal.toml
+   pointed to by TEMPORAL_CONFIG_FILE; task queue is not a Temporal client option
+   so it stays an env var. */}}
+{{- $_ := set $watcherEnv "TEMPORAL_TASK_QUEUE"  $temporalTaskQueue -}}
+{{- $_ := set $watcherEnv "TEMPORAL_CONFIG_FILE" $temporalConfigFile -}}
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $watcherEnv "LOG_LEVEL" .Values.config.watcher.logLevel -}}
@@ -74,10 +133,9 @@
 {{/* ============================================================ */}}
 {{- $workerEnv := dict -}}
 
-{{/* TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE / TEMPORAL_TASK_QUEUE */}}
-{{- $_ := set $workerEnv "TEMPORAL_ADDRESS"    $temporalAddress   -}}
-{{- $_ := set $workerEnv "TEMPORAL_NAMESPACE"  $temporalNamespace -}}
-{{- $_ := set $workerEnv "TEMPORAL_TASK_QUEUE" $temporalTaskQueue -}}
+{{/* TEMPORAL_TASK_QUEUE / TEMPORAL_CONFIG_FILE — see watcher block above. */}}
+{{- $_ := set $workerEnv "TEMPORAL_TASK_QUEUE"  $temporalTaskQueue -}}
+{{- $_ := set $workerEnv "TEMPORAL_CONFIG_FILE" $temporalConfigFile -}}
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
@@ -208,10 +266,16 @@
   {{- end -}}
 {{- end -}}
 {{- $watcherVolumes := .Values.config.watcher.volumes | default dict -}}
-{{- $reservedPersistenceKeys := list "input" "watcher-config" "hardware-device" -}}
+{{- $reservedPersistenceKeys := list "input" "watcher-config" "hardware-device" "temporal-config" -}}
+{{- $reservedPersistenceKeyPrefixes := list "temporal-tls-" -}}
 {{- range $volName, $volMounts := $outputVolMounts -}}
   {{- if has $volName $reservedPersistenceKeys -}}
     {{- fail (printf "config.watcher.volumes: volume name %q conflicts with a chart-reserved persistence key (reserved: %s)" $volName (join ", " $reservedPersistenceKeys)) -}}
+  {{- end -}}
+  {{- range $prefix := $reservedPersistenceKeyPrefixes -}}
+    {{- if hasPrefix $prefix $volName -}}
+      {{- fail (printf "config.watcher.volumes: volume name %q conflicts with a chart-reserved persistence key prefix %q" $volName $prefix) -}}
+    {{- end -}}
   {{- end -}}
   {{- if not (hasKey $watcherVolumes $volName) -}}
     {{- fail (printf "config.watcher.watches: output.volumeName %q not found in config.watcher.volumes" $volName) -}}
@@ -282,6 +346,90 @@
   {{- $_ := set $computedPersistence "watcher-config" $configPersistence -}}
 {{- else -}}
   {{- fail (printf "config.watcher.configType must be ConfigMap or Secret, got %q" .Values.config.watcher.configType) -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Temporal client config: temporal.toml ConfigMap, TLS Secret  */}}
+{{/* mounts, and TEMPORAL_API_KEY env (both controllers)          */}}
+{{/* ============================================================ */}}
+
+{{/* Build the profile dict in camelCase, then snake-case its keys via the helper.
+   Pruned: apiKey (sensitive — env var instead), taskQueue (env-only — not a Temporal
+   client option), and the Helm-only secretKeyRef wiring (replaced with resolved file
+   paths). */}}
+{{- $temporalProfile := dict
+  "address"   $temporalAddress
+  "namespace" $temporalNamespace
+-}}
+{{- if $temporalTLSEnabled -}}
+  {{- $tls := dict -}}
+  {{- if .Values.config.temporal.tls.serverName -}}
+    {{- $_ := set $tls "serverName" .Values.config.temporal.tls.serverName -}}
+  {{- end -}}
+  {{- if .Values.config.temporal.tls.disableHostVerification -}}
+    {{- $_ := set $tls "disableHostVerification" true -}}
+  {{- end -}}
+  {{- if hasKey $tlsResolvedPaths "clientCert" -}}
+    {{- $_ := set $tls "clientCertPath" (index $tlsResolvedPaths "clientCert") -}}
+  {{- end -}}
+  {{- if hasKey $tlsResolvedPaths "clientKey" -}}
+    {{- $_ := set $tls "clientKeyPath" (index $tlsResolvedPaths "clientKey") -}}
+  {{- end -}}
+  {{- if hasKey $tlsResolvedPaths "caCert" -}}
+    {{- $_ := set $tls "serverCaCertPath" (index $tlsResolvedPaths "caCert") -}}
+  {{- end -}}
+  {{- $_ := set $temporalProfile "tls" $tls -}}
+{{- end -}}
+
+{{- $snakedProfile := include "media-processor.snakeKeys" $temporalProfile | fromYaml -}}
+
+{{/* Attach grpc_meta after recursion so user-supplied header keys are not snake-cased
+   (the SDK normalises them on load via NormalizeGRPCMetaKey). */}}
+{{- $grpcMeta := .Values.config.temporal.grpcMeta | default dict -}}
+{{- if $grpcMeta -}}
+  {{- $_ := set $snakedProfile "grpc_meta" $grpcMeta -}}
+{{- end -}}
+
+{{- $temporalToml := dict "profile" (dict "default" $snakedProfile) | toToml -}}
+
+{{- $_ := set $computedConfigMaps "temporal-config" (dict "data" (dict "temporal.toml" $temporalToml)) -}}
+
+{{- $temporalConfigMount := dict "path" $temporalConfigDir "readOnly" true -}}
+{{- $_ := set $computedPersistence "temporal-config" (dict
+  "type" "configMap"
+  "identifier" "temporal-config"
+  "advancedMounts" (dict
+    "watcher" (dict "watcher" (list $temporalConfigMount))
+    "worker"  (dict "worker"  (list $temporalConfigMount))
+  )
+) -}}
+
+{{/* TLS Secret mounts (one per unique Secret name), mounted RO on both controllers.
+   Each mount projects the entire Secret as a directory under <tls-root>/<secret>/;
+   the TOML references individual keys by full file path. */}}
+{{- range $secretName, $mountDir := $tlsSecretMounts -}}
+  {{- $persistenceKey := printf "temporal-tls-%s" $secretName -}}
+  {{- $tlsMount := dict "path" $mountDir "readOnly" true -}}
+  {{- $_ := set $computedPersistence $persistenceKey (dict
+    "type" "secret"
+    "name" $secretName
+    "advancedMounts" (dict
+      "watcher" (dict "watcher" (list $tlsMount))
+      "worker"  (dict "worker"  (list $tlsMount))
+    )
+  ) -}}
+{{- end -}}
+
+{{/* TEMPORAL_API_KEY (both controllers): mirrors the radarr/sonarr pattern. Setting
+   this as an env var lets the SDK's env-over-file precedence keep the value out of
+   the ConfigMap-rendered TOML. */}}
+{{- if $temporalAPIKeySecretName -}}
+  {{- $apiKeyEnvValue := dict "valueFrom" (dict "secretKeyRef" (dict "name" $temporalAPIKeySecretName "key" $temporalAPIKeySecretKey)) -}}
+  {{- $_ := set $watcherEnv "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
+  {{- $_ := set $workerEnv  "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
+{{- else if $temporalAPIKeyValue -}}
+  {{- $_ := set $watcherEnv "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
+  {{- $_ := set $workerEnv  "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
