@@ -12,9 +12,9 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 ## Required values
 
-The chart has no required values at `helm template` time — the manifests render without error with all defaults. However, the pods will fail to start at runtime without the following values. You will need at a minimum:
+`config.temporal.address` is required at `helm template` time — the chart fails with a clear error when it (or any of `config.temporal.namespace` / `config.temporal.taskQueue`) is empty. `namespace` and `taskQueue` have built-in defaults, so only `address` typically needs to be supplied. In addition, the pods will fail at runtime without the following values. You will need at a minimum:
 
-- `config.hatchet.token` — Hatchet API token
+- `config.temporal.address` — Temporal frontend host:port (e.g. `temporal-frontend.temporal.svc.cluster.local:7233`)
 - `config.watcher.watches` — at least one watch entry
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
@@ -23,15 +23,15 @@ The chart has no required values at `helm template` time — the manifests rende
 
 ## Values reference
 
-### `config.hatchet.token`
+### `config.temporal`
 
-The Hatchet API token for both watcher and worker. Sets `HATCHET_CLIENT_TOKEN` on both containers.
+Temporal frontend connection settings. `address` is required; `namespace` and `taskQueue` have defaults but `helm template` still fails if they are explicitly set to an empty string.
 
-| Field                                    | Type   | Default | Description                                                |
-| ---------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
-| `config.hatchet.token.value`             | string | `""`    | Literal token value                                        |
-| `config.hatchet.token.secretKeyRef.name` | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
-| `config.hatchet.token.secretKeyRef.key`  | string | `""`    | Key within the Secret                                      |
+| Field                       | Type   | Default             | Description                                                                                                      |
+| --------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `config.temporal.address`   | string | `""`                | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker                      |
+| `config.temporal.namespace` | string | `"default"`         | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker                |
+| `config.temporal.taskQueue` | string | `"media-processor"` | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both watcher and worker |
 
 ### `config.inputVolume`
 
@@ -64,14 +64,14 @@ Shared observability settings applied to both watcher and worker.
 
 ### `config.watcher`
 
-| Field                            | Type   | Default     | Description                                                                                                                                                                                                       |
-| -------------------------------- | ------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                            |
-| `config.watcher.schedule`        | string | `""`        | 6-field Hatchet cron expression for the scan schedule (e.g. `*/30 * * * * *`). When empty, the watcher uses the built-in default (`*/5 * * * * *`, every 5 seconds). Written to `cronSchedule` in the config file |
-| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                             |
-| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                        |
-| `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                         |
-| `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                                                                                                                     |
+| Field                            | Type   | Default     | Description                                                                                                                                                                                              |
+| -------------------------------- | ------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                   |
+| `config.watcher.scanInterval`    | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config |
+| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                    |
+| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                               |
+| `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                |
+| `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                                                                                                            |
 
 The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `configType: Secret`) and mounted read-only at `/etc/media-processor/`. The watcher container receives `--config /etc/media-processor/watcher.yaml`.
 
@@ -207,16 +207,10 @@ These values are intentionally not configurable in `values.yaml`:
 
 ## Using Secrets for credentials
 
-Instead of putting token values directly in `values.yaml`, reference a pre-existing Secret:
+Instead of putting API keys directly in `values.yaml`, reference a pre-existing Secret:
 
 ```yaml
 config:
-  hatchet:
-    token:
-      secretKeyRef:
-        name: media-processor-secrets
-        key: hatchet-token
-
   worker:
     radarr:
       apiKey:
@@ -234,7 +228,6 @@ Create the Secret before installing the chart:
 
 ```sh
 kubectl create secret generic media-processor-secrets \
-  --from-literal=hatchet-token=YOUR_TOKEN \
   --from-literal=radarr-api-key=YOUR_KEY \
   --from-literal=sonarr-api-key=YOUR_KEY
 ```
@@ -247,18 +240,17 @@ This example uses a PVC for input and NFS for output, configures arr path transl
 
 ```yaml
 config:
-  hatchet:
-    token:
-      secretKeyRef:
-        name: media-processor-secrets
-        key: hatchet-token
+  temporal:
+    address: "temporal-frontend.temporal.svc.cluster.local:7233"
+    namespace: "default"
+    taskQueue: "media-processor"
 
   inputVolume:
     type: persistentVolumeClaim
     existingClaim: downloads-pvc
 
   watcher:
-    schedule: "*/30 * * * * *"
+    scanInterval: "30s"
     volumes:
       processed-output:
         type: nfs

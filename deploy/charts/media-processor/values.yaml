@@ -1,12 +1,17 @@
 ---
 config:
-  hatchet:
-    token:
-      value: ""
-      secretKeyRef:
-        name: ""
-        key: ""
-    namespace: ""
+  # temporal selects the Temporal frontend the watcher and worker connect to. address is required
+  # and helm template fails when empty; namespace and taskQueue have sensible defaults.
+  temporal:
+    # address is the Temporal frontend host:port (no scheme). Sets TEMPORAL_ADDRESS on both
+    # watcher and worker. Example: "temporal-frontend.temporal.svc.cluster.local:7233".
+    address: ""
+    # namespace is the Temporal namespace the workflows execute in. Sets TEMPORAL_NAMESPACE on
+    # both watcher and worker. Defaults to Temporal's built-in "default" namespace.
+    namespace: "default"
+    # taskQueue is the Temporal task queue the worker polls and the watcher dispatches to. Sets
+    # TEMPORAL_TASK_QUEUE on both watcher and worker.
+    taskQueue: "media-processor"
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
@@ -21,8 +26,10 @@ config:
   watcher:
     # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
     configType: ConfigMap
-    # schedule is the 6-field Hatchet cron expression (seconds-leading) for the watcher scan.
-    schedule: ""
+    # scanInterval is the duration between directory scans, as a Go duration string (e.g. "5s",
+    # "1m30s"). Defaults to "5s" when empty (the watcher binary applies the default). Written to
+    # scanInterval in the rendered watcher YAML config.
+    scanInterval: ""
     watches: []
     # volumes is a map of volume names to bjw-s persistence items (type, existingClaim, server/path,
     # etc.) without globalMounts or advancedMounts; the chart manages mounts. Keys become bjw-s
