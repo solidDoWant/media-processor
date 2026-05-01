@@ -32,7 +32,9 @@ func (Interval) JSONSchema() *jsonschema.Schema {
 	}
 }
 
-// UnmarshalYAML parses a YAML scalar string as a Go duration.
+// UnmarshalYAML parses a YAML scalar string as a Go duration. An explicit
+// non-positive duration is rejected so it cannot silently fall back to the
+// default in SetDefaults.
 func (i *Interval) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.ScalarNode {
 		return fmt.Errorf("scanInterval must be a string, got YAML node kind %v", value.Kind)
@@ -41,6 +43,10 @@ func (i *Interval) UnmarshalYAML(value *yaml.Node) error {
 	d, err := time.ParseDuration(value.Value)
 	if err != nil {
 		return fmt.Errorf("invalid scanInterval %q: %w", value.Value, err)
+	}
+
+	if d <= 0 {
+		return fmt.Errorf("scanInterval must be positive, got %q", value.Value)
 	}
 
 	*i = Interval(d)

@@ -191,6 +191,28 @@ watches: []
 			errFunc: require.Error,
 		},
 		{
+			name: "explicit zero scanInterval is rejected",
+			content: `
+scanInterval: 0s
+watches: []
+`,
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "scanInterval")
+			},
+		},
+		{
+			name: "negative scanInterval is rejected",
+			content: `
+scanInterval: -1s
+watches: []
+`,
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "scanInterval")
+			},
+		},
+		{
 			name: "preserveSource true is parsed and set on watch entry",
 			content: `
 watches:
