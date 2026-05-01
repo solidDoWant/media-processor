@@ -12,11 +12,9 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 ## Required values
 
-`helm template` fails when any of `config.temporal.address`, `config.temporal.namespace`, or `config.temporal.taskQueue` is empty. In addition, the pods will fail at runtime without the following values. You will need at a minimum:
+`config.temporal.address` is required at `helm template` time — the chart fails with a clear error when it (or any of `config.temporal.namespace` / `config.temporal.taskQueue`) is empty. `namespace` and `taskQueue` have built-in defaults, so only `address` typically needs to be supplied. In addition, the pods will fail at runtime without the following values. You will need at a minimum:
 
 - `config.temporal.address` — Temporal frontend host:port (e.g. `temporal-frontend.temporal.svc.cluster.local:7233`)
-- `config.temporal.namespace` — Temporal namespace (e.g. `default`)
-- `config.temporal.taskQueue` — Temporal task queue the worker polls and the watcher dispatches to (e.g. `media-processor`)
 - `config.watcher.watches` — at least one watch entry
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
@@ -27,13 +25,13 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 ### `config.temporal`
 
-Temporal frontend connection settings. All three fields are required; `helm template` fails when any are empty.
+Temporal frontend connection settings. `address` is required; `namespace` and `taskQueue` have defaults but `helm template` still fails if they are explicitly set to an empty string.
 
-| Field                       | Type   | Default | Description                                                                                       |
-| --------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------- |
-| `config.temporal.address`   | string | `""`    | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker       |
-| `config.temporal.namespace` | string | `""`    | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker |
-| `config.temporal.taskQueue` | string | `""`    | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both     |
+| Field                       | Type   | Default             | Description                                                                                                      |
+| --------------------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `config.temporal.address`   | string | `""`                | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker                      |
+| `config.temporal.namespace` | string | `"default"`         | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker                |
+| `config.temporal.taskQueue` | string | `"media-processor"` | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both watcher and worker |
 
 ### `config.inputVolume`
 

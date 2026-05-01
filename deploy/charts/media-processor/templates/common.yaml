@@ -15,7 +15,7 @@
 {{- $_ := set (index $wkc "image") "tag" (tpl ((index $wkc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
 
 {{/* ============================================================ */}}
-{{/* Required Temporal connection values                           */}}
+{{/* Temporal connection values                                    */}}
 {{/* ============================================================ */}}
 {{- $temporalAddress   := .Values.config.temporal.address   | default "" -}}
 {{- $temporalNamespace := .Values.config.temporal.namespace | default "" -}}
@@ -24,10 +24,10 @@
   {{- fail "config.temporal.address is required (host:port of the Temporal frontend)" -}}
 {{- end -}}
 {{- if not $temporalNamespace -}}
-  {{- fail "config.temporal.namespace is required" -}}
+  {{- fail "config.temporal.namespace must not be empty (chart default is \"default\")" -}}
 {{- end -}}
 {{- if not $temporalTaskQueue -}}
-  {{- fail "config.temporal.taskQueue is required" -}}
+  {{- fail "config.temporal.taskQueue must not be empty (chart default is \"media-processor\")" -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
