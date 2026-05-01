@@ -65,10 +65,10 @@ func Dial(ctx context.Context) (client.Client, error) {
 
 // buildOptions loads client.Options via envconfig, replacing a file:// API key
 // with dynamic credentials backed by os.ReadFile. A one-time validation read
-// surfaces a misconfigured path at startup rather than at the first RPC. The
-// loaded key's JWT claims (when applicable) are emitted at debug level so an
-// operator can confirm which credential was loaded without exposing the
-// signing material.
+// surfaces a misconfigured path at startup rather than at the first RPC. For
+// the file-backed path, the loaded key's JWT claims (when applicable) are
+// emitted at debug level so an operator can confirm which credential was
+// loaded without exposing the signing material.
 func buildOptions(ctx context.Context) (client.Options, error) {
 	profile, err := envconfig.LoadClientConfigProfile(envconfig.LoadClientConfigProfileOptions{})
 	if err != nil {
@@ -80,27 +80,22 @@ func buildOptions(ctx context.Context) (client.Options, error) {
 		return client.Options{}, err
 	}
 
-	inlineAPIKey := profile.APIKey
-
 	opts, err := profile.ToClientOptions(envconfig.ToClientOptionsRequest{})
 	if err != nil {
 		return client.Options{}, fmt.Errorf("build temporal client options: %w", err)
 	}
 
-	switch {
-	case apiKeyFile != "":
+	if apiKeyFile != "" {
 		key, err := readAPIKeyFile(apiKeyFile)
 		if err != nil {
 			return client.Options{}, fmt.Errorf("validate api key file: %w", err)
 		}
 
-		logAPIKeyClaims(ctx, slog.String("path", apiKeyFile), key)
+		logAPIKeyClaims(ctx, apiKeyFile, key)
 
 		opts.Credentials = client.NewAPIKeyDynamicCredentials(func(context.Context) (string, error) {
 			return readAPIKeyFile(apiKeyFile)
 		})
-	case inlineAPIKey != "":
-		logAPIKeyClaims(ctx, slog.String("source", "env-or-toml"), inlineAPIKey)
 	}
 
 	return opts, nil
@@ -125,24 +120,26 @@ func readAPIKeyFile(path string) (string, error) {
 	return key, nil
 }
 
-// logAPIKeyClaims attempts to decode the API key as a JWT and log its claims
-// at debug level so an operator can confirm which credential was loaded —
-// e.g. that sub/aud/exp match the expected service identity and lifetime.
+// logAPIKeyClaims attempts to decode a file-backed API key as a JWT and log
+// its claims at debug level so an operator can confirm which credential was
+// loaded — e.g. that sub/aud/exp match the expected service identity and
+// lifetime. Inline keys aren't logged: they don't change at runtime, so the
+// debug signal is far less useful than for the rotating file-backed path.
 //
 // Best-effort: silently no-ops for non-JWT keys (Temporal accepts any opaque
 // bearer string). Only the decoded claims payload is logged — never the full
 // token, header, or signature — so log records cannot be replayed as
 // credentials. The signing material would still be needed to mint a new
 // token, and that is never observable here.
-func logAPIKeyClaims(ctx context.Context, sourceAttr slog.Attr, apiKey string) {
+func logAPIKeyClaims(ctx context.Context, path, apiKey string) {
 	claims, ok := decodeJWTClaims(apiKey)
 	if !ok {
-		slog.DebugContext(ctx, "loaded temporal api key (not a JWT)", sourceAttr)
+		slog.DebugContext(ctx, "loaded temporal api key (not a JWT)", slog.String("path", path))
 
 		return
 	}
 
-	slog.DebugContext(ctx, "loaded temporal api key", sourceAttr, slog.Any("claims", claims))
+	slog.DebugContext(ctx, "loaded temporal api key", slog.String("path", path), slog.Any("claims", claims))
 }
 
 // decodeJWTClaims parses the claims segment of a JWS Compact-serialized JWT.
