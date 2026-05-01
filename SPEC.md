@@ -5,9 +5,9 @@
 | Component | Technology |
 |-----------|------------|
 | Language | Go 1.26 |
-| Workflow orchestration | [Hatchet](https://hatchet.run) |
-| Database | PostgreSQL |
-| Directory scanning | `filepath.WalkDir` on a Hatchet cron schedule |
+| Workflow orchestration | [Temporal](https://temporal.io) (self-hosted) |
+| Database | PostgreSQL (used by the Temporal server; the application binaries do not connect to it directly) |
+| Directory scanning | `filepath.WalkDir` driven by an in-process `time.Ticker` on the configured `scanInterval` |
 | Media processing | `github.com/asticode/go-astiav` (FFmpeg 8 Cgo bindings) |
 | Static analysis | `golangci-lint` |
 | Dev environment | Nix (flake.nix) |
@@ -16,23 +16,23 @@
 
 ### `cmd/watcher`
 
-Scans configured filesystem paths on a cron schedule and submits a Hatchet job for each file found. Uses `filepath.WalkDir` for recursive directory traversal rather than filesystem event notifications.
+Scans configured filesystem paths on a fixed interval and starts a Temporal workflow execution for each file found. Uses `filepath.WalkDir` for recursive directory traversal rather than filesystem event notifications.
 
 Responsibilities:
 - Load and parse the watcher YAML config at startup
-- On each cron tick, walk all configured watch directories and submit a Hatchet job per file found
+- On each `scanInterval` tick, walk all configured watch directories and call `client.ExecuteWorkflow` per file found, using a deterministic workflow ID derived from the file path so duplicate dispatches for the same file are rejected by Temporal
 - Apply ignore patterns to skip files and directory subtrees
 - Reconnect and retry on transient failures
 
 ### `cmd/worker`
 
-Registers workflow step handlers with Hatchet and processes jobs dispatched by the watcher. Performs the actual media processing by orchestrating calls into the library packages.
+Connects to Temporal, registers the media workflow and its activities on the configured task queue, and processes the workflow executions started by the watcher. Performs the actual media processing by orchestrating calls into the library packages.
 
 Responsibilities:
-- Connect to Hatchet and register all workflow step handlers
+- Dial the Temporal frontend with `client.Dial` and register the workflow and activities on the configured task queue
 - Invoke `pkg/ffprobe` to inspect incoming media files
 - Invoke `pkg/ffmpeg` from `workflows/steps` to transcode or transform media
-- Report step results and errors back to the workflow engine
+- Report activity results and errors back to Temporal so per-activity retry and timeout policies apply
 
 ## Library Package Contracts
 
@@ -86,7 +86,7 @@ Sonarr/Radarr has `/processed-output` bind-mounted as its own `/downloads`. This
 1. **User requests media.** The user requests a movie or TV episode via Sonarr or Radarr.
 2. **Download initiated.** Sonarr/Radarr searches configured indexers, selects a release, and sends it to the configured download client.
 3. **File lands in `/downloads`.** The download client saves the completed file to the real `/downloads` directory and reports the file path back to Sonarr/Radarr.
-4. **Watcher detects the file.** The `cmd/watcher` process, which scans `/downloads` recursively on each Hatchet cron tick using `filepath.WalkDir`, discovers the new file and submits a media-processor workflow job to Hatchet.
+4. **Watcher detects the file.** The `cmd/watcher` process, which scans `/downloads` recursively on each `scanInterval` tick using `filepath.WalkDir`, discovers the new file and starts a media-processor workflow execution on Temporal.
 5. **Workflow runs.** The `cmd/worker` process picks up the job. It probes the file with `pkg/ffprobe`, then transcodes or transmuxes it if required via `pkg/ffmpeg`/`pkg/medialib`, writing the output to `output.path` from the watcher config (mirroring the input's relative subdirectory under that path when `watchedPath` is a parent of the input file).
 6. **Library import triggered.** The workflow's `notify` step calls `ArrLibrary.ImportByFilePath` with the transcoded output file path (`transcode.DestFilePath`). When `output.remotePath` is set, the `output.path` prefix is replaced by `output.remotePath` to produce the path as Sonarr/Radarr sees it (e.g., local `/processed/movies/sub/film.mkv` becomes `/media/movies/sub/film.mkv`). A `DownloadedMoviesScan` (Radarr) or `DownloadedEpisodesScan` (Sonarr) command is sent with that path, triggering the normal import pipeline.
 7. **Sonarr/Radarr imports the file.** On receiving the refresh command, Sonarr/Radarr scans the path it was given (the `output.remotePath`-prefixed path, or the `output.path`-based path when `output.remotePath` is not set), finds the processed file, and imports it into the library.
@@ -100,14 +100,14 @@ The download client reports the file location to Sonarr/Radarr using the path as
 | Config item | Mechanism | Rationale |
 |-------------|-----------|-----------|
 | Watcher path-to-workflow mappings | YAML file (path passed via `--config` flag) | Structured, multi-key data that is unwieldy as environment variables |
-| All other runtime config (DB URL, Hatchet endpoint, secrets, log level) | Environment variables | Standard 12-factor practice; integrates cleanly with Kubernetes secrets |
+| All other runtime config (Temporal address/namespace/task queue, secrets, log level) | Environment variables | Standard 12-factor practice; integrates cleanly with Kubernetes secrets |
 
 No config file merging is performed. Exactly one YAML config file path is accepted; all other configuration comes from the process environment.
 
 ### Watcher config example
 
 ```yaml
-cronSchedule: "*/5 * * * * *"
+scanInterval: 5s
 watches:
   - name: movies
     watchedPath: /media/incoming/movies
@@ -131,7 +131,7 @@ watches:
     retainEmptyDirectories: true
 ```
 
-`cronSchedule`, `ignorePatterns`, `preserveSource`, and `retainEmptyDirectories` are all optional. A minimal entry needs `name`, `watchedPath`, `mediaType`, and `output.path`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file. By default, after a source file is deleted (either because it is invalid media or after successful processing), any parent directories that become empty are removed bottom-up, stopping at the watch root. Set `retainEmptyDirectories: true` to disable this behaviour and leave empty directories in place.
+`scanInterval`, `ignorePatterns`, `preserveSource`, and `retainEmptyDirectories` are all optional. `scanInterval` is a Go duration string (e.g. `5s`, `1m30s`) controlling how often each watch directory is scanned; it defaults to `5s` when omitted. A minimal entry needs `name`, `watchedPath`, `mediaType`, and `output.path`. `ignorePatterns` accepts Go regular expressions; a matching file is silently skipped, a matching directory skips its entire subtree. When `preserveSource: true` is set on a watch entry, the source file is kept after successful processing; omitting it or setting it to `false` retains the default behaviour of deleting the source file. By default, after a source file is deleted (either because it is invalid media or after successful processing), any parent directories that become empty are removed bottom-up, stopping at the watch root. Set `retainEmptyDirectories: true` to disable this behaviour and leave empty directories in place.
 
 ### Environment variables
 
@@ -142,7 +142,9 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | Variable | Type | Default | Required | Description |
 |----------|------|---------|----------|-------------|
 | `LOG_LEVEL` | string | `info` | Optional | Log verbosity: `debug`, `info`, `warn`, or `error`. An unrecognised value falls back to `info`. |
-| `HATCHET_CLIENT_TOKEN` | string | — | **Required** | Hatchet API token used by the client SDK. |
+| `TEMPORAL_ADDRESS` | string (`host:port`) | — | **Required** | Temporal frontend address dialed by `client.Dial` (e.g. `temporal-frontend:7233`). |
+| `TEMPORAL_NAMESPACE` | string | — | **Required** | Temporal namespace the workflows execute in (e.g. `default`). |
+| `TEMPORAL_TASK_QUEUE` | string | — | **Required** | Task queue the worker polls and the watcher dispatches to. The watcher and worker exit immediately at startup if this is empty. |
 | `HEALTH_ADDR` | string (TCP address) | `:8080` (worker) / `:8081` (watcher) | Optional | TCP address for the HTTP health server. Exposes `/healthz` (liveness) and `/readyz` (readiness). Always enabled; override to change the listen address. |
 | `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | string (URL) | `""` | Optional | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty. Follows the standard OpenTelemetry convention. |
@@ -159,7 +161,7 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `MEDIA_HARDWARE_DEVICE_PATH` | string (path) | `""` | Optional | Hardware device path for hardware-accelerated transcoding (e.g. `/dev/dri/renderD128`). When empty, the software encoder is used. |
 | `MEDIA_MIN_CROP_X` | integer | `10` | Optional | Minimum number of pixels that must be trimmed horizontally before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |
-| `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Hatchet execution timeout for the crop-detection step (e.g. `45m`, `1h`). |
-| `MEDIA_TRANSCODE_TIMEOUT` | Go duration | `4h` | Optional | Hatchet execution timeout for the transcode step (e.g. `2h`, `8h`). |
+| `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Activity start-to-close timeout for the crop-detection step (e.g. `45m`, `1h`). |
+| `MEDIA_TRANSCODE_TIMEOUT` | Go duration | `4h` | Optional | Activity start-to-close timeout for the transcode step (e.g. `2h`, `8h`). |
 | `MEDIA_H265_CRF` | integer (1–51) | _(encoder default)_ | Optional | H.265 constant-quality (CRF) value. When unset or empty the encoder default is used; values outside 1–51 cause a fatal startup error. |
 | `METRICS_HIGH_CARDINALITY_LABELS` | `true` / `false` | `false` | Optional | When `true`, per-item labels (id, title, year, etc.) are attached to metric observations. |

@@ -15,10 +15,10 @@ Editors that support [yaml-language-server](https://github.com/redhat-developer/
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/solidDoWant/media-processor/refs/heads/master/schemas/watcher.schema.json
 
-# cronSchedule controls how often each watch directory is scanned.
-# Accepts a 6-field cron expression (seconds-precision).
-# Defaults to "*/5 * * * * *" (every 5 seconds) when omitted.
-cronSchedule: "*/5 * * * * *"
+# scanInterval controls how often each watch directory is scanned.
+# Accepts a Go duration string (e.g. "5s", "1m30s").
+# Defaults to "5s" (every 5 seconds) when omitted.
+scanInterval: 5s
 
 watches:
   - name: movies
@@ -52,7 +52,7 @@ watches:
 
 | Field                              | Type     | Default         | Description                                                                                                                                                                            |
 | ---------------------------------- | -------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cronSchedule`                     | string   | `*/5 * * * * *` | 6-field cron expression controlling how often each watch directory is scanned. Defaults to every 5 seconds when omitted.                                                               |
+| `scanInterval`                     | string   | `5s`            | Go duration string (e.g. `5s`, `1m30s`) controlling how often each watch directory is scanned. Defaults to `5s` when omitted.                                                          |
 | `watches[].name`                   | string   | —               | **Required.** Logical name for this watch entry; used as a label in metrics.                                                                                                           |
 | `watches[].watchedPath`            | string   | —               | **Required.** Path to the directory to watch. Relative paths are resolved against the watcher's working directory.                                                                     |
 | `watches[].mediaType`              | string   | —               | **Required.** `movie` or `show`. Determines which library service (Radarr or Sonarr) is notified.                                                                                      |
@@ -68,13 +68,15 @@ Variables marked **Required** cause the binary to exit immediately if unset or e
 
 ### Shared (watcher and worker)
 
-| Variable                      | Type   | Default                              | Required     | Description                                                                                                                                             |
-| ----------------------------- | ------ | ------------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LOG_LEVEL`                   | string | `info`                               | Optional     | Log verbosity: `debug`, `info`, `warn`, or `error`. Unrecognised values fall back to `info`.                                                            |
-| `HATCHET_CLIENT_TOKEN`        | string | —                                    | **Required** | Hatchet API token.                                                                                                                                      |
-| `HEALTH_ADDR`                 | string | `:8080` (worker) / `:8081` (watcher) | Optional     | TCP address for the HTTP health server. Exposes `/healthz` (liveness) and `/readyz` (readiness). Always enabled; override to change the listen address. |
-| `METRICS_ADDR`                | string | `""`                                 | Optional     | TCP address for the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty.                                                            |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | string | `""`                                 | Optional     | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty.                                                        |
+| Variable                      | Type           | Default                              | Required     | Description                                                                                                                                             |
+| ----------------------------- | -------------- | ------------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LOG_LEVEL`                   | string         | `info`                               | Optional     | Log verbosity: `debug`, `info`, `warn`, or `error`. Unrecognised values fall back to `info`.                                                            |
+| `TEMPORAL_ADDRESS`            | `host:port`    | —                                    | **Required** | Temporal frontend address dialed by `client.Dial` (e.g. `temporal-frontend:7233`).                                                                      |
+| `TEMPORAL_NAMESPACE`          | string         | —                                    | **Required** | Temporal namespace the workflows execute in (e.g. `default`).                                                                                           |
+| `TEMPORAL_TASK_QUEUE`         | string         | —                                    | **Required** | Task queue the worker polls and the watcher dispatches to. The watcher and worker exit at startup if this is empty.                                     |
+| `HEALTH_ADDR`                 | string         | `:8080` (worker) / `:8081` (watcher) | Optional     | TCP address for the HTTP health server. Exposes `/healthz` (liveness) and `/readyz` (readiness). Always enabled; override to change the listen address. |
+| `METRICS_ADDR`                | string         | `""`                                 | Optional     | TCP address for the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty.                                                            |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | string         | `""`                                 | Optional     | OTLP gRPC endpoint for pushing metrics (e.g. `http://otel-collector:4317`). Disabled when empty.                                                        |
 
 ### Worker only
 

@@ -75,7 +75,7 @@ Emitted by the watcher on every scheduled directory scan.
 | `watcher_scan_duration_seconds`             | histogram | seconds | Wall-clock duration of each per-mapping directory walk.           |
 | `watcher_last_successful_scan_unix_seconds` | gauge     | seconds | Unix timestamp of the most recent successful per-mapping scan.    |
 | `watcher_files_discovered_total`            | counter   | —       | Files found during directory scans.                               |
-| `watcher_dispatches_total`                  | counter   | —       | Workflow dispatches successfully submitted to Hatchet.            |
+| `watcher_dispatches_total`                  | counter   | —       | Workflow dispatches successfully submitted to Temporal.           |
 | `watcher_dispatch_errors_total`             | counter   | —       | Workflow dispatch failures.                                       |
 
 ## Labels
