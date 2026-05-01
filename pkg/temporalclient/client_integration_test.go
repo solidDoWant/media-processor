@@ -36,7 +36,8 @@ func isolateTemporalConfig(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(emptyConfig, nil, 0o600))
 	t.Setenv("TEMPORAL_CONFIG_FILE", emptyConfig)
-	t.Setenv("TEMPORAL_PROFILE", "default")
+	t.Setenv("TEMPORAL_PROFILE", "")
+	t.
 }
 
 func TestDialHappyPath(t *testing.T) {
