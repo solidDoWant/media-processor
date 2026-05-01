@@ -87,5 +87,15 @@ func run(ctx context.Context, configPath string) error {
 	dispatch := newTemporalDispatch(temporalClient, taskQueue)
 	runScanLoop(ctx, cfg, instruments, dispatch)
 
+	// Hold the /metrics endpoint open for one Prometheus scrape after the scan
+	// loop exits so end-of-lifecycle metrics are observed before exporter
+	// shutdown. Use context.Background() because ctx is cancelled by SIGTERM,
+	// which would otherwise abort the wait we are explicitly trying to perform.
+	if err := metricsProvider.WaitForScrape(context.Background()); err != nil {
+		slog.WarnContext(ctx, "scrape-on-shutdown gate did not observe a scrape before timeout", slog.Any("err", err))
+	} else {
+		slog.InfoContext(ctx, "final Prometheus scrape observed after scan loop exit")
+	}
+
 	return nil
 }

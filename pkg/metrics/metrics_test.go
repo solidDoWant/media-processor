@@ -184,6 +184,125 @@ func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
 	require.NotNil(t, p.MeterProvider())
 }
 
+func TestWaitForScrape_ReturnsWhenScrapeArrives(t *testing.T) {
+	addr := freeAddr(t)
+
+	// Generous configured timeout — the test must not hit it on the happy path.
+	p, err := metrics.New(t.Context(),
+		metrics.WithMetricsAddr(addr),
+		metrics.WithScrapeWaitTimeout(5*time.Second),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	})
+
+	// Run WaitForScrape in a goroutine and trigger a scrape.
+	waitErr := make(chan error, 1)
+
+	go func() {
+		waitErr <- p.WaitForScrape(t.Context())
+	}()
+
+	// Small delay so WaitForScrape has time to drain and enter the select before
+	// the scrape arrives. Without this, the scrape could fill the buffer before
+	// the drain runs and then be cleared. The post-drain select would still
+	// observe the next scrape, but we want the test to verify the explicit
+	// "scrape arrives during the wait" path.
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	select {
+	case err := <-waitErr:
+		require.NoError(t, err, "WaitForScrape should return nil when a scrape arrives")
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitForScrape did not return after a scrape was served")
+	}
+}
+
+func TestWaitForScrape_HonorsTimeout(t *testing.T) {
+	addr := freeAddr(t)
+
+	p, err := metrics.New(t.Context(),
+		metrics.WithMetricsAddr(addr),
+		metrics.WithScrapeWaitTimeout(100*time.Millisecond),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	})
+
+	start := time.Now()
+	err = p.WaitForScrape(t.Context())
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "WaitForScrape should return an error when no scrape arrives before the timeout")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// Sanity-bound the elapsed time so we know the timeout actually fired
+	// (rather than ctx being cancelled by some unrelated cause).
+	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+	assert.Less(t, elapsed, 2*time.Second, "WaitForScrape should return shortly after the configured timeout")
+}
+
+func TestWaitForScrape_NoOpWhenNoHTTPServer(t *testing.T) {
+	// No metrics address configured → no Prometheus HTTP server, so WaitForScrape
+	// must return nil immediately rather than blocking on a non-existent gate.
+	p, err := metrics.New(t.Context(), metrics.WithScrapeWaitTimeout(10*time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	})
+
+	start := time.Now()
+	err = p.WaitForScrape(t.Context())
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 1*time.Second, "WaitForScrape should return immediately when no HTTP server is configured")
+}
+
+func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {
+	addr := freeAddr(t)
+	t.Setenv("METRICS_ADDR", addr)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "100ms")
+
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+
+	start := time.Now()
+	err = p.WaitForScrape(t.Context())
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 2*time.Second, "WaitForScrape should honor the env-configured 100ms timeout")
+}
+
+func TestNewFromEnv_ScrapeWaitTimeout_InvalidDurationErrors(t *testing.T) {
+	t.Setenv("METRICS_ADDR", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "not-a-duration")
+
+	_, _, err := metrics.NewFromEnv(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "METRICS_SCRAPE_WAIT_TIMEOUT")
+}
+
 func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
 	l := bindListener(t)
 
