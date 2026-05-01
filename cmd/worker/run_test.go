@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
 // TestRun_MissingTaskQueue verifies that the worker exits with a descriptive
@@ -92,6 +94,17 @@ func TestParseH265CRF(t *testing.T) {
 			assert.Equal(t, test.expected, got)
 		})
 	}
+}
+
+// TestWorkerStopTimeoutDefault locks in the requirement that an unset
+// WORKER_STOP_TIMEOUT falls back to media.DefaultTranscodeTimeout, since the
+// transcode activity is the ceiling for the longest expected drain.
+func TestWorkerStopTimeoutDefault(t *testing.T) {
+	t.Setenv("WORKER_STOP_TIMEOUT", "")
+
+	got, err := parseTimeout("WORKER_STOP_TIMEOUT", media.DefaultTranscodeTimeout)
+	require.NoError(t, err)
+	assert.Equal(t, media.DefaultTranscodeTimeout, got)
 }
 
 func TestParseTimeout(t *testing.T) {

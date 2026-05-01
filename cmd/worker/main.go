@@ -122,6 +122,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	workerStopTimeout, err := parseTimeout("WORKER_STOP_TIMEOUT", media.DefaultTranscodeTimeout)
+	if err != nil {
+		return err
+	}
+
 	activities, err := media.NewActivities(media.MediaWorkflowConfig{
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
 		MeterProvider:         metricsProvider.MeterProvider(),
@@ -143,7 +148,9 @@ func run(ctx context.Context) error {
 	}
 	defer shutdownTemporal()
 
-	w := worker.New(temporalClient, taskQueue, worker.Options{})
+	w := worker.New(temporalClient, taskQueue, worker.Options{
+		WorkerStopTimeout: workerStopTimeout,
+	})
 
 	activities.Register(w)
 

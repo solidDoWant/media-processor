@@ -163,5 +163,6 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Activity start-to-close timeout for the crop-detection step (e.g. `45m`, `1h`). |
 | `MEDIA_TRANSCODE_TIMEOUT` | Go duration | `4h` | Optional | Activity start-to-close timeout for the transcode step (e.g. `2h`, `8h`). |
+| `WORKER_STOP_TIMEOUT` | Go duration | `4h` | Optional | On SIGTERM, bounds how long the worker waits for in-flight Temporal activities to drain before cancelling them. Defaults to `MEDIA_TRANSCODE_TIMEOUT`'s default. |
 | `MEDIA_H265_CRF` | integer (1–51) | _(encoder default)_ | Optional | H.265 constant-quality (CRF) value. When unset or empty the encoder default is used; values outside 1–51 cause a fatal startup error. |
 | `METRICS_HIGH_CARDINALITY_LABELS` | `true` / `false` | `false` | Optional | When `true`, per-item labels (id, title, year, etc.) are attached to metric observations. |
