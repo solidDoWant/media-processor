@@ -9,90 +9,109 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	prometheusexporter "go.opentelemetry.io/otel/exporters/prometheus"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.temporal.io/sdk/client"
 )
 
-// newTestMeterProvider builds an OTel MeterProvider whose readings are
-// gathered via a Prometheus registry, so tests can introspect what the
-// adapter actually emitted by inspecting the Prometheus output.
-func newTestMeterProvider(t *testing.T) (*sdkmetric.MeterProvider, *prometheus.Registry) {
+// flushTimeout caps how long a test will wait for tally's reporting
+// goroutine to push values into the Prometheus registry. Tally flushes on a
+// fixed interval; the closer also blocks until a final flush completes.
+const flushTimeout = 5 * time.Second
+
+// buildHandler wires a tally-backed MetricsHandler against a fresh
+// Prometheus registry and returns both, alongside a flush function that
+// drains pending samples synchronously by closing the tally scope.
+func buildHandler(t *testing.T) (client.MetricsHandler, *prometheus.Registry, func()) {
 	t.Helper()
 
 	registry := prometheus.NewRegistry()
 
-	reader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(registry))
-	require.NoError(t, err)
+	handler, closer := NewMetricsHandler(registry)
 
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	flushed := false
+	flush := func() {
+		if flushed {
+			return
+		}
 
-	t.Cleanup(func() {
-		_ = provider.Shutdown(t.Context())
-	})
+		flushed = true
 
-	return provider, registry
+		done := make(chan error, 1)
+
+		go func() { done <- closer.Close() }()
+
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(flushTimeout):
+			t.Fatalf("tally scope did not flush within %s", flushTimeout)
+		}
+	}
+
+	t.Cleanup(flush)
+
+	return handler, registry, flush
 }
 
-func TestMetricsHandlerCounter(t *testing.T) {
-	provider, registry := newTestMeterProvider(t)
+func TestNewMetricsHandlerNilRegistererReturnsNopHandler(t *testing.T) {
+	handler, closer := NewMetricsHandler(nil)
 
-	handler := newMetricsHandler(provider)
-	counter := handler.Counter("temporal_request")
-	counter.Inc(3)
-	counter.Inc(2)
+	assert.Equal(t, client.MetricsNopHandler, handler)
+	require.NoError(t, closer.Close())
+}
 
-	gathered := gather(t, registry)
+func TestMetricsHandlerCounterAppearsOnRegistryWithTotalSuffix(t *testing.T) {
+	handler, registry, flush := buildHandler(t)
 
-	mf := findMetricFamily(t, gathered, "temporal_request_total")
+	handler.Counter("temporal_request").Inc(3)
+	handler.Counter("temporal_request").Inc(2)
+
+	flush()
+
+	mf := findMetricFamily(t, gather(t, registry), "temporal_request_total")
 	require.Len(t, mf.GetMetric(), 1)
 	assert.Equal(t, float64(5), mf.GetMetric()[0].GetCounter().GetValue())
 }
 
-func TestMetricsHandlerGauge(t *testing.T) {
-	provider, registry := newTestMeterProvider(t)
+func TestMetricsHandlerGaugeReportsLatestValue(t *testing.T) {
+	handler, registry, flush := buildHandler(t)
 
-	handler := newMetricsHandler(provider)
-	gauge := handler.Gauge("temporal_workers_busy")
-	gauge.Update(7)
-	gauge.Update(4) // most recent value wins for a synchronous gauge
+	handler.Gauge("temporal_workers_busy").Update(7)
+	handler.Gauge("temporal_workers_busy").Update(4)
 
-	gathered := gather(t, registry)
+	flush()
 
-	mf := findMetricFamily(t, gathered, "temporal_workers_busy")
+	mf := findMetricFamily(t, gather(t, registry), "temporal_workers_busy")
 	require.Len(t, mf.GetMetric(), 1)
 	assert.Equal(t, float64(4), mf.GetMetric()[0].GetGauge().GetValue())
 }
 
-func TestMetricsHandlerTimerRecordsMilliseconds(t *testing.T) {
-	provider, registry := newTestMeterProvider(t)
+func TestMetricsHandlerTimerEmitsHistogramSeconds(t *testing.T) {
+	handler, registry, flush := buildHandler(t)
 
-	handler := newMetricsHandler(provider)
-	timer := handler.Timer("temporal_long_request_latency")
-	timer.Record(250 * time.Millisecond)
+	handler.Timer("temporal_long_request_latency").Record(250 * time.Millisecond)
 
-	gathered := gather(t, registry)
+	flush()
 
-	mf := findMetricFamily(t, gathered, "temporal_long_request_latency_milliseconds")
+	mf := findMetricFamily(t, gather(t, registry), "temporal_long_request_latency_seconds")
 	require.Len(t, mf.GetMetric(), 1)
 
 	hist := mf.GetMetric()[0].GetHistogram()
-	require.NotNil(t, hist)
+	require.NotNil(t, hist, "timers should be emitted as histograms (not summaries)")
 	assert.Equal(t, uint64(1), hist.GetSampleCount())
-	assert.InDelta(t, 250.0, hist.GetSampleSum(), 0.001)
+	assert.InDelta(t, 0.25, hist.GetSampleSum(), 0.001)
 }
 
-func TestMetricsHandlerWithTagsLayersAttributes(t *testing.T) {
-	provider, registry := newTestMeterProvider(t)
+func TestMetricsHandlerWithTagsAttachesPromLabels(t *testing.T) {
+	handler, registry, flush := buildHandler(t)
 
-	root := newMetricsHandler(provider)
-	tagged := root.WithTags(map[string]string{"namespace": "default", "task_queue": "media"}).
-		WithTags(map[string]string{"task_queue": "override"}) // child overrides parent
+	tagged := handler.WithTags(map[string]string{"namespace": "default", "task_queue": "media"}).
+		WithTags(map[string]string{"task_queue": "override"})
 
 	tagged.Counter("temporal_request").Inc(1)
 
-	gathered := gather(t, registry)
+	flush()
 
-	mf := findMetricFamily(t, gathered, "temporal_request_total")
+	mf := findMetricFamily(t, gather(t, registry), "temporal_request_total")
 	require.Len(t, mf.GetMetric(), 1)
 
 	labels := map[string]string{}
@@ -104,33 +123,6 @@ func TestMetricsHandlerWithTagsLayersAttributes(t *testing.T) {
 	assert.Equal(t, "override", labels["task_queue"], "child WithTags should overwrite parent values for the same key")
 }
 
-func TestMetricsHandlerWithEmptyTagsReturnsSameHandler(t *testing.T) {
-	provider, _ := newTestMeterProvider(t)
-
-	root := newMetricsHandler(provider)
-	same := root.WithTags(nil)
-
-	assert.Same(t, root, same)
-}
-
-func TestMetricsHandlerInstrumentsAreSharedAcrossChildren(t *testing.T) {
-	provider, registry := newTestMeterProvider(t)
-
-	root := newMetricsHandler(provider)
-	root.WithTags(map[string]string{"namespace": "a"}).Counter("temporal_request").Inc(1)
-	root.WithTags(map[string]string{"namespace": "b"}).Counter("temporal_request").Inc(2)
-
-	gathered := gather(t, registry)
-
-	mf := findMetricFamily(t, gathered, "temporal_request_total")
-	// Two distinct attribute sets ⇒ two timeseries on a single metric family,
-	// confirming the underlying instrument is shared and only the attributes
-	// vary per child.
-	assert.Len(t, mf.GetMetric(), 2)
-}
-
-// gather collects the registry's metric families, failing the test if the
-// gather itself errors.
 func gather(t *testing.T, registry *prometheus.Registry) []*dto.MetricFamily {
 	t.Helper()
 
@@ -140,9 +132,6 @@ func gather(t *testing.T, registry *prometheus.Registry) []*dto.MetricFamily {
 	return mfs
 }
 
-// findMetricFamily looks up a metric family by its Prometheus name; if the
-// family is missing the test fails with a list of what was actually gathered,
-// so the failure message points to the likely cause (e.g. wrong unit suffix).
 func findMetricFamily(t *testing.T, gathered []*dto.MetricFamily, name string) *dto.MetricFamily {
 	t.Helper()
 

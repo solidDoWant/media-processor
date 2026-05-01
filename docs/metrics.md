@@ -67,15 +67,15 @@ Emitted by the worker during media workflow execution.
 
 ### Temporal SDK metrics (worker and watcher)
 
-When `METRICS_ADDR` is set, the Temporal Go SDK's internal counters, gauges, and timers are recorded onto the same MeterProvider that backs the application metrics, so they surface on the same `/metrics` endpoint. Their names are emitted unchanged by the SDK and follow a `temporal_*` prefix; common examples include:
+When `METRICS_ADDR` is set, the Temporal Go SDK's internal counters, gauges, and timers are bridged onto the same Prometheus registry that serves `/metrics` via [`go.temporal.io/sdk/contrib/tally`](https://pkg.go.dev/go.temporal.io/sdk/contrib/tally) and the [tally → Prometheus reporter](https://pkg.go.dev/github.com/uber-go/tally/v4/prometheus). The SDK's instrument names are exported with the conventional Prometheus suffixes (`_total` for counters, `_seconds` for timer histograms); common examples include:
 
-| Metric                                            | Kind      | Description                                                                |
-| ------------------------------------------------- | --------- | -------------------------------------------------------------------------- |
-| `temporal_request`                                | counter   | gRPC requests issued by the SDK to the Temporal frontend.                 |
-| `temporal_long_request_latency_milliseconds`      | histogram | Latency of long-poll RPCs (e.g. workflow/activity task pollers).          |
-| `temporal_activity_schedule_to_start_latency_milliseconds` | histogram | Time between an activity being scheduled and a worker picking it up.    |
+| Metric                                                 | Kind      | Description                                                            |
+| ------------------------------------------------------ | --------- | ---------------------------------------------------------------------- |
+| `temporal_request_total`                               | counter   | gRPC requests issued by the SDK to the Temporal frontend.              |
+| `temporal_long_request_latency_seconds`                | histogram | Latency of long-poll RPCs (e.g. workflow/activity task pollers).       |
+| `temporal_activity_schedule_to_start_latency_seconds`  | histogram | Time between an activity being scheduled and a worker picking it up. |
 
-Timers are recorded in milliseconds and exported with the `_milliseconds` Prometheus suffix (per OTel unit-naming conventions). Refer to the [Temporal Go SDK metrics reference](https://docs.temporal.io/references/sdk-metrics) for the full catalogue and descriptions, since the exact set of instruments depends on the SDK version in use.
+Refer to the [Temporal Go SDK metrics reference](https://docs.temporal.io/references/sdk-metrics) for the full catalogue and descriptions, since the exact set of instruments depends on the SDK version in use.
 
 ### Watcher metrics
 

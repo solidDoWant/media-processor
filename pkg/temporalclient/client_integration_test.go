@@ -152,7 +152,13 @@ func TestDialEmitsTemporalSDKMetrics(t *testing.T) {
 		_ = provider.Shutdown(shutdownCtx)
 	}()
 
-	c, err := temporalclient.Dial(t.Context(), temporalclient.WithMeterProvider(provider.MeterProvider()))
+	handler, closer := temporalclient.NewMetricsHandler(provider.PrometheusRegisterer())
+
+	defer func() {
+		_ = closer.Close()
+	}()
+
+	c, err := temporalclient.Dial(t.Context(), temporalclient.WithMetricsHandler(handler))
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -161,12 +167,18 @@ func TestDialEmitsTemporalSDKMetrics(t *testing.T) {
 	_, err = c.CheckHealth(t.Context(), &client.CheckHealthRequest{})
 	require.NoError(t, err)
 
+	// Force a synchronous flush of the tally scope so the SDK metrics are
+	// guaranteed to be on the registry before we scrape (instead of waiting
+	// up to one report interval). Close is idempotent, so the deferred
+	// cleanup above is a no-op after this point.
+	require.NoError(t, closer.Close())
+
 	body := scrapeMetrics(t, addr)
 
-	// The SDK emits a family of `temporal_*` metrics on every gRPC call. A
-	// substring match on the prefix is robust to SDK version changes that
-	// rename specific instruments while preserving the convention.
-	assert.Contains(t, body, "temporal_", "Temporal SDK metrics should be present on /metrics; got:\n"+body)
+	// The SDK emits `temporal_request_*` on every outbound gRPC call. Match
+	// on this prefix specifically (rather than the broader `temporal_`) so
+	// the assertion can't be satisfied by a stray HELP/TYPE comment line.
+	assert.Contains(t, body, "temporal_request", "Temporal SDK metrics should be present on /metrics; got:\n"+body)
 }
 
 // freeAddr returns a local TCP address with an available port.

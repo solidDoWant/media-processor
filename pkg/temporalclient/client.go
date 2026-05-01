@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"time"
 
-	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/envconfig"
 )
@@ -28,16 +27,16 @@ const healthCheckTimeout = 10 * time.Second
 type Option func(*config)
 
 type config struct {
-	meterProvider otelmetric.MeterProvider
+	metricsHandler client.MetricsHandler
 }
 
-// WithMeterProvider supplies the OTel MeterProvider that the Temporal SDK
-// will record its internal counters/gauges/timers into. Callers should pass
-// the provider returned by pkg/metrics so SDK metrics surface on the same
-// /metrics endpoint as application metrics. When omitted, SDK metrics are
-// discarded.
-func WithMeterProvider(mp otelmetric.MeterProvider) Option {
-	return func(c *config) { c.meterProvider = mp }
+// WithMetricsHandler installs the supplied client.MetricsHandler on the
+// Temporal SDK client so SDK-internal counters/gauges/timers flow through
+// it. Callers should construct the handler with [NewMetricsHandler] and own
+// its lifecycle (the returned closer must be invoked at process shutdown).
+// When omitted, SDK metrics are silently dropped.
+func WithMetricsHandler(h client.MetricsHandler) Option {
+	return func(c *config) { c.metricsHandler = h }
 }
 
 // Dial loads Temporal client options via envconfig, expands a file:// API key
@@ -93,8 +92,8 @@ func buildOptions(cfg *config) (client.Options, error) {
 		opts.Credentials = client.NewAPIKeyDynamicCredentials(apiKeyFileCallback(apiKeyFile))
 	}
 
-	if cfg.meterProvider != nil {
-		opts.MetricsHandler = newMetricsHandler(cfg.meterProvider)
+	if cfg.metricsHandler != nil {
+		opts.MetricsHandler = cfg.metricsHandler
 	}
 
 	opts.Logger = newLogger()

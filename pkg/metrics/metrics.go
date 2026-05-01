@@ -22,6 +22,7 @@ import (
 // Both are optional and independently controlled by the options passed to New.
 type Provider struct {
 	meterProvider otelmetric.MeterProvider
+	promRegistry  *prometheus.Registry
 	shutdown      func(context.Context) error
 }
 
@@ -56,10 +57,11 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	var (
 		readers       []sdkmetric.Reader
 		shutdownFuncs []func(context.Context) error
+		promRegistry  *prometheus.Registry
 	)
 
 	if cfg.metricsAddr != "" {
-		promRegistry := prometheus.NewRegistry()
+		promRegistry = prometheus.NewRegistry()
 
 		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
 		if err != nil {
@@ -108,6 +110,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	if len(readers) == 0 {
 		return &Provider{
 			meterProvider: noop.NewMeterProvider(),
+			promRegistry:  promRegistry,
 			shutdown:      func(context.Context) error { return nil },
 		}, nil
 	}
@@ -122,6 +125,7 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 
 	return &Provider{
 		meterProvider: sdkProvider,
+		promRegistry:  promRegistry,
 		shutdown: func(ctx context.Context) error {
 			var errs []error
 			// Shut down in reverse (LIFO) order so the OTel MeterProvider is flushed
@@ -139,6 +143,23 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 // MeterProvider returns the underlying OTel MeterProvider.
 func (p *Provider) MeterProvider() otelmetric.MeterProvider {
 	return p.meterProvider
+}
+
+// PrometheusRegisterer returns the Prometheus registry that backs the
+// /metrics endpoint, or nil when no Prometheus exporter is active. Callers
+// (e.g. pkg/temporalclient) use this to register additional collectors —
+// such as Temporal SDK metrics via the tally→prom bridge — alongside the
+// application's own OTel-sourced metrics.
+//
+// The return type is the prometheus.Registerer interface; a nil *Registry
+// is mapped to a nil interface so callers can use a plain `if reg == nil`
+// check without falling into the typed-nil interface gotcha.
+func (p *Provider) PrometheusRegisterer() prometheus.Registerer {
+	if p.promRegistry == nil {
+		return nil
+	}
+
+	return p.promRegistry
 }
 
 // Shutdown stops all active exporters and flushes buffered metrics.
