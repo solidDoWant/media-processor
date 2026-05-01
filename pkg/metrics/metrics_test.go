@@ -200,21 +200,24 @@ func TestWaitForScrape_ReturnsWhenScrapeArrives(t *testing.T) {
 		_ = p.Shutdown(ctx) //nolint:errcheck
 	})
 
-	// Run WaitForScrape in a goroutine and trigger a scrape.
+	// Issue an initial synchronous scrape before starting WaitForScrape so the
+	// notify-buffer is in a known pre-filled state. WaitForScrape's drain step
+	// then deterministically clears that buffered tick, leaving the second
+	// scrape (issued below) as the only event that can satisfy the wait. This
+	// avoids the timing-dependent goroutine-ordering hazard of starting
+	// WaitForScrape and the first scrape concurrently.
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
 	waitErr := make(chan error, 1)
 
 	go func() {
 		waitErr <- p.WaitForScrape(t.Context())
 	}()
 
-	// Small delay so WaitForScrape has time to drain and enter the select before
-	// the scrape arrives. Without this, the scrape could fill the buffer before
-	// the drain runs and then be cleared. The post-drain select would still
-	// observe the next scrape, but we want the test to verify the explicit
-	// "scrape arrives during the wait" path.
-	time.Sleep(50 * time.Millisecond)
-
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
+	resp, err = (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -272,6 +275,50 @@ func TestWaitForScrape_NoOpWhenNoHTTPServer(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Less(t, elapsed, 1*time.Second, "WaitForScrape should return immediately when no HTTP server is configured")
+}
+
+func TestWaitForScrape_DisabledByExplicitZero(t *testing.T) {
+	addr := freeAddr(t)
+
+	// Explicit zero must short-circuit the wait rather than fall back to the
+	// default 60s. This distinguishes "not provided" (which uses the default)
+	// from "explicitly disabled" (which returns immediately).
+	p, err := metrics.New(t.Context(),
+		metrics.WithMetricsAddr(addr),
+		metrics.WithScrapeWaitTimeout(0),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		_ = p.Shutdown(ctx) //nolint:errcheck
+	})
+
+	start := time.Now()
+	err = p.WaitForScrape(t.Context())
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 500*time.Millisecond, "WaitForScrape should return immediately when timeout is explicitly zero")
+}
+
+func TestNewFromEnv_ScrapeWaitTimeout_DisabledViaZeroEnvVar(t *testing.T) {
+	addr := freeAddr(t)
+	t.Setenv("METRICS_ADDR", addr)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "0s")
+
+	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+
+	start := time.Now()
+	err = p.WaitForScrape(t.Context())
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 500*time.Millisecond, "METRICS_SCRAPE_WAIT_TIMEOUT=0s should disable the gate")
 }
 
 func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {

@@ -36,7 +36,7 @@ type Provider struct {
 type config struct {
 	metricsAddr       string
 	otlpEndpoint      string
-	scrapeWaitTimeout time.Duration
+	scrapeWaitTimeout *time.Duration
 }
 
 // Option configures Provider construction.
@@ -54,10 +54,14 @@ func WithOTLPEndpoint(endpoint string) Option {
 	return func(c *config) { c.otlpEndpoint = endpoint }
 }
 
-// WithScrapeWaitTimeout sets the upper bound for Provider.WaitForScrape. When
-// not supplied, DefaultScrapeWaitTimeout is used.
+// WithScrapeWaitTimeout sets the upper bound for Provider.WaitForScrape.
+// When this option is not supplied at all, DefaultScrapeWaitTimeout is used.
+// A non-positive value (e.g. 0) disables the gate: WaitForScrape returns nil
+// immediately rather than blocking. Distinguishing "not provided" from
+// "explicitly zero" lets operators short-circuit the wait via
+// METRICS_SCRAPE_WAIT_TIMEOUT=0s without falling back to the default.
 func WithScrapeWaitTimeout(d time.Duration) Option {
-	return func(c *config) { c.scrapeWaitTimeout = d }
+	return func(c *config) { c.scrapeWaitTimeout = &d }
 }
 
 // New creates a Provider. If neither WithMetricsAddr nor WithOTLPEndpoint is supplied,
@@ -68,9 +72,12 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		opt(cfg)
 	}
 
-	scrapeWaitTimeout := cfg.scrapeWaitTimeout
-	if scrapeWaitTimeout <= 0 {
-		scrapeWaitTimeout = DefaultScrapeWaitTimeout
+	// Resolve the configured timeout. nil → not provided → use the default.
+	// A non-nil value (including zero or negative) is honored as-is; WaitForScrape
+	// treats a non-positive timeout as "gate disabled" and returns nil immediately.
+	scrapeWaitTimeout := DefaultScrapeWaitTimeout
+	if cfg.scrapeWaitTimeout != nil {
+		scrapeWaitTimeout = *cfg.scrapeWaitTimeout
 	}
 
 	var (
@@ -207,8 +214,9 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 
 // WaitForScrape blocks until the /metrics HTTP handler serves a request after
 // this call begins, the configured scrape-wait timeout elapses, or ctx is
-// cancelled (whichever happens first). It is a no-op returning nil when no
-// Prometheus HTTP server is configured.
+// cancelled (whichever happens first). It returns nil immediately when no
+// Prometheus HTTP server is configured or when the configured timeout is
+// non-positive (gate explicitly disabled).
 //
 // Intended use: invoke after process drain but before exporter shutdown so
 // Prometheus has the opportunity to collect a final scrape covering
@@ -217,6 +225,10 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 // context.Background()) — passing a SIGTERM-cancelled context defeats the gate.
 func (p *Provider) WaitForScrape(ctx context.Context) error {
 	if p.scrapeNotify == nil {
+		return nil
+	}
+
+	if p.scrapeWaitTimeout <= 0 {
 		return nil
 	}
 
