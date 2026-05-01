@@ -314,8 +314,6 @@ resources:
         identifier: watcher-metrics
       endpoints:
         - port: metrics
-          scheme: http
-          path: /metrics
           interval: 1m
           scrapeTimeout: 10s
   rawResources:
@@ -329,9 +327,6 @@ resources:
       # level deeper.
       spec:
         spec:
-          namespaceSelector:
-            matchNames:
-              - '{{ .Release.Namespace }}'
           # selectorLabels: chart name + release instance + controller. Uses the bjw-s
           # name helper so the chart-name source of truth stays in lockstep with the
           # pod's own selectorLabels.
@@ -342,7 +337,5 @@ resources:
               app.kubernetes.io/controller: worker
           podMetricsEndpoints:
             - port: metrics
-              scheme: http
-              path: /metrics
               interval: 1m
               scrapeTimeout: 10s
