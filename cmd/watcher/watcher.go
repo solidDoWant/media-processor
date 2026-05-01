@@ -129,25 +129,34 @@ func workflowID(absFilePath string) string {
 }
 
 // newTemporalDispatch returns a dispatchFunc that calls ExecuteWorkflow on the given
-// Temporal client with a deterministic WorkflowID and AllowDuplicate reuse policy.
+// Temporal client with a deterministic WorkflowID, AllowDuplicate reuse policy, and
+// Fail conflict policy.
 //
-// AllowDuplicate is the right fit for the watcher's three reuse scenarios:
-//   - A currently-running workflow with the same ID is rejected by Temporal regardless
-//     of policy, giving free multi-watcher dedup.
+// The reuse policy controls behaviour when the previous run for this WorkflowID has
+// already closed; AllowDuplicate is the right fit for the watcher's two re-run
+// scenarios:
 //   - A previously failed workflow can be retried on the next tick.
 //   - A previously completed workflow can run again when an operator removes both the
 //     source file and its sentinel and re-adds the file (the parent issue #131's
 //     stated equivalent of today's `WithRunKey` semantics).
 //
-// When Temporal returns WorkflowExecutionAlreadyStarted (the running-duplicate case),
-// the dispatch returns errWorkflowAlreadyStarted so the scan loop can suppress both
-// the dispatch and dispatch-error counters for that file.
+// The conflict policy controls behaviour when a run for this WorkflowID is currently
+// in progress. Fail makes Temporal reject the duplicate, and
+// WorkflowExecutionErrorWhenAlreadyStarted opts the Go SDK out of its default
+// "swallow the error and attach to the existing run" behaviour so the rejection
+// propagates as serviceerror.WorkflowExecutionAlreadyStarted. Without both, every
+// duplicate dispatch from a peer watcher would silently be counted as a fresh
+// dispatch, over-counting dispatchesTotal under multi-watcher conditions. When the
+// conflict fires, the dispatch returns errWorkflowAlreadyStarted so the scan loop
+// can suppress both the dispatch and dispatch-error counters for that file.
 func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
 	return func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error {
 		options := client.StartWorkflowOptions{
-			ID:                    workflowID(filePath),
-			TaskQueue:             taskQueue,
-			WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+			ID:                                       workflowID(filePath),
+			TaskQueue:                                taskQueue,
+			WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+			WorkflowIDConflictPolicy:                 enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+			WorkflowExecutionErrorWhenAlreadyStarted: true,
 		}
 
 		input := mediatypes.MediaInput{
