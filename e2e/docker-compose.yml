@@ -1,81 +1,77 @@
 services:
   postgres:
     image: postgres:18
-    # Hatchet uses PostgreSQL as its message queue (SERVER_MSGQUEUE_KIND=postgres),
-    # which requires many concurrent connections for its internal pollers and
-    # listeners regardless of active workflow count. The default limit of 100 is
-    # too low; 200 is sufficient for a single engine instance.
-    command: postgres -c 'max_connections=200'
     hostname: postgres
     environment:
-      POSTGRES_USER: hatchet
-      POSTGRES_PASSWORD: hatchet
-      POSTGRES_DB: hatchet
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
     ports:
       - "5436:5432"
     volumes:
-      - e2e_hatchet_postgres_data:/var/lib/postgresql
+      - e2e_temporal_postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-      start_period: 10s
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
 
-  migration:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:v0.83.37
-    command: /hatchet/hatchet-migrate
+  temporal-setup:
+    image: temporalio/admin-tools:1.31.0
+    restart: "on-failure:6"
     environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  setup-config:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:v0.83.37
-    command: >
-      /hatchet/hatchet-admin quickstart
-      --skip certs
-      --generated-config-dir /hatchet/config
-      --overwrite=false
-    environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-      SERVER_MSGQUEUE_KIND: postgres
-      SERVER_AUTH_COOKIE_DOMAIN: "localhost:8080"
-      SERVER_AUTH_COOKIE_INSECURE: "t"
-      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
-      SERVER_GRPC_INSECURE: "t"
-      SERVER_GRPC_BROADCAST_ADDRESS: "localhost:7079"
-      SERVER_DEFAULT_ENGINE_VERSION: "V1"
-      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: "hatchet-engine:7070"
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres
+      SQL_PASSWORD: temporal
     volumes:
-      - e2e_hatchet_certs:/hatchet/certs
-      - e2e_hatchet_config:/hatchet/config
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh"]
+    command: /scripts/setup-postgres.sh
     depends_on:
-      migration:
-        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 
-  hatchet-engine:
-    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:v0.83.37
-    command: /hatchet/hatchet-engine --config /hatchet/config
+  temporal:
+    image: temporalio/server:1.31.0
     restart: on-failure
-    ports:
-      - "7079:7070"
     environment:
-      DATABASE_URL: "postgres://hatchet:hatchet@postgres:5432/hatchet"
-      SERVER_MSGQUEUE_KIND: postgres
-      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
-      SERVER_GRPC_INSECURE: "t"
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "127.0.0.1:17233:7233"
     volumes:
-      - e2e_hatchet_certs:/hatchet/certs
-      - e2e_hatchet_config:/hatchet/config
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig:ro
     depends_on:
-      setup-config:
+      temporal-setup:
         condition: service_completed_successfully
-      migration:
-        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+
+  temporal-create-namespace:
+    image: temporalio/admin-tools:1.31.0
+    restart: "on-failure:5"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      DEFAULT_NAMESPACE: default
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh"]
+    command: /scripts/create-namespace.sh
+    depends_on:
+      temporal:
+        condition: service_healthy
 
   watcher:
     image: watcher:latest
@@ -93,15 +89,15 @@ services:
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
       - ./fixtures/watcher.yaml:/etc/watcher.yaml:ro
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
-      HATCHET_CLIENT_TLS_STRATEGY: none
-      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor-e2e
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
     command: ["--config", "/etc/watcher.yaml"]
     depends_on:
-      hatchet-engine:
-        condition: service_started
+      temporal-create-namespace:
+        condition: service_completed_successfully
 
   worker:
     image: worker:latest
@@ -124,9 +120,9 @@ services:
       - /dev:/dev
       - /tmp/e2e-media-processor:/tmp/e2e-media-processor
     environment:
-      HATCHET_CLIENT_TOKEN: "${HATCHET_CLIENT_TOKEN:-}"
-      HATCHET_CLIENT_TLS_STRATEGY: none
-      HATCHET_CLIENT_HOST_PORT: hatchet-engine:7070
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor-e2e
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878
@@ -135,8 +131,8 @@ services:
       SONARR_API_KEY: e2e-sonarr-api-key-e2e
       MEDIA_H265_CRF: "51"
     depends_on:
-      hatchet-engine:
-        condition: service_started
+      temporal-create-namespace:
+        condition: service_completed_successfully
 
   radarr:
     image: ghcr.io/home-operations/radarr:6.1.2
@@ -173,6 +169,4 @@ services:
       - "host.docker.internal:host-gateway"
 
 volumes:
-  e2e_hatchet_postgres_data:
-  e2e_hatchet_config:
-  e2e_hatchet_certs:
+  e2e_temporal_postgres_data:
