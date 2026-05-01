@@ -70,10 +70,11 @@ func Dial(ctx context.Context, reg prometheus.Registerer) (client.Client, func()
 
 		closed = true
 
-		// Flush the tally reporter before closing the client so any final
-		// SDK metrics emitted during teardown reach the Prometheus registry.
-		_ = metricsCloser.Close()
+		// Close the client first so any SDK metrics emitted during its
+		// teardown land in the tally scope, then close the scope to flush
+		// those final samples through to the Prometheus registry.
 		c.Close()
+		_ = metricsCloser.Close()
 	}
 
 	return c, shutdown, nil

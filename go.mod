@@ -13,6 +13,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
 	github.com/stretchr/testify v1.11.1
+	github.com/uber-go/tally/v4 v4.1.17
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.65.0
@@ -21,13 +22,9 @@ require (
 	go.temporal.io/api v1.62.11
 	go.temporal.io/sdk v1.43.0
 	go.temporal.io/sdk/contrib/envconfig v1.0.1
+	go.temporal.io/sdk/contrib/tally v0.2.0
 	golift.io/starr v1.3.1
 	gopkg.in/yaml.v3 v3.0.1
-)
-
-require (
-	github.com/uber-go/tally/v4 v4.1.17
-	go.temporal.io/sdk/contrib/tally v0.2.0
 )
 
 require (
