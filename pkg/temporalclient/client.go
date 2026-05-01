@@ -13,7 +13,10 @@ package temporalclient
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +42,7 @@ const healthCheckTimeout = 10 * time.Second
 // into dynamic credentials when present, and verifies the gRPC connection via
 // CheckHealth before returning. Callers must close the returned client.
 func Dial(ctx context.Context) (client.Client, error) {
-	opts, err := buildOptions()
+	opts, err := buildOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +65,11 @@ func Dial(ctx context.Context) (client.Client, error) {
 
 // buildOptions loads client.Options via envconfig, replacing a file:// API key
 // with dynamic credentials backed by os.ReadFile. A one-time validation read
-// surfaces a misconfigured path at startup rather than at the first RPC.
-func buildOptions() (client.Options, error) {
+// surfaces a misconfigured path at startup rather than at the first RPC. The
+// loaded key's JWT claims (when applicable) are emitted at debug level so an
+// operator can confirm which credential was loaded without exposing the
+// signing material.
+func buildOptions(ctx context.Context) (client.Options, error) {
 	profile, err := envconfig.LoadClientConfigProfile(envconfig.LoadClientConfigProfileOptions{})
 	if err != nil {
 		return client.Options{}, fmt.Errorf("load temporal profile: %w", err)
@@ -74,19 +80,27 @@ func buildOptions() (client.Options, error) {
 		return client.Options{}, err
 	}
 
+	inlineAPIKey := profile.APIKey
+
 	opts, err := profile.ToClientOptions(envconfig.ToClientOptionsRequest{})
 	if err != nil {
 		return client.Options{}, fmt.Errorf("build temporal client options: %w", err)
 	}
 
-	if apiKeyFile != "" {
-		if _, err := readAPIKeyFile(apiKeyFile); err != nil {
+	switch {
+	case apiKeyFile != "":
+		key, err := readAPIKeyFile(apiKeyFile)
+		if err != nil {
 			return client.Options{}, fmt.Errorf("validate api key file: %w", err)
 		}
+
+		logAPIKeyClaims(ctx, slog.String("path", apiKeyFile), key)
 
 		opts.Credentials = client.NewAPIKeyDynamicCredentials(func(context.Context) (string, error) {
 			return readAPIKeyFile(apiKeyFile)
 		})
+	case inlineAPIKey != "":
+		logAPIKeyClaims(ctx, slog.String("source", "env-or-toml"), inlineAPIKey)
 	}
 
 	return opts, nil
@@ -109,6 +123,49 @@ func readAPIKeyFile(path string) (string, error) {
 	}
 
 	return key, nil
+}
+
+// logAPIKeyClaims attempts to decode the API key as a JWT and log its claims
+// at debug level so an operator can confirm which credential was loaded —
+// e.g. that sub/aud/exp match the expected service identity and lifetime.
+//
+// Best-effort: silently no-ops for non-JWT keys (Temporal accepts any opaque
+// bearer string). Only the decoded claims payload is logged — never the full
+// token, header, or signature — so log records cannot be replayed as
+// credentials. The signing material would still be needed to mint a new
+// token, and that is never observable here.
+func logAPIKeyClaims(ctx context.Context, sourceAttr slog.Attr, apiKey string) {
+	claims, ok := decodeJWTClaims(apiKey)
+	if !ok {
+		slog.DebugContext(ctx, "loaded temporal api key (not a JWT)", sourceAttr)
+
+		return
+	}
+
+	slog.DebugContext(ctx, "loaded temporal api key", sourceAttr, slog.Any("claims", claims))
+}
+
+// decodeJWTClaims parses the claims segment of a JWS Compact-serialized JWT.
+// It does not verify the signature; the caller has already chosen to trust
+// the source of the token (env, TOML, or a mounted Secret file). Returns
+// (claims, true) for a well-formed JWT, (nil, false) otherwise.
+func decodeJWTClaims(token string) (map[string]any, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, false
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, false
+	}
+
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, false
+	}
+
+	return claims, true
 }
 
 // extractAPIKeyFile detects a file:// API key, validates the form, and clears

@@ -1,6 +1,9 @@
 package temporalclient
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,6 +76,59 @@ func TestExtractAPIKeyFile(t *testing.T) {
 
 			assert.Equal(t, test.expected, got)
 			assert.Equal(t, test.expectedKey, profile.APIKey)
+		})
+	}
+}
+
+func TestDecodeJWTClaims(t *testing.T) {
+	validJWT := func(t *testing.T, claims map[string]any) string {
+		t.Helper()
+
+		payload, err := json.Marshal(claims)
+		require.NoError(t, err)
+
+		// Use placeholder header and signature segments — decodeJWTClaims only
+		// inspects the middle segment, so the other two need only be present
+		// and base64-url decodable to the parser. The signature is intentionally
+		// an arbitrary value: this code path never verifies it.
+		return strings.Join([]string{
+			base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)),
+			base64.RawURLEncoding.EncodeToString(payload),
+			base64.RawURLEncoding.EncodeToString([]byte("placeholder-signature")),
+		}, ".")
+	}
+
+	t.Run("valid JWT returns claims", func(t *testing.T) {
+		claims := map[string]any{
+			"sub":   "service@tenant",
+			"iss":   "https://login.example/",
+			"aud":   "https://api.example/",
+			"exp":   float64(1735689600), // JSON numbers decode as float64
+			"scope": "workflow:write",
+		}
+
+		got, ok := decodeJWTClaims(validJWT(t, claims))
+		require.True(t, ok)
+		assert.Equal(t, claims, got)
+	})
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty string", input: ""},
+		{name: "no dots (opaque key)", input: "tmprl_abcdef"},
+		{name: "two segments", input: "header.payload"},
+		{name: "four segments", input: "a.b.c.d"},
+		{name: "middle segment is not base64url", input: "header.!!!.signature"},
+		{name: "middle segment is base64 of non-JSON", input: "header." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".sig"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := decodeJWTClaims(test.input)
+			assert.False(t, ok)
+			assert.Nil(t, got)
 		})
 	}
 }
