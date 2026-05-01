@@ -37,7 +37,7 @@ media-processor/
 ├── pkg/
 │   ├── ffmpeg/                # In-process FFmpeg wrapper (CGO via go-astiav)
 │   ├── ffprobe/               # In-process ffprobe-equivalent inspector (CGO via go-astiav)
-│   ├── logging/               # zerolog-backed slog setup
+│   ├── logging/               # slog handler setup
 │   ├── medialib/              # MediaType/Movie/Episode domain types + radarr/sonarr API clients
 │   ├── metrics/               # Prometheus + OTLP metrics provider
 │   └── webhook/               # Outbound failure-notification HTTP client
