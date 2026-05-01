@@ -7,14 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRun_MissingToken verifies that the watcher exits with a descriptive error
-// when HATCHET_CLIENT_TOKEN is not set, even when the config file is valid.
-func TestRun_MissingToken(t *testing.T) {
-	t.Setenv("HATCHET_CLIENT_TOKEN", "")
+// TestRun_MissingTaskQueue verifies that the watcher exits with a descriptive error
+// when TEMPORAL_TASK_QUEUE is not set, even when the config file is valid.
+func TestRun_MissingTaskQueue(t *testing.T) {
+	t.Setenv("TEMPORAL_TASK_QUEUE", "")
 
 	cfgPath := writeTempConfig(t, "watches: []")
 
 	err := run(t.Context(), cfgPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "HATCHET_CLIENT_TOKEN")
+	assert.Contains(t, err.Error(), "TEMPORAL_TASK_QUEUE")
 }

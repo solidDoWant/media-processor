@@ -8,9 +8,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	v0Client "github.com/hatchet-dev/hatchet/pkg/client" //nolint:staticcheck // needed for WithLogger; no new-SDK equivalent
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	"go.temporal.io/sdk/client"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
@@ -33,6 +33,11 @@ func main() {
 
 func run(ctx context.Context, configPath string) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
+
+	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
+	if taskQueue == "" {
+		return fmt.Errorf("TEMPORAL_TASK_QUEUE is not set")
+	}
 
 	const defaultHealthAddr = ":8081"
 
@@ -57,49 +62,48 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("invalid watch configuration: %w", err)
 	}
 
-	if os.Getenv("HATCHET_CLIENT_TOKEN") == "" {
-		return fmt.Errorf("HATCHET_CLIENT_TOKEN is not set")
-	}
-
 	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer shutdown()
 
-	clientLogger := logging.NewZerologLogger("client")
+	instruments, err := newScanInstruments(metricsProvider.MeterProvider())
+	if err != nil {
+		return fmt.Errorf("register scan metrics: %w", err)
+	}
 
-	client, err := hatchet.NewClient(
-		v0Client.WithLogger(&clientLogger), //nolint:staticcheck // no new-SDK equivalent for WithLogger
+	temporalClient, err := client.Dial(client.Options{
+		HostPort:  os.Getenv("TEMPORAL_ADDRESS"),
+		Namespace: os.Getenv("TEMPORAL_NAMESPACE"),
+	})
+	if err != nil {
+		return fmt.Errorf("dial Temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	// CheckHealth verifies the gRPC connection to the frontend before the
+	// scan loop begins; without it, Dial returns successfully even when the
+	// server is unreachable and the watcher silently spins.
+	healthCheckCtx, healthCheckCancel := context.WithTimeout(ctx, 10*time.Second)
+
+	_, healthErr := temporalClient.CheckHealth(healthCheckCtx, &client.CheckHealthRequest{})
+
+	healthCheckCancel()
+
+	if healthErr != nil {
+		return fmt.Errorf("temporal health check failed: %w", healthErr)
+	}
+
+	slog.InfoContext(ctx, "connected to Temporal, starting scan loop",
+		slog.String("task_queue", taskQueue),
+		slog.Duration("interval", cfg.ScanInterval.Duration()),
 	)
-	if err != nil {
-		return fmt.Errorf("connect to Hatchet: %w", err)
-	}
-
-	slog.Info("connected to Hatchet")
-
-	scanWorkflow, err := NewScanWorkflow(client, cfg, metricsProvider.MeterProvider())
-	if err != nil {
-		return fmt.Errorf("create scan workflow: %w", err)
-	}
-
-	watcherLogger := logging.NewZerologLogger("watcher")
-
-	worker, err := client.NewWorker("mediaprocessor-watcher",
-		hatchet.WithLogger(&watcherLogger),
-		hatchet.WithWorkflows(scanWorkflow),
-	)
-	if err != nil {
-		return fmt.Errorf("create watcher worker: %w", err)
-	}
-
-	slog.Info("starting directory scan worker", "schedule", cfg.CronSchedule)
 
 	healthServer.SetReady()
 
-	if err := worker.StartBlocking(ctx); err != nil {
-		return fmt.Errorf("watcher stopped: %w", err)
-	}
+	dispatch := newTemporalDispatch(temporalClient, taskQueue)
+	runScanLoop(ctx, cfg, instruments, dispatch)
 
 	return nil
 }

@@ -10,9 +10,9 @@
     },
     "Config": {
       "properties": {
-        "cronSchedule": {
-          "$ref": "#/$defs/CronExpression",
-          "description": "CronSchedule controls how often the watcher scans directories (default: every 5 seconds).\nUses Hatchet's 6-field cron format with a leading seconds field, e.g. \"*/5 * * * * *\"."
+        "scanInterval": {
+          "$ref": "#/$defs/Interval",
+          "description": "ScanInterval controls how often the watcher walks each configured watch directory.\nSpecified as a Go duration string (e.g. \"5s\", \"1m30s\"). Defaults to 5 seconds when omitted."
         },
         "watches": {
           "items": {
@@ -26,10 +26,9 @@
       "type": "object",
       "description": "Config is the top-level watcher configuration loaded from the YAML config file."
     },
-    "CronExpression": {
+    "Interval": {
       "type": "string",
-      "pattern": "^(\\S+ ){5}\\S+$",
-      "description": "Hatchet 6-field cron expression (seconds-leading) controlling how often the watcher scans directories. Example: \"*/5 * * * * *\" runs every 5 seconds."
+      "description": "Go duration string (e.g. \"5s\", \"1m30s\") between directory scans. Defaults to \"5s\" when omitted."
     },
     "MediaType": {
       "type": "string",

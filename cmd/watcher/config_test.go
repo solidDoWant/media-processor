@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ watches:
       path: /out/shows
 `,
 			expected: Config{
-				CronSchedule: watcherconfig.DefaultCronSchedule,
+				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
 					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
 					{Name: "shows", WatchedPath: "/watch/shows", MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: "/out/shows"}},
@@ -48,21 +49,21 @@ watches:
 			},
 		},
 		{
-			name: "custom cronSchedule is parsed",
+			name: "custom scanInterval is parsed",
 			content: `
-cronSchedule: "*/10 * * * * *"
+scanInterval: 10s
 watches: []
 `,
 			expected: Config{
-				CronSchedule: "*/10 * * * * *",
+				ScanInterval: watcherconfig.Interval(10 * time.Second),
 				Watches:      []WatchEntry{},
 			},
 		},
 		{
-			name:    "cronSchedule defaults to every 5 seconds when omitted",
+			name:    "scanInterval defaults to 5 seconds when omitted",
 			content: "watches: []",
 			expected: Config{
-				CronSchedule: watcherconfig.DefaultCronSchedule,
+				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches:      []WatchEntry{},
 			},
 		},
@@ -151,7 +152,7 @@ watches:
       remotePath: /remote/movies
 `,
 			expected: Config{
-				CronSchedule: watcherconfig.DefaultCronSchedule,
+				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
 					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies", RemotePath: "/remote/movies"}},
 				},
@@ -182,38 +183,33 @@ watches:
 			errFunc: require.Error,
 		},
 		{
-			name: "invalid cron expression returns error",
+			name: "invalid scanInterval returns error",
 			content: `
-cronSchedule: "* * * *"
+scanInterval: "not-a-duration"
 watches: []
 `,
 			errFunc: require.Error,
 		},
 		{
-			name: "five-field cron expression returns error",
+			name: "explicit zero scanInterval is rejected",
 			content: `
-cronSchedule: "* * * * *"
+scanInterval: 0s
 watches: []
 `,
-			errFunc: require.Error,
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "scanInterval")
+			},
 		},
 		{
-			name: "seven-field cron expression returns error",
+			name: "negative scanInterval is rejected",
 			content: `
-cronSchedule: "* * * * * * *"
+scanInterval: -1s
 watches: []
 `,
-			errFunc: require.Error,
-		},
-		{
-			name: "valid 6-field cron expression is accepted",
-			content: `
-cronSchedule: "0 30 9 * * *"
-watches: []
-`,
-			expected: Config{
-				CronSchedule: "0 30 9 * * *",
-				Watches:      []WatchEntry{},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "scanInterval")
 			},
 		},
 		{
@@ -228,7 +224,7 @@ watches:
       path: /out/movies
 `,
 			expected: Config{
-				CronSchedule: watcherconfig.DefaultCronSchedule,
+				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
 					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, PreserveSource: true, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
 				},
