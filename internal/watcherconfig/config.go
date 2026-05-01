@@ -3,6 +3,7 @@ package watcherconfig
 import (
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/invopop/jsonschema"
 	"gopkg.in/yaml.v3"
@@ -10,21 +11,46 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// DefaultCronSchedule is the Hatchet cron expression used when none is specified in the config.
-const DefaultCronSchedule CronExpression = "*/5 * * * * *"
+// DefaultScanInterval is the duration between directory scans when none is specified in the config.
+const DefaultScanInterval = Interval(5 * time.Second)
 
-// CronExpression is a Hatchet 6-field cron expression (seconds-leading, e.g. "*/5 * * * * *").
-// It implements JSONSchema to embed the pattern constraint in the generated schema, keeping the
-// regex defined in validate.go as the single source of truth for both schema and runtime checks.
-type CronExpression string
+// Interval is a Go duration parsed from a YAML scalar like "5s" or "1m30s". It exists because
+// yaml.v3 does not natively understand time.Duration values.
+type Interval time.Duration
 
-// JSONSchema returns a JSON Schema for CronExpression using the canonical Hatchet cron regex.
-func (CronExpression) JSONSchema() *jsonschema.Schema {
+// Duration returns the interval as a time.Duration for use with time.NewTicker etc.
+func (i Interval) Duration() time.Duration { return time.Duration(i) }
+
+// String returns the canonical Go duration representation of the interval.
+func (i Interval) String() string { return time.Duration(i).String() }
+
+// JSONSchema returns a JSON Schema describing the on-disk shape of Interval (a duration string).
+func (Interval) JSONSchema() *jsonschema.Schema {
 	return &jsonschema.Schema{
 		Type:        "string",
-		Pattern:     sixFieldCronPattern,
-		Description: "Hatchet 6-field cron expression (seconds-leading) controlling how often the watcher scans directories. Example: \"*/5 * * * * *\" runs every 5 seconds.",
+		Description: "Go duration string (e.g. \"5s\", \"1m30s\") between directory scans. Defaults to \"5s\" when omitted.",
 	}
+}
+
+// UnmarshalYAML parses a YAML scalar string as a Go duration.
+func (i *Interval) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return fmt.Errorf("scanInterval must be a string, got YAML node kind %v", value.Kind)
+	}
+
+	d, err := time.ParseDuration(value.Value)
+	if err != nil {
+		return fmt.Errorf("invalid scanInterval %q: %w", value.Value, err)
+	}
+
+	*i = Interval(d)
+
+	return nil
+}
+
+// MarshalYAML emits the interval as its canonical Go duration string.
+func (i Interval) MarshalYAML() (any, error) {
+	return time.Duration(i).String(), nil
 }
 
 // CompiledRegexp is a Go regular expression that is compiled at YAML parse time. An invalid
@@ -111,9 +137,9 @@ type WatchEntry struct {
 
 // Config is the top-level watcher configuration loaded from the YAML config file.
 type Config struct {
-	// CronSchedule controls how often the watcher scans directories (default: every 5 seconds).
-	// Uses Hatchet's 6-field cron format with a leading seconds field, e.g. "*/5 * * * * *".
-	CronSchedule CronExpression `yaml:"cronSchedule,omitempty" validate:"omitempty,hatchetcron"`
+	// ScanInterval controls how often the watcher walks each configured watch directory.
+	// Specified as a Go duration string (e.g. "5s", "1m30s"). Defaults to 5 seconds when omitted.
+	ScanInterval Interval `yaml:"scanInterval,omitempty" validate:"gt=0"`
 	// Watches lists the directories to monitor and their associated media types.
 	Watches []WatchEntry `yaml:"watches,omitempty" validate:"dive"`
 }
@@ -121,7 +147,7 @@ type Config struct {
 // SetDefaults implements defaults.Setter to initialize Config fields from package constants,
 // avoiding duplicate literal values in struct tags.
 func (cfg *Config) SetDefaults() {
-	if cfg.CronSchedule == "" {
-		cfg.CronSchedule = DefaultCronSchedule
+	if cfg.ScanInterval == 0 {
+		cfg.ScanInterval = DefaultScanInterval
 	}
 }

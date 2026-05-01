@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,14 +13,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hatchet-dev/hatchet/pkg/client/types"
-	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
+
+// errWorkflowAlreadyStarted is returned by dispatch when Temporal rejects an
+// ExecuteWorkflow call because a workflow with the same WorkflowID is already
+// running. This is the expected outcome of multi-watcher dedup, so the scan
+// loop counts it as neither a dispatch nor a dispatch error.
+var errWorkflowAlreadyStarted = errors.New("workflow already started")
 
 func mappingNameAttr(name string) attribute.KeyValue {
 	return attribute.String("mapping_name", name)
@@ -89,7 +98,7 @@ func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
 	}
 
 	dispatchesTotal, err := meter.Int64Counter("watcher_dispatches_total",
-		otelmetric.WithDescription("Total number of workflow dispatches successfully submitted to Hatchet."))
+		otelmetric.WithDescription("Total number of workflow dispatches successfully submitted."))
 	if err != nil {
 		return nil, fmt.Errorf("create watcher_dispatches_total: %w", err)
 	}
@@ -110,56 +119,88 @@ func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
 	}, nil
 }
 
-// NewScanWorkflow returns a Hatchet standalone task that scans all configured watch
-// directories on the configured cron schedule and spawns a child workflow run for
-// every file found, using the absolute file path as the idempotency key.
+// workflowID derives the deterministic Temporal WorkflowID for a media file from its
+// absolute path. The hash makes the ID a fixed length (well under Temporal's 1000-char
+// limit) and free of path characters Temporal might escape; the "media-" prefix keeps
+// IDs readable in the Temporal UI.
+func workflowID(absFilePath string) string {
+	sum := sha256.Sum256([]byte(absFilePath))
+	return "media-" + hex.EncodeToString(sum[:])[:16]
+}
+
+// newTemporalDispatch returns a dispatchFunc that calls ExecuteWorkflow on the given
+// Temporal client with a deterministic WorkflowID and AllowDuplicate reuse policy.
 //
-// Overlapping scans are dropped (CANCEL_NEWEST, max 1 concurrent run) so a slow
-// scan does not pile up behind a cron backlog.
-func NewScanWorkflow(client *hatchet.Client, cfg *Config, mp otelmetric.MeterProvider) (*hatchet.StandaloneTask, error) {
-	maxRuns := int32(1)
-	strategy := types.CancelNewest
+// AllowDuplicate is the right fit for the watcher's three reuse scenarios:
+//   - A currently-running workflow with the same ID is rejected by Temporal regardless
+//     of policy, giving free multi-watcher dedup.
+//   - A previously failed workflow can be retried on the next tick.
+//   - A previously completed workflow can run again when an operator removes both the
+//     source file and its sentinel and re-adds the file (the parent issue #131's
+//     stated equivalent of today's `WithRunKey` semantics).
+//
+// When Temporal returns WorkflowExecutionAlreadyStarted (the running-duplicate case),
+// the dispatch returns errWorkflowAlreadyStarted so the scan loop can suppress both
+// the dispatch and dispatch-error counters for that file.
+func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
+	return func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error {
+		options := client.StartWorkflowOptions{
+			ID:                    workflowID(filePath),
+			TaskQueue:             taskQueue,
+			WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		}
 
-	instruments, err := newScanInstruments(mp)
-	if err != nil {
-		return nil, fmt.Errorf("register scan metrics: %w", err)
-	}
+		input := mediatypes.MediaInput{
+			FilePath:               filePath,
+			MediaType:              mediaType,
+			MappingName:            mappingName,
+			PreserveSource:         preserveSource,
+			WatchRoot:              watchRoot,
+			RetainEmptyDirectories: retainEmptyDirs,
+			OutputPath:             outputPath,
+			OutputRemotePath:       outputRemotePath,
+		}
 
-	task := client.NewStandaloneTask(
-		"directory-scan",
-		func(ctx hatchet.Context, _ struct{}) (struct{}, error) {
-			dispatch := func(dispatchCtx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error {
-				_, err := client.RunNoWait(
-					dispatchCtx,
-					mediatypes.MediaWorkflowName,
-					mediatypes.MediaInput{
-						FilePath:               filePath,
-						MediaType:              mediaType,
-						MappingName:            mappingName,
-						PreserveSource:         preserveSource,
-						WatchRoot:              watchRoot,
-						RetainEmptyDirectories: retainEmptyDirs,
-						OutputPath:             outputPath,
-						OutputRemotePath:       outputRemotePath,
-					},
-					hatchet.WithRunKey(filePath),
-				)
-
-				return err
+		if _, err := c.ExecuteWorkflow(ctx, options, mediatypes.MediaWorkflowName, input); err != nil {
+			var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+			if errors.As(err, &alreadyStarted) {
+				return errWorkflowAlreadyStarted
 			}
 
-			return struct{}{}, scan(ctx, cfg, instruments, dispatch)
-		},
-		hatchet.WithWorkflowCron(string(cfg.CronSchedule)),
-		hatchet.WithWorkflowConcurrency(types.Concurrency{
-			// Constant expression groups all scan runs under a single concurrency slot.
-			Expression:    `"scan"`,
-			MaxRuns:       &maxRuns,
-			LimitStrategy: &strategy,
-		}),
-	)
+			return err
+		}
 
-	return task, nil
+		return nil
+	}
+}
+
+// runScanLoop walks every configured watch directory once on entry, then again on
+// every tick of cfg.ScanInterval, until ctx is cancelled. Per-tick errors are
+// logged and do not abort the loop.
+func runScanLoop(ctx context.Context, cfg *Config, instruments *scanInstruments, dispatch dispatchFunc) {
+	runOnce := func() {
+		if err := scan(ctx, cfg, instruments, dispatch); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+
+			slog.ErrorContext(ctx, "scan tick reported errors", slog.Any("err", err))
+		}
+	}
+
+	runOnce()
+
+	ticker := time.NewTicker(cfg.ScanInterval.Duration())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
 }
 
 // validateWatchDirs returns an error listing every configured watch directory that does
@@ -283,16 +324,22 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			filesDiscovered++
 
-			if dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, outputRemotePath); dispatchErr != nil {
-				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
+			dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, outputRemotePath)
 
-				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
-			} else {
+			switch {
+			case dispatchErr == nil:
 				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
 
 				jobsSubmitted++
 
 				slog.InfoContext(ctx, "dispatched workflow", slog.String("file", path), slog.String("watch", w.Name))
+			case errors.Is(dispatchErr, errWorkflowAlreadyStarted):
+				slog.DebugContext(ctx, "workflow already running for file (multi-watcher dedup)",
+					slog.String("file", path), slog.String("watch", w.Name))
+			default:
+				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
+
+				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
 			}
 
 			return nil

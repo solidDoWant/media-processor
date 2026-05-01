@@ -624,7 +624,7 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 }
 
 // TestScan_DispatchErrorsCounter verifies that watcher_dispatch_errors_total increments
-// by 1 when a dispatch call to Hatchet fails, with correct labels.
+// by 1 when a dispatch call fails, with correct labels.
 func TestScan_DispatchErrorsCounter(t *testing.T) {
 	t.Parallel()
 
@@ -639,7 +639,7 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 
 	instruments, reader := newTestInstruments(t)
 	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		return errors.New("hatchet unavailable")
+		return errors.New("temporal unavailable")
 	})
 
 	rm := collectMetrics(t, reader)
@@ -655,6 +655,61 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 	})
 	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
 	assert.EqualValues(t, 1, dp.Value)
+}
+
+// TestScan_AlreadyStartedNotCountedAsDispatchOrError verifies that a dispatch returning
+// errWorkflowAlreadyStarted (the multi-watcher dedup case) is treated as a normal
+// no-op: neither watcher_dispatches_total nor watcher_dispatch_errors_total increments,
+// and the surrounding scan still completes with status=success.
+func TestScan_AlreadyStartedNotCountedAsDispatchOrError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "movie.mkv"), []byte{}, 0o600))
+
+	cfg := &Config{
+		Watches: []WatchEntry{
+			{Name: "movies", WatchedPath: dir, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: t.TempDir()}},
+		},
+	}
+
+	instruments, reader := newTestInstruments(t)
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+		return errWorkflowAlreadyStarted
+	}))
+
+	rm := collectMetrics(t, reader)
+
+	dispatches := findMetric(rm, "watcher_dispatches_total")
+	assert.Nil(t, dispatches, "watcher_dispatches_total should not be emitted when dedup suppressed dispatch")
+
+	dispatchErrors := findMetric(rm, "watcher_dispatch_errors_total")
+	assert.Nil(t, dispatchErrors, "watcher_dispatch_errors_total should not be emitted on dedup")
+
+	scans := findMetric(rm, "watcher_scans_total")
+	require.NotNil(t, scans, "watcher_scans_total should be present")
+
+	sum, ok := scans.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+
+	dp := findCounterDP(sum.DataPoints, map[string]string{"mapping_name": "movies", "status": "success"})
+	require.NotNil(t, dp, "scan should be recorded as success when dedup suppresses dispatch")
+	assert.EqualValues(t, 1, dp.Value)
+}
+
+// TestWorkflowID_DeterministicAndPathSensitive verifies that workflowID is stable for
+// the same path across calls and produces a different ID for a different path.
+func TestWorkflowID_DeterministicAndPathSensitive(t *testing.T) {
+	t.Parallel()
+
+	a := workflowID("/watch/movies/movie.mkv")
+	b := workflowID("/watch/movies/movie.mkv")
+	c := workflowID("/watch/movies/other.mkv")
+
+	assert.Equal(t, a, b, "same path should produce the same WorkflowID")
+	assert.NotEqual(t, a, c, "different paths should produce different WorkflowIDs")
+	assert.True(t, len(a) > 0 && len(a) < 1000, "WorkflowID should be non-empty and within Temporal's length limits")
+	assert.Contains(t, a, "media-", "WorkflowID should carry the media- prefix for UI readability")
 }
 
 // TestScan_PreserveSourceForwardedToDispatch verifies that the preserveSource value from a
