@@ -120,12 +120,12 @@ func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
 }
 
 // workflowID derives the deterministic Temporal WorkflowID for a media file from its
-// absolute path. The hash makes the ID a fixed length (well under Temporal's 1000-char
-// limit) and free of path characters Temporal might escape; the "media-" prefix keeps
-// IDs readable in the Temporal UI.
+// absolute path. The full SHA-256 hex digest (64 chars + "media-" prefix = 70 chars
+// total) is well within Temporal's 1000-char WorkflowID limit and removes any
+// realistic risk of two different paths colliding into the same ID.
 func workflowID(absFilePath string) string {
 	sum := sha256.Sum256([]byte(absFilePath))
-	return "media-" + hex.EncodeToString(sum[:])[:16]
+	return "media-" + hex.EncodeToString(sum[:])
 }
 
 // newTemporalDispatch returns a dispatchFunc that calls ExecuteWorkflow on the given
