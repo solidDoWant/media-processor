@@ -24,7 +24,7 @@ type noopCloser struct{}
 
 func (noopCloser) Close() error { return nil }
 
-// NewMetricsHandler returns a Temporal SDK MetricsHandler backed by
+// newMetricsHandler returns a Temporal SDK MetricsHandler backed by
 // go.temporal.io/sdk/contrib/tally and the tally→Prometheus reporter from
 // github.com/uber-go/tally. SDK-emitted instruments register on the supplied
 // registerer so they appear on the same /metrics endpoint as application
@@ -33,7 +33,7 @@ func (noopCloser) Close() error { return nil }
 // When reg is nil, SDK metrics are dropped via client.MetricsNopHandler. The
 // returned closer must be Closed before exit so the tally scope's reporting
 // goroutine flushes any pending values and stops cleanly.
-func NewMetricsHandler(reg prometheus.Registerer) (client.MetricsHandler, io.Closer) {
+func newMetricsHandler(reg prometheus.Registerer) (client.MetricsHandler, io.Closer) {
 	if reg == nil {
 		return client.MetricsNopHandler, noopCloser{}
 	}

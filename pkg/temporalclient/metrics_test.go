@@ -25,7 +25,7 @@ func buildHandler(t *testing.T) (client.MetricsHandler, *prometheus.Registry, fu
 
 	registry := prometheus.NewRegistry()
 
-	handler, closer := NewMetricsHandler(registry)
+	handler, closer := newMetricsHandler(registry)
 
 	flushed := false
 	flush := func() {
@@ -53,7 +53,7 @@ func buildHandler(t *testing.T) (client.MetricsHandler, *prometheus.Registry, fu
 }
 
 func TestNewMetricsHandlerNilRegistererReturnsNopHandler(t *testing.T) {
-	handler, closer := NewMetricsHandler(nil)
+	handler, closer := newMetricsHandler(nil)
 
 	assert.Equal(t, client.MetricsNopHandler, handler)
 	require.NoError(t, closer.Close())

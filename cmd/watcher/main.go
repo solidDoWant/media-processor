@@ -71,14 +71,11 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}
 
-	sdkMetricsHandler, sdkMetricsCloser := temporalclient.NewMetricsHandler(metricsProvider.PrometheusRegisterer())
-	defer sdkMetricsCloser.Close() //nolint:errcheck // best-effort shutdown flush
-
-	temporalClient, err := temporalclient.Dial(ctx, temporalclient.WithMetricsHandler(sdkMetricsHandler))
+	temporalClient, shutdownTemporal, err := temporalclient.Dial(ctx, metricsProvider.PrometheusRegisterer())
 	if err != nil {
 		return err
 	}
-	defer temporalClient.Close()
+	defer shutdownTemporal()
 
 	slog.InfoContext(ctx, "connected to Temporal, starting scan loop",
 		slog.String("task_queue", taskQueue),

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/envconfig"
 )
@@ -23,39 +24,32 @@ import (
 // healthCheckTimeout is how long Dial waits for the startup CheckHealth probe.
 const healthCheckTimeout = 10 * time.Second
 
-// Option configures a Dial call.
-type Option func(*config)
-
-type config struct {
-	metricsHandler client.MetricsHandler
-}
-
-// WithMetricsHandler installs the supplied client.MetricsHandler on the
-// Temporal SDK client so SDK-internal counters/gauges/timers flow through
-// it. Callers should construct the handler with [NewMetricsHandler] and own
-// its lifecycle (the returned closer must be invoked at process shutdown).
-// When omitted, SDK metrics are silently dropped.
-func WithMetricsHandler(h client.MetricsHandler) Option {
-	return func(c *config) { c.metricsHandler = h }
-}
-
 // Dial loads Temporal client options via envconfig, expands a file:// API key
-// into dynamic credentials when present, and verifies the gRPC connection via
-// CheckHealth before returning. Callers must close the returned client.
-func Dial(ctx context.Context, opts ...Option) (client.Client, error) {
-	cfg := &config{}
-	for _, opt := range opts {
-		opt(cfg)
+// into dynamic credentials when present, verifies the gRPC connection via
+// CheckHealth, and bridges Temporal SDK metrics onto reg so they appear on
+// the same /metrics endpoint as application metrics. Pass nil for reg to
+// disable SDK metrics entirely.
+//
+// The returned shutdown function must be deferred by the caller. It flushes
+// pending SDK metric samples, stops the tally reporter goroutine, and closes
+// the Temporal client. It is safe to call more than once. When Dial returns
+// a non-nil error the shutdown is a no-op so callers can `defer shutdown()`
+// unconditionally.
+func Dial(ctx context.Context, reg prometheus.Registerer) (client.Client, func(), error) {
+	metricsHandler, metricsCloser := newMetricsHandler(reg)
+
+	opts, err := buildOptions(metricsHandler)
+	if err != nil {
+		_ = metricsCloser.Close()
+
+		return nil, noopShutdown, err
 	}
 
-	clientOpts, err := buildOptions(cfg)
+	c, err := client.Dial(opts)
 	if err != nil {
-		return nil, err
-	}
+		_ = metricsCloser.Close()
 
-	c, err := client.Dial(clientOpts)
-	if err != nil {
-		return nil, fmt.Errorf("dial Temporal: %w", err)
+		return nil, noopShutdown, fmt.Errorf("dial Temporal: %w", err)
 	}
 
 	healthCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
@@ -63,16 +57,36 @@ func Dial(ctx context.Context, opts ...Option) (client.Client, error) {
 
 	if _, err := c.CheckHealth(healthCtx, &client.CheckHealthRequest{}); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("temporal health check failed: %w", err)
+		_ = metricsCloser.Close()
+
+		return nil, noopShutdown, fmt.Errorf("temporal health check failed: %w", err)
 	}
 
-	return c, nil
+	closed := false
+	shutdown := func() {
+		if closed {
+			return
+		}
+
+		closed = true
+
+		// Flush the tally reporter before closing the client so any final
+		// SDK metrics emitted during teardown reach the Prometheus registry.
+		_ = metricsCloser.Close()
+		c.Close()
+	}
+
+	return c, shutdown, nil
 }
+
+// noopShutdown is returned alongside non-nil errors so callers can always
+// `defer shutdown()` without a nil check.
+func noopShutdown() {}
 
 // buildOptions loads client.Options via envconfig, replacing a file:// API
 // key with dynamic credentials backed by os.ReadFile, and wiring the SDK's
 // MetricsHandler/Logger to the host application's observability stack.
-func buildOptions(cfg *config) (client.Options, error) {
+func buildOptions(metricsHandler client.MetricsHandler) (client.Options, error) {
 	profile, err := envconfig.LoadClientConfigProfile(envconfig.LoadClientConfigProfileOptions{})
 	if err != nil {
 		return client.Options{}, fmt.Errorf("load temporal profile: %w", err)
@@ -92,10 +106,7 @@ func buildOptions(cfg *config) (client.Options, error) {
 		opts.Credentials = client.NewAPIKeyDynamicCredentials(apiKeyFileCallback(apiKeyFile))
 	}
 
-	if cfg.metricsHandler != nil {
-		opts.MetricsHandler = cfg.metricsHandler
-	}
-
+	opts.MetricsHandler = metricsHandler
 	opts.Logger = newLogger()
 
 	return opts, nil
