@@ -1,58 +1,25 @@
 services:
-  postgres:
-    image: postgres:18
-    restart: always
-    environment:
-      POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal
-      POSTGRES_DB: temporal
-    ports:
-      - "5435:5432"
-    volumes:
-      - temporal_postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d temporal -U temporal"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
-
   temporal:
-    # auto-setup boots schema migrations and creates the `default` namespace
-    # on first start, so no separate migration/admin step is needed.
-    image: temporalio/auto-setup:1.27.2
+    image: temporalio/temporal:1.7.0
     restart: on-failure
-    environment:
-      DB: postgres12
-      DB_PORT: 5432
-      POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
-      POSTGRES_SEEDS: postgres
-      BIND_ON_IP: 0.0.0.0
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --db-filename
+      - /home/temporal/temporal.db
     ports:
       - "7233:7233"
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - "8080:8233"
+    volumes:
+      - temporal_data:/home/temporal
     healthcheck:
-      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
       interval: 5s
       timeout: 5s
       retries: 30
-      start_period: 15s
-
-  temporal-ui:
-    image: temporalio/ui:2.36.0
-    restart: on-failure
-    environment:
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_CORS_ORIGINS: http://localhost:8080
-      TEMPORAL_DEFAULT_NAMESPACE: default
-    ports:
-      - "8080:8080"
-    depends_on:
-      temporal:
-        condition: service_healthy
+      start_period: 10s
 
 volumes:
-  temporal_postgres_data:
+  temporal_data:
