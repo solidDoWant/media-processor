@@ -12,9 +12,11 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 
 ## Required values
 
-The chart has no required values at `helm template` time — the manifests render without error with all defaults. However, the pods will fail to start at runtime without the following values. You will need at a minimum:
+`helm template` fails when any of `config.temporal.address`, `config.temporal.namespace`, or `config.temporal.taskQueue` is empty. In addition, the pods will fail at runtime without the following values. You will need at a minimum:
 
-- `config.hatchet.token` — Hatchet API token
+- `config.temporal.address` — Temporal frontend host:port (e.g. `temporal-frontend.temporal.svc.cluster.local:7233`)
+- `config.temporal.namespace` — Temporal namespace (e.g. `default`)
+- `config.temporal.taskQueue` — Temporal task queue the worker polls and the watcher dispatches to (e.g. `media-processor`)
 - `config.watcher.watches` — at least one watch entry
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
@@ -23,15 +25,15 @@ The chart has no required values at `helm template` time — the manifests rende
 
 ## Values reference
 
-### `config.hatchet.token`
+### `config.temporal`
 
-The Hatchet API token for both watcher and worker. Sets `HATCHET_CLIENT_TOKEN` on both containers.
+Temporal frontend connection settings. All three fields are required; `helm template` fails when any are empty.
 
-| Field                                    | Type   | Default | Description                                                |
-| ---------------------------------------- | ------ | ------- | ---------------------------------------------------------- |
-| `config.hatchet.token.value`             | string | `""`    | Literal token value                                        |
-| `config.hatchet.token.secretKeyRef.name` | string | `""`    | Secret name (takes precedence over `value` when non-empty) |
-| `config.hatchet.token.secretKeyRef.key`  | string | `""`    | Key within the Secret                                      |
+| Field                       | Type   | Default | Description                                                                                                |
+| --------------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `config.temporal.address`   | string | `""`    | Temporal frontend host:port (no scheme). Sets `TEMPORAL_ADDRESS` on both watcher and worker                |
+| `config.temporal.namespace` | string | `""`    | Temporal namespace the workflows execute in. Sets `TEMPORAL_NAMESPACE` on both watcher and worker          |
+| `config.temporal.taskQueue` | string | `""`    | Task queue the worker polls and the watcher dispatches to. Sets `TEMPORAL_TASK_QUEUE` on both              |
 
 ### `config.inputVolume`
 
@@ -207,16 +209,10 @@ These values are intentionally not configurable in `values.yaml`:
 
 ## Using Secrets for credentials
 
-Instead of putting token values directly in `values.yaml`, reference a pre-existing Secret:
+Instead of putting API keys directly in `values.yaml`, reference a pre-existing Secret:
 
 ```yaml
 config:
-  hatchet:
-    token:
-      secretKeyRef:
-        name: media-processor-secrets
-        key: hatchet-token
-
   worker:
     radarr:
       apiKey:
@@ -234,7 +230,6 @@ Create the Secret before installing the chart:
 
 ```sh
 kubectl create secret generic media-processor-secrets \
-  --from-literal=hatchet-token=YOUR_TOKEN \
   --from-literal=radarr-api-key=YOUR_KEY \
   --from-literal=sonarr-api-key=YOUR_KEY
 ```
@@ -247,11 +242,10 @@ This example uses a PVC for input and NFS for output, configures arr path transl
 
 ```yaml
 config:
-  hatchet:
-    token:
-      secretKeyRef:
-        name: media-processor-secrets
-        key: hatchet-token
+  temporal:
+    address: "temporal-frontend.temporal.svc.cluster.local:7233"
+    namespace: "default"
+    taskQueue: "media-processor"
 
   inputVolume:
     type: persistentVolumeClaim

@@ -15,14 +15,24 @@
 {{- $_ := set (index $wkc "image") "tag" (tpl ((index $wkc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
 
 {{/* ============================================================ */}}
-{{/* Credential secretKeyRef validation                           */}}
+{{/* Required Temporal connection values                           */}}
 {{/* ============================================================ */}}
-{{- $hatchetSecretName := .Values.config.hatchet.token.secretKeyRef.name | default "" -}}
-{{- $hatchetSecretKey  := .Values.config.hatchet.token.secretKeyRef.key  | default "" -}}
-{{- if or (and $hatchetSecretName (not $hatchetSecretKey)) (and $hatchetSecretKey (not $hatchetSecretName)) -}}
-  {{- fail "config.hatchet.token.secretKeyRef.name and config.hatchet.token.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- $temporalAddress   := .Values.config.temporal.address   | default "" -}}
+{{- $temporalNamespace := .Values.config.temporal.namespace | default "" -}}
+{{- $temporalTaskQueue := .Values.config.temporal.taskQueue | default "" -}}
+{{- if not $temporalAddress -}}
+  {{- fail "config.temporal.address is required (host:port of the Temporal frontend)" -}}
+{{- end -}}
+{{- if not $temporalNamespace -}}
+  {{- fail "config.temporal.namespace is required" -}}
+{{- end -}}
+{{- if not $temporalTaskQueue -}}
+  {{- fail "config.temporal.taskQueue is required" -}}
 {{- end -}}
 
+{{/* ============================================================ */}}
+{{/* Credential secretKeyRef validation                           */}}
+{{/* ============================================================ */}}
 {{- $radarrSecretName := .Values.config.worker.radarr.apiKey.secretKeyRef.name | default "" -}}
 {{- $radarrSecretKey  := .Values.config.worker.radarr.apiKey.secretKeyRef.key  | default "" -}}
 {{- if or (and $radarrSecretName (not $radarrSecretKey)) (and $radarrSecretKey (not $radarrSecretName)) -}}
@@ -40,17 +50,10 @@
 {{/* ============================================================ */}}
 {{- $watcherEnv := dict -}}
 
-{{/* HATCHET_CLIENT_TOKEN */}}
-{{- if $hatchetSecretName -}}
-  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
-{{- else if .Values.config.hatchet.token.value -}}
-  {{- $_ := set $watcherEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchet.token.value -}}
-{{- end -}}
-
-{{/* HATCHET_CLIENT_NAMESPACE */}}
-{{- if .Values.config.hatchet.namespace -}}
-  {{- $_ := set $watcherEnv "HATCHET_CLIENT_NAMESPACE" .Values.config.hatchet.namespace -}}
-{{- end -}}
+{{/* TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE / TEMPORAL_TASK_QUEUE */}}
+{{- $_ := set $watcherEnv "TEMPORAL_ADDRESS"    $temporalAddress   -}}
+{{- $_ := set $watcherEnv "TEMPORAL_NAMESPACE"  $temporalNamespace -}}
+{{- $_ := set $watcherEnv "TEMPORAL_TASK_QUEUE" $temporalTaskQueue -}}
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $watcherEnv "LOG_LEVEL" .Values.config.watcher.logLevel -}}
@@ -71,17 +74,10 @@
 {{/* ============================================================ */}}
 {{- $workerEnv := dict -}}
 
-{{/* HATCHET_CLIENT_TOKEN */}}
-{{- if $hatchetSecretName -}}
-  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $hatchetSecretName "key" $hatchetSecretKey))) -}}
-{{- else if .Values.config.hatchet.token.value -}}
-  {{- $_ := set $workerEnv "HATCHET_CLIENT_TOKEN" .Values.config.hatchet.token.value -}}
-{{- end -}}
-
-{{/* HATCHET_CLIENT_NAMESPACE */}}
-{{- if .Values.config.hatchet.namespace -}}
-  {{- $_ := set $workerEnv "HATCHET_CLIENT_NAMESPACE" .Values.config.hatchet.namespace -}}
-{{- end -}}
+{{/* TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE / TEMPORAL_TASK_QUEUE */}}
+{{- $_ := set $workerEnv "TEMPORAL_ADDRESS"    $temporalAddress   -}}
+{{- $_ := set $workerEnv "TEMPORAL_NAMESPACE"  $temporalNamespace -}}
+{{- $_ := set $workerEnv "TEMPORAL_TASK_QUEUE" $temporalTaskQueue -}}
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}

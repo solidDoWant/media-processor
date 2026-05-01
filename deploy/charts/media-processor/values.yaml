@@ -1,12 +1,17 @@
 ---
 config:
-  hatchet:
-    token:
-      value: ""
-      secretKeyRef:
-        name: ""
-        key: ""
+  # temporal selects the Temporal frontend the watcher and worker connect to. All three fields
+  # are required; helm template fails when any are empty.
+  temporal:
+    # address is the Temporal frontend host:port (no scheme). Sets TEMPORAL_ADDRESS on both
+    # watcher and worker. Example: "temporal-frontend.temporal.svc.cluster.local:7233".
+    address: ""
+    # namespace is the Temporal namespace the workflows execute in. Sets TEMPORAL_NAMESPACE on
+    # both watcher and worker. Example: "default".
     namespace: ""
+    # taskQueue is the Temporal task queue the worker polls and the watcher dispatches to. Sets
+    # TEMPORAL_TASK_QUEUE on both watcher and worker. Example: "media-processor".
+    taskQueue: ""
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
