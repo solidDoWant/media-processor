@@ -218,11 +218,6 @@
           # and MFXCreateSession fails with MFX_ERR_DEVICE_FAILED (-9).
           ONEVPL_SEARCH_PATH = "${pkgs.vpl-gpu-rt}/lib";
           shellHook = ''
-            if [ -f .env.hatchet ]; then
-              # shellcheck disable=SC1091
-              source .env.hatchet
-            fi
-
             # Start Docker daemon if not already running
             DOCKER_SOCK="/tmp/docker.sock"
             export DOCKER_HOST="unix://$DOCKER_SOCK"

@@ -55,12 +55,12 @@ media-processor/
 - Vet: `make vet`
 - Lint: `make lint` (or `make lint-fix` to auto-apply fixes)
 - Unit tests: `make test`
-- Integration tests: `make test-integration` (starts a local Hatchet via `make hatchet-up` and runs `-tags=integration`)
+- Integration tests: `make test-integration` (starts a local Temporal via `make temporal-up` and runs `-tags=integration`)
 - E2E tests: `make test-e2e` (requires Docker; first run downloads ~700 MB BBB fixture)
 - Benchmarks: `make benchmark`
 - Generate watcher JSON schema: `make generate-schema` (writes `schemas/watcher.schema.json`)
-- Update Go modules + sync Hatchet image tags: `make update-dependencies`
-- Local Hatchet dev stack: `make hatchet-up` / `make hatchet-down` / `make hatchet-token`
+- Update Go modules and refresh vendor hashes in flake.nix: `make update-dependencies`
+- Local Temporal dev stack: `make temporal-up` / `make temporal-down`
 
 ## Dev Tools
 
@@ -85,7 +85,7 @@ All required tools (`go`, `golangci-lint`, etc.) are provided by `flake.nix`. If
 - For non-error fields in table tests, use the concrete expected type (e.g. `expected Config`) and assert with `assert.Equal`.
 - Do not reference acceptance criteria IDs (e.g. "AC3", "AC4") in test comments or names — they are only meaningful within the issue/PR context. Write descriptions of the actual behavior being verified instead.
 - Separate test cases that require fundamentally different setup into their own test functions.
-- Integration tests that require external services (e.g. a running Hatchet server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
+- Integration tests that require external services (e.g. a running Temporal server) belong in files with a `//go:build integration` build tag. Skip with `t.Skip(...)` if required env vars are absent. Run via `make test-integration`.
 - Always use `t.Context()` (not `context.Background()`) when a test needs a context. It is automatically cancelled when the test finishes, preventing resource leaks.
 - Loop iteration variable names must be the full singular form of the collection name. For example, use `service` when ranging over `services`, `entry` when ranging over `entries`, `category` when ranging over `categories`. Single-letter names (`s`, `v`, `f`, `k`) and shortened names (`cat` for `category`, `svc` for `service`) are not allowed unless the collection itself uses that short name (e.g. `cat` is fine when ranging over `cats`).
 
