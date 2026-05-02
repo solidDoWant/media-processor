@@ -16,7 +16,6 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // registerWorkflow wires the workflow + six activities into the test
@@ -50,9 +49,9 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
 
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
-	cropOut := steps.DetectCropOutput{}
-	transOut := steps.TranscodeOutput{DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/file.mkv"}
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	cropOut := DetectCropOutput{}
+	transOut := TranscodeOutput{DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/file.mkv"}
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
 	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(cropOut, nil).Once()
@@ -73,7 +72,7 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 	registerWorkflow(env, newWorkflowActivities(t))
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-		Return(steps.ProbeOutput{IsValidMedia: false}, nil).Once()
+		Return(ProbeOutput{IsValidMedia: false}, nil).Once()
 	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// DetectCrop, Transcode, and Notify must NOT be invoked. The mock fails
@@ -92,11 +91,11 @@ func TestMediaWorkflow_TranscodeFailureFiresFailureWebhook(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
 
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
-	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(DetectCropOutput{}, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(steps.TranscodeOutput{}, errors.New("ffmpeg blew up")).Once()
+		Return(TranscodeOutput{}, errors.New("ffmpeg blew up")).Once()
 
 	var seenStep, seenMessage string
 
@@ -121,7 +120,7 @@ func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 	registerWorkflow(env, newWorkflowActivities(t))
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-		Return(steps.ProbeOutput{}, errors.New("probe failed")).Once()
+		Return(ProbeOutput{}, errors.New("probe failed")).Once()
 
 	var seenStep string
 
@@ -146,17 +145,17 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
 
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
-	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(DetectCropOutput{}, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
+		Return(TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
 
 	notifyAttempts := 0
 	cleanupAttempts := 0
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ steps.TranscodeOutput) error {
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
 			notifyAttempts++
 			if notifyAttempts < 3 {
 				return errors.New("transient notify failure")
@@ -191,16 +190,16 @@ func TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry(t *testing.T) 
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
 
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
-	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(DetectCropOutput{}, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
+		Return(TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
 
 	notifyAttempts := 0
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ steps.TranscodeOutput) error {
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
 			notifyAttempts++
 			return temporal.NewNonRetryableApplicationError("unknown media type", errTypeNonRetryable, nil)
 		})
@@ -225,9 +224,9 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			failingStep: "probe",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-					Return(func(_ context.Context, _ MediaInput) (steps.ProbeOutput, error) {
+					Return(func(_ context.Context, _ MediaInput) (ProbeOutput, error) {
 						*attempts++
-						return steps.ProbeOutput{}, errors.New("probe failed")
+						return ProbeOutput{}, errors.New("probe failed")
 					})
 			},
 		},
@@ -236,11 +235,11 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			failingStep: "detectcrop",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-					Return(steps.ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
+					Return(ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
 				env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).
-					Return(func(_ context.Context, _ MediaInput, _ steps.ProbeOutput) (steps.DetectCropOutput, error) {
+					Return(func(_ context.Context, _ MediaInput, _ ProbeOutput) (DetectCropOutput, error) {
 						*attempts++
-						return steps.DetectCropOutput{}, errors.New("crop failed")
+						return DetectCropOutput{}, errors.New("crop failed")
 					})
 			},
 		},
@@ -249,13 +248,13 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 			failingStep: "transcode",
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-					Return(steps.ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
+					Return(ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
 				env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).
-					Return(steps.DetectCropOutput{}, nil).Once()
+					Return(DetectCropOutput{}, nil).Once()
 				env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-					Return(func(_ context.Context, _ MediaInput, _ steps.ProbeOutput, _ steps.DetectCropOutput) (steps.TranscodeOutput, error) {
+					Return(func(_ context.Context, _ MediaInput, _ ProbeOutput, _ DetectCropOutput) (TranscodeOutput, error) {
 						*attempts++
-						return steps.TranscodeOutput{}, errors.New("transcode failed")
+						return TranscodeOutput{}, errors.New("transcode failed")
 					})
 			},
 		},

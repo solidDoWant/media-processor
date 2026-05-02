@@ -1,4 +1,4 @@
-package steps
+package media
 
 import (
 	"encoding/json"

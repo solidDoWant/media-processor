@@ -31,7 +31,7 @@ Connects to Temporal, registers the media workflow and its activities on the con
 Responsibilities:
 - Dial the Temporal frontend with `client.Dial` and register the workflow and activities on the configured task queue
 - Invoke `pkg/ffprobe` to inspect incoming media files
-- Invoke `pkg/ffmpeg` from `workflows/steps` to transcode or transform media
+- Invoke `pkg/ffmpeg` from `workflows/media` to transcode or transform media
 - Report activity results and errors back to Temporal so per-activity retry and timeout policies apply
 
 ## Library Package Contracts
@@ -57,7 +57,7 @@ Defines the shared media-library domain model used by the watcher, worker, and a
 
 - Declares the `MediaType` enum (`movie`, `show`) plus the `Movie` and `Episode` types and their accessor interface
 - Subpackages `pkg/medialib/radarr` and `pkg/medialib/sonarr` wrap the Radarr and Sonarr REST APIs (lookup, library import, path translation)
-- Does not perform transcoding itself — workflow steps in `workflows/steps` invoke `pkg/ffmpeg`/`pkg/ffprobe` directly
+- Does not perform transcoding itself — workflow steps in `workflows/media` invoke `pkg/ffmpeg`/`pkg/ffprobe` directly
 
 ### `pkg/webhook`
 
