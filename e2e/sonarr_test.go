@@ -107,16 +107,18 @@ func assertSonarrPipelineMetrics(t *testing.T) {
 	t.Helper()
 
 	// The watcher counters are updated synchronously from the scan goroutine;
-	// the worker's record_metrics task runs after cleanup, so poll until it lands.
+	// worker activity metrics flush through the tally→Prometheus pipeline on a
+	// 1-second interval, so poll until the transcode-duration histogram (the
+	// last per-mapping metric emitted on the success path) lands.
 	filter := map[string]string{"mapping_name": "sonarr"}
 
 	var workerSeries metricSeries
 
 	require.Eventually(t, func() bool {
 		workerSeries = fetchMetrics(t, workerMetricsAddr)
-		return workerSeries.sum("media_workflow_total_duration_seconds_count", filter) >= 1
+		return workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter) >= 1
 	}, 30*time.Second, 500*time.Millisecond,
-		"expected worker to record at least one completed media_workflow run for the sonarr mapping")
+		"expected worker to record at least one transcode-duration observation for the sonarr mapping")
 
 	watcherSeries := fetchMetrics(t, watcherMetricsAddr)
 	assert.Greater(t, watcherSeries.sum("watcher_scans_total", filter), 0.0,
@@ -126,8 +128,16 @@ func assertSonarrPipelineMetrics(t *testing.T) {
 	assert.Greater(t, watcherSeries.sum("watcher_dispatches_total", filter), 0.0,
 		"watcher should have dispatched the sonarr workflow to Temporal")
 
-	assert.GreaterOrEqual(t, workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter), 1.0,
-		"worker should have recorded the sonarr transcode duration")
 	assert.Greater(t, workerSeries.sum("media_workflow_destination_file_size_bytes_sum", filter), 0.0,
 		"worker should have recorded a positive destination-file-size observation")
+
+	// End-to-end workflow completion is now signalled by the SDK's
+	// temporal_workflow_endtoend_latency_seconds histogram (replaces the
+	// removed media_workflow_total_duration_seconds). It carries SDK tags
+	// only, not mapping_name, so filter on workflow_type instead.
+	assert.GreaterOrEqual(t,
+		workerSeries.sum("temporal_workflow_endtoend_latency_seconds_count",
+			map[string]string{"workflow_type": "MediaWorkflow"}),
+		1.0,
+		"SDK should record at least one MediaWorkflow end-to-end latency observation")
 }
