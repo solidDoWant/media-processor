@@ -11,10 +11,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	prometheusexporter "go.opentelemetry.io/otel/exporters/prometheus"
-	otelmetric "go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 // DefaultScrapeWaitTimeout is the default upper bound for Provider.WaitForScrape
@@ -22,15 +18,15 @@ import (
 // METRICS_SCRAPE_WAIT_TIMEOUT.
 const DefaultScrapeWaitTimeout = 60 * time.Second
 
-// Provider exposes a Prometheus /metrics endpoint and the OTel
-// MeterProvider whose recordings flow into it. The Prometheus registry is
-// also surfaced so external sources (e.g. the Temporal SDK tally bridge)
-// can register collectors that share the same scrape. When the metrics
-// address is empty, a no-op MeterProvider is returned and the HTTP server
-// is not started.
+// Provider exposes a Prometheus /metrics endpoint backed by a
+// prometheus.Registry. Application code registers collectors against the
+// registry via PrometheusRegisterer; the same registry serves /metrics.
+// When the metrics address is empty, PrometheusRegisterer returns a private
+// throwaway registry, the HTTP server is not started, and Shutdown +
+// WaitForScrape are safe no-ops.
 type Provider struct {
-	meterProvider     otelmetric.MeterProvider
 	promRegistry      *prometheus.Registry
+	exposed           bool
 	shutdown          func(context.Context) error
 	scrapeNotify      chan struct{}
 	scrapeWaitTimeout time.Duration
@@ -61,8 +57,9 @@ func WithScrapeWaitTimeout(d time.Duration) Option {
 }
 
 // New creates a Provider. When WithMetricsAddr is not supplied, the returned
-// Provider exposes a no-op MeterProvider and starts no HTTP server; Shutdown
-// and WaitForScrape on it are safe no-ops.
+// Provider holds a private registry (collectors can still be registered, but
+// nothing scrapes them) and starts no HTTP server; Shutdown and WaitForScrape
+// are safe no-ops.
 func New(opts ...Option) (*Provider, error) {
 	cfg := &config{}
 	for _, opt := range opts {
@@ -79,18 +76,13 @@ func New(opts ...Option) (*Provider, error) {
 
 	if cfg.metricsAddr == "" {
 		return &Provider{
-			meterProvider:     noop.NewMeterProvider(),
+			promRegistry:      prometheus.NewRegistry(),
 			shutdown:          func(context.Context) error { return nil },
 			scrapeWaitTimeout: scrapeWaitTimeout,
 		}, nil
 	}
 
 	promRegistry := prometheus.NewRegistry()
-
-	promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
-	if err != nil {
-		return nil, fmt.Errorf("create prometheus exporter: %w", err)
-	}
 
 	listener, err := net.Listen("tcp", cfg.metricsAddr)
 	if err != nil {
@@ -120,45 +112,25 @@ func New(opts ...Option) (*Provider, error) {
 		}
 	}()
 
-	sdkProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(promReader))
-
 	return &Provider{
-		meterProvider: sdkProvider,
-		promRegistry:  promRegistry,
-		shutdown: func(ctx context.Context) error {
-			return errors.Join(
-				sdkProvider.Shutdown(ctx),
-				srv.Shutdown(ctx),
-			)
-		},
+		promRegistry:      promRegistry,
+		exposed:           true,
+		shutdown:          srv.Shutdown,
 		scrapeNotify:      scrapeNotify,
 		scrapeWaitTimeout: scrapeWaitTimeout,
 	}, nil
 }
 
-// MeterProvider returns the underlying OTel MeterProvider.
-func (p *Provider) MeterProvider() otelmetric.MeterProvider {
-	return p.meterProvider
-}
-
-// PrometheusRegisterer returns the Prometheus registry that backs the
-// /metrics endpoint, or nil when no Prometheus exporter is active. Callers
-// (e.g. pkg/temporalclient) use this to register additional collectors —
-// such as Temporal SDK metrics via the tally→prom bridge — alongside the
-// application's own OTel-sourced metrics.
-//
-// The return type is the prometheus.Registerer interface; a nil *Registry
-// is mapped to a nil interface so callers can use a plain `if reg == nil`
-// check without falling into the typed-nil interface gotcha.
+// PrometheusRegisterer returns the Prometheus registry collectors should be
+// registered against. The same registry backs the /metrics endpoint when one
+// is enabled. When the Provider is in no-op mode (no METRICS_ADDR), this still
+// returns a non-nil registerer so callers can register without nil checks;
+// observations simply go unscraped.
 func (p *Provider) PrometheusRegisterer() prometheus.Registerer {
-	if p.promRegistry == nil {
-		return nil
-	}
-
 	return p.promRegistry
 }
 
-// Shutdown stops all active exporters and flushes buffered metrics.
+// Shutdown stops the metrics HTTP server, if one was started.
 // It should be called before the process exits.
 func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.shutdown(ctx)
@@ -176,7 +148,7 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 // of the wait. Callers should pass a non-cancelled parent context (typically
 // context.Background()) — passing a SIGTERM-cancelled context defeats the gate.
 func (p *Provider) WaitForScrape(ctx context.Context) error {
-	if p.scrapeNotify == nil {
+	if !p.exposed {
 		return nil
 	}
 

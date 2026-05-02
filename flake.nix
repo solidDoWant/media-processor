@@ -119,8 +119,8 @@
             ));
         };
 
-        watcherVendorHash = "sha256-2HnTfQEkOEcyw9lMfRPE5WacSWxzaUQXpk1rrK1b6fI=";
-        workerVendorHash = "sha256-2HnTfQEkOEcyw9lMfRPE5WacSWxzaUQXpk1rrK1b6fI=";
+        watcherVendorHash = "sha256-G+RHrYS2uJrA7IMGMHb+RwsV9ah4vyeHxN5SZtwW+1I=";
+        workerVendorHash = "sha256-G+RHrYS2uJrA7IMGMHb+RwsV9ah4vyeHxN5SZtwW+1I=";
 
         watcher-bin = pkgs.buildGoModule {
           name = "watcher";

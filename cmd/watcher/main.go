@@ -66,7 +66,7 @@ func run(ctx context.Context, configPath string) error {
 	}
 	defer shutdown()
 
-	instruments, err := newScanInstruments(metricsProvider.MeterProvider())
+	instruments, err := newScanInstruments(metricsProvider.PrometheusRegisterer())
 	if err != nil {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}

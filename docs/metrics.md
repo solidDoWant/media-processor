@@ -103,14 +103,16 @@ All watcher metrics carry `mapping_name`. `watcher_files_discovered_total`, `wat
 
 Set `METRICS_HIGH_CARDINALITY_LABELS=true` to attach per-item labels to every `media_workflow_*` histogram observation. These labels are **not** added to counters or watcher metrics.
 
-| Label            | Applies to | Description                         |
-| ---------------- | ---------- | ----------------------------------- |
-| `id`             | all        | Library item ID from Radarr/Sonarr. |
-| `title`          | all        | Title of the movie or episode.      |
-| `year`           | all        | Release year.                       |
-| `series_title`   | shows only | Series title.                       |
-| `season_number`  | shows only | Season number.                      |
-| `episode_number` | shows only | Episode number.                     |
+| Label            | Applies to                | Description                         |
+| ---------------- | ------------------------- | ----------------------------------- |
+| `id`             | all                       | Library item ID from Radarr/Sonarr. |
+| `title`          | all                       | Title of the movie or episode.      |
+| `year`           | all                       | Release year.                       |
+| `series_title`   | shows (empty for movies)  | Series title.                       |
+| `season_number`  | shows (empty for movies)  | Season number.                      |
+| `episode_number` | shows (empty for movies)  | Episode number.                     |
+
+When high-cardinality labels are enabled, every `media_workflow_*` histogram series carries the full set of six labels. For movie observations, the show-only labels (`series_title`, `season_number`, `episode_number`) are present with empty-string values so the label set stays consistent across observations.
 
 These labels significantly increase the cardinality of your metrics. Enable them only if your metrics backend can handle the volume and you need per-item drill-down.
 

@@ -9,41 +9,27 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
-// newRecordingActivities builds an Activities backed by a manual metric reader
+// newRecordingActivities builds an Activities backed by a fresh prometheus.Registry
 // + the supplied stubs, ready for direct method-level testing.
-func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) (*Activities, *sdkmetric.ManualReader) {
+func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) (*Activities, *prometheus.Registry) {
 	t.Helper()
 
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-
-	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
-
-	cfg.MeterProvider = provider
+	reg := prometheus.NewRegistry()
+	cfg.MetricsRegisterer = reg
 
 	a, err := NewActivities(cfg, radarr, sonarr, wh)
 	require.NoError(t, err)
 
-	return a, reader
-}
-
-func collectActivityMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
-	t.Helper()
-
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(t.Context(), &rm))
-
-	return rm
+	return a, reg
 }
 
 func TestNotify_CallsLibraryImport(t *testing.T) {
@@ -135,7 +121,7 @@ func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 }
 
 func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
-	a, reader := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
 	err := a.RecordRunMetrics(t.Context(),
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType},
@@ -146,27 +132,22 @@ func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rm := collectActivityMetrics(t, reader)
-	require.NotNil(t, rm.ScopeMetrics, "metrics activity should record per-run histograms")
-	require.NotNil(t, findMetric(rm, "media_workflow_total_duration_seconds"))
+	require.NotNil(t, findMetricFamily(t, reg, "media_workflow_total_duration_seconds"),
+		"metrics activity should record per-run histograms")
 }
 
 func TestRecordInvalid_RecordsInvalidFileMetric(t *testing.T) {
-	a, reader := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
 	err := a.RecordInvalid(t.Context(), MediaInput{
 		FilePath: "/in/not-a-video.txt", MediaType: medialib.MovieType, MappingName: "downloads",
 	})
 	require.NoError(t, err)
 
-	rm := collectActivityMetrics(t, reader)
-
-	m := findMetric(rm, "media_workflow_invalid_files_total")
-	require.NotNil(t, m, "invalid_files_total counter should be present")
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-	require.Len(t, sum.DataPoints, 1)
-	assert.EqualValues(t, 1, sum.DataPoints[0].Value)
+	mf := findMetricFamily(t, reg, "media_workflow_invalid_files_total")
+	require.NotNil(t, mf, "invalid_files_total counter should be present")
+	require.Len(t, mf.GetMetric(), 1)
+	assert.EqualValues(t, 1, mf.GetMetric()[0].GetCounter().GetValue())
 }
 
 func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {

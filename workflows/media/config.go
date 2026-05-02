@@ -5,7 +5,7 @@ package media
 import (
 	"time"
 
-	otelmetric "go.opentelemetry.io/otel/metric"
+	"github.com/prometheus/client_golang/prometheus"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
@@ -67,9 +67,10 @@ type MediaWorkflowConfig struct {
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
 	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
 	HardwareDevicePath string
-	// MeterProvider is the OTel MeterProvider used for per-run metrics. When nil,
-	// a no-op provider is used and no metrics are emitted.
-	MeterProvider otelmetric.MeterProvider
+	// MetricsRegisterer is the Prometheus registerer collectors are registered
+	// against for per-run metrics. When nil, a private throwaway registry is
+	// used and observations go unscraped.
+	MetricsRegisterer prometheus.Registerer
 	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
 	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
 	HighCardinalityLabels bool

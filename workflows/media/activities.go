@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/metric/noop"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
@@ -36,8 +36,9 @@ type Activities struct {
 
 // NewActivities constructs an Activities ready for registration. Defaults are
 // applied to cfg.DetectCropTimeout and cfg.TranscodeTimeout when zero, and a
-// metrics Recorder is built from cfg.MeterProvider (with a noop fallback if
-// instrument registration fails).
+// metrics Recorder is built from cfg.MetricsRegisterer (with a private
+// throwaway registry as a fallback if registration against the supplied
+// registerer fails).
 func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client) (*Activities, error) {
 	if cfg.DetectCropTimeout == 0 {
 		cfg.DetectCropTimeout = DefaultDetectCropTimeout
@@ -47,22 +48,23 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 		cfg.TranscodeTimeout = DefaultTranscodeTimeout
 	}
 
-	meterProvider := cfg.MeterProvider
-	if meterProvider == nil {
-		meterProvider = noop.NewMeterProvider()
+	registerer := cfg.MetricsRegisterer
+	if registerer == nil {
+		registerer = prometheus.NewRegistry()
 	}
 
-	recorder, err := NewRecorder(meterProvider, cfg.HighCardinalityLabels)
+	recorder, err := NewRecorder(registerer, cfg.HighCardinalityLabels)
 	if err != nil {
-		// Instrument registration errors are non-fatal: log for observability and
-		// fall back to a noop recorder so the workflow can still run without metrics.
-		slog.Warn("media: failed to create metrics recorder, falling back to noop", "error", err)
+		// Registration errors are non-fatal: log for observability and fall
+		// back to a private registry so the workflow can still run without
+		// exposing metrics.
+		slog.Warn("media: failed to register metrics collectors, falling back to private registry", "error", err)
 
 		var noopErr error
 
-		recorder, noopErr = NewRecorder(noop.NewMeterProvider(), false)
+		recorder, noopErr = NewRecorder(prometheus.NewRegistry(), false)
 		if noopErr != nil {
-			return nil, fmt.Errorf("create noop metrics recorder: %w", noopErr)
+			return nil, fmt.Errorf("create fallback metrics recorder: %w", noopErr)
 		}
 	}
 
@@ -147,7 +149,7 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 
 	out, err := steps.RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, library)
 	if err == nil && out.ArtworkFetchSkipped {
-		a.recorder.RecordArtworkFetchSkipped(ctx)
+		a.recorder.RecordArtworkFetchSkipped()
 	}
 
 	logStepResult(ctx, "transcode", input.FilePath, start, err)
@@ -243,7 +245,7 @@ func (a *Activities) RecordRunMetrics(ctx context.Context, input MediaInput, pro
 				// GetInfo failure is best-effort: log + count it but do not
 				// fail the activity. Metrics are still recorded without the
 				// high-cardinality labels.
-				a.recorder.RecordMetricsError(ctx, fmt.Errorf("GetInfo: %w", infoErr))
+				a.recorder.RecordMetricsError(fmt.Errorf("GetInfo: %w", infoErr))
 			} else {
 				mediaInfo = info
 			}
@@ -251,7 +253,7 @@ func (a *Activities) RecordRunMetrics(ctx context.Context, input MediaInput, pro
 	}
 
 	totalElapsed := time.Since(probe.StartedAt)
-	a.recorder.RecordRun(ctx, input, probe, transcode, mediaInfo, transcode.HardwareAccelerated, totalElapsed)
+	a.recorder.RecordRun(input, probe, transcode, mediaInfo, transcode.HardwareAccelerated, totalElapsed)
 
 	logStepResult(ctx, "record_run_metrics", input.FilePath, start, nil)
 
@@ -265,7 +267,7 @@ func (a *Activities) RecordRunMetrics(ctx context.Context, input MediaInput, pro
 func (a *Activities) RecordInvalid(ctx context.Context, input MediaInput) error {
 	start := time.Now()
 
-	a.recorder.RecordInvalidFile(ctx, input.MediaType, input.MappingName)
+	a.recorder.RecordInvalidFile(input.MediaType, input.MappingName)
 
 	logStepResult(ctx, "record_invalid", input.FilePath, start, nil)
 
