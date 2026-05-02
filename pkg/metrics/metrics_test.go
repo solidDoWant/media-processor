@@ -70,15 +70,14 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 	require.NoError(t, p.Shutdown(context.Background()))
 }
 
-func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
-	t.Setenv("METRICS_ADDR", "")
-
-	p, shutdown, err := metrics.NewFromEnv()
-	require.NoError(t, err)
-	t.Cleanup(shutdown)
-	// Same noop contract as TestPrometheusEndpoint_Disabled: nil registerer
-	// signals "metrics off" to downstream consumers.
-	require.Nil(t, p.PrometheusRegisterer())
+func TestDefaultMetricsAddr(t *testing.T) {
+	// NewFromEnv binds DefaultMetricsAddr when METRICS_ADDR is unset. We can't
+	// exercise that path directly in tests without binding the real :9090 port
+	// (which would collide with anything else listening), so just lock the
+	// public constant. cmd/{watcher,worker} rely on this default; if the
+	// constant changes, the helm chart docs and configuration.md need updating
+	// in lockstep.
+	assert.Equal(t, ":9090", metrics.DefaultMetricsAddr)
 }
 
 func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
