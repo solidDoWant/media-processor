@@ -50,6 +50,7 @@ func TestWorkerConnectsToTemporal(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+
 	go func() {
 		done <- run(ctx)
 	}()
@@ -58,6 +59,7 @@ func TestWorkerConnectsToTemporal(t *testing.T) {
 	// If it connects successfully, it blocks until the context is cancelled.
 	// Wait long enough to distinguish the two cases.
 	const connectionWindow = 10 * time.Second
+
 	timer := time.NewTimer(connectionWindow)
 	defer timer.Stop()
 

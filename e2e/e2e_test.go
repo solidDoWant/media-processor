@@ -72,6 +72,7 @@ func TestMain(m *testing.M) {
 	// has a chance to execute.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
 	go func() {
 		sig := <-sigCh
 		log.Warn("received signal, tearing down containers", "signal", sig)

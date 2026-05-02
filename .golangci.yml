@@ -2,6 +2,13 @@ version: "2"
 
 run:
   timeout: 5m
+  build-tags:
+    - integration
+    - e2e
+    - hwtest
+    - qsvtest
+    - vaapitest
+    - nvenctest
 
 linters:
   default: none

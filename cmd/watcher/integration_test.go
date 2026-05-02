@@ -35,6 +35,7 @@ func TestWatcher_ConnectsToTemporal(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+
 	go func() {
 		done <- run(ctx, cfgPath)
 	}()
@@ -42,6 +43,7 @@ func TestWatcher_ConnectsToTemporal(t *testing.T) {
 	// If the watcher fails to connect, run() returns quickly with an error.
 	// If it connects successfully, it blocks until the context is cancelled.
 	const connectionWindow = 10 * time.Second
+
 	timer := time.NewTimer(connectionWindow)
 	defer timer.Stop()
 

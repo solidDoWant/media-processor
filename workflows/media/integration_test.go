@@ -144,6 +144,7 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 	inputBase := filepath.Base(inputPath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	expectedImportPath := filepath.Join(outputDir, mkvBase)
+
 	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
 	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should be called with the output file path")
 }
@@ -193,6 +194,7 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 	inputBase := filepath.Base(inputPath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	expectedImportPath := filepath.Join(outputDir, mkvBase)
+
 	require.Len(t, sonarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
 	assert.Equal(t, expectedImportPath, sonarrStub.importCalls[0], "ImportByFilePath should be called with the output file path")
 }
@@ -248,6 +250,7 @@ func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.
 	inputBase := filepath.Base(inputPath)
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	expectedImportPath := filepath.Join(remoteDir, mkvBase)
+
 	require.Len(t, radarrStub.importCalls, 1, "ImportByFilePath should be called exactly once")
 	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should receive the remote path")
 }

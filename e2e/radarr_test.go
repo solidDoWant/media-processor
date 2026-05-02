@@ -116,6 +116,7 @@ func assertRadarrPipelineMetrics(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		workerSeries = fetchMetrics(t, workerMetricsAddr)
+
 		return workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter) >= 1 &&
 			workerSeries.sum("temporal_workflow_endtoend_latency_seconds_count", sdkFilter) >= 1
 	}, 30*time.Second, 500*time.Millisecond,

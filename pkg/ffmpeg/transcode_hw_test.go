@@ -17,11 +17,13 @@ import (
 // the hwtest tag active is a likely bug — the test fails rather than skips.
 func TestDetectHardwareEncoders_HardwarePresent(t *testing.T) {
 	var foundHW bool
+
 	for _, codec := range []ffmpeg.Codec{ffmpeg.CodecH264, ffmpeg.CodecH265} {
 		if accs := ffmpeg.DetectHardwareEncoders(codec); len(accs) > 0 {
 			foundHW = true
 			break
 		}
 	}
+
 	assert.True(t, foundHW, "DetectHardwareEncoders must return a non-empty list for at least one codec when hardware is present")
 }

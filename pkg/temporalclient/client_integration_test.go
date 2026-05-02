@@ -75,6 +75,7 @@ func TestDialFailsWhenServerUnreachable(t *testing.T) {
 
 	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
 	defer shutdown()
+
 	require.Error(t, err)
 	// Accept either error path: "dial Temporal:" wraps an immediate connection
 	// failure, "temporal health check failed:" wraps a CheckHealth timeout
@@ -118,6 +119,7 @@ func TestDialFailsWhenAPIKeyFileMissing(t *testing.T) {
 	// os.ReadFile, and that error propagates back through CheckHealth.
 	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
 	defer shutdown()
+
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "read api key file")
 }
@@ -131,6 +133,7 @@ func TestDialFailsWhenAPIKeyFilePathRelative(t *testing.T) {
 
 	_, shutdown, err := temporalclient.Dial(t.Context(), nil)
 	defer shutdown()
+
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "must be absolute")
 }
@@ -152,11 +155,13 @@ func TestDialEmitsTemporalSDKMetrics(t *testing.T) {
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		_ = provider.Shutdown(shutdownCtx)
 	}()
 
 	c, shutdown, err := temporalclient.Dial(t.Context(), provider.PrometheusRegisterer())
 	require.NoError(t, err)
+
 	defer shutdown()
 
 	// Issue an extra RPC beyond Dial's startup CheckHealth so the SDK has
@@ -203,7 +208,9 @@ func scrapeMetrics(t *testing.T, addr string) string {
 	resp, err := httpClient.Do(req)
 	require.NoError(t, err)
 
-	defer resp.Body.Close()
+	defer func() {
+		require.NoError(t, resp.Body.Close())
+	}()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 

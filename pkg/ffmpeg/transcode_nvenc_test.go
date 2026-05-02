@@ -35,6 +35,7 @@ func TestTranscode_CropWithNVENC_CuvidFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
+
 	for i := range info.Streams {
 		if info.Streams[i].CodecType == ffprobe.CodecTypeVideo {
 			videoStream = &info.Streams[i]

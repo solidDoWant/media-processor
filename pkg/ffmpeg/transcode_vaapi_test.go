@@ -33,6 +33,7 @@ func TestTranscode_CropWithVAAPI_SWDecode(t *testing.T) {
 	require.NoError(t, err)
 
 	var videoStream *ffprobe.StreamInfo
+
 	for i := range info.Streams {
 		if info.Streams[i].CodecType == ffprobe.CodecTypeVideo {
 			videoStream = &info.Streams[i]
