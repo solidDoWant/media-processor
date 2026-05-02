@@ -100,19 +100,36 @@ config:
       enabled: false
       otel:
         endpoint: ""
+      # scrapeWaitTimeout bounds how long the watcher's metrics endpoint stays open
+      # after the scan loop exits, waiting for one final Prometheus scrape. Go duration
+      # string (e.g. "30s", "2m"). Sets METRICS_SCRAPE_WAIT_TIMEOUT. Must be at least
+      # 2x the Prometheus scrape interval. Set to "0s" to disable. When empty, the
+      # binary default of 60s applies. The chart's terminationGracePeriodSeconds (120s)
+      # must accommodate this value plus a buffer.
+      scrapeWaitTimeout: ""
 
   worker:
     logLevel: info
     # stopTimeout bounds the SIGTERM-triggered drain of in-flight Temporal activities, as a
-    # Go duration string (e.g. "30m", "2h"). Sets WORKER_STOP_TIMEOUT on the worker. When
-    # empty, the worker binary defaults to its own ceiling (the MEDIA_TRANSCODE_TIMEOUT
-    # default), so the longest expected activity has a chance to complete before exit.
-    stopTimeout: ""
+    # Go duration string (e.g. "30m", "2h"). Sets WORKER_STOP_TIMEOUT on the worker. The
+    # chart default of 30s pairs with METRICS_SCRAPE_WAIT_TIMEOUT (60s) and a 30s buffer
+    # to fit within the 120s terminationGracePeriodSeconds. Operators running long
+    # transcodes must raise this together with config.worker.metrics.scrapeWaitTimeout
+    # and the worker's pod.terminationGracePeriodSeconds. When empty, the binary default
+    # (the effective MEDIA_TRANSCODE_TIMEOUT, normally 4h) applies.
+    stopTimeout: "30s"
     metrics:
       enabled: false
       otel:
         endpoint: ""
       highCardinalityLabels: false
+      # scrapeWaitTimeout bounds how long the worker's metrics endpoint stays open
+      # after activity drain completes, waiting for one final Prometheus scrape. Go
+      # duration string (e.g. "30s", "2m"). Sets METRICS_SCRAPE_WAIT_TIMEOUT. Must be
+      # at least 2x the Prometheus scrape interval. Set to "0s" to disable. When empty,
+      # the binary default of 60s applies. Together with stopTimeout this must fit
+      # within the worker's pod.terminationGracePeriodSeconds (120s) plus a buffer.
+      scrapeWaitTimeout: ""
     media:
       webhookUrl: ""
       hardware:
@@ -193,6 +210,10 @@ resources:
       podDisruptionBudget:
         enabled: '{{ gt ((index .Values "resources" "controllers" "watcher" "replicas" | default 1) | int) 1 }}'
         minAvailable: 1
+      # 120s accommodates the scan-loop teardown plus the metrics scrape-wait gate
+      # (binary default 60s) plus a 60s buffer before SIGKILL.
+      pod:
+        terminationGracePeriodSeconds: 120
     worker:
       strategy: RollingUpdate
       containers:
@@ -200,6 +221,12 @@ resources:
           image:
             repository: ghcr.io/soliddowant/media-processor/worker
             tag: "{{ .Chart.AppVersion }}"
+          # Named metrics port required by the PodMonitor below to reference the
+          # pod-side port by name.
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
           probes:
             liveness:
               enabled: true
@@ -233,6 +260,12 @@ resources:
       podDisruptionBudget:
         enabled: '{{ gt ((index .Values "resources" "controllers" "worker" "replicas" | default 1) | int) 1 }}'
         minAvailable: 1
+      # 120s accommodates config.worker.stopTimeout (30s default) + the metrics
+      # scrape-wait gate (binary default 60s) + a 30s buffer before SIGKILL. Operators
+      # running long transcodes must raise this together with config.worker.stopTimeout
+      # and config.worker.metrics.scrapeWaitTimeout.
+      pod:
+        terminationGracePeriodSeconds: 120
       # DRA GPU example (requires config.worker.media.hardware.mountHostDevice: false):
       # pod:
       #   resourceClaims:
@@ -265,24 +298,44 @@ resources:
         metrics:
           port: 9090
           protocol: TCP
+  # The watcher uses a ServiceMonitor: its scan loop exits within milliseconds of
+  # SIGTERM, so the brief delay before the pod drops out of the Endpoints object
+  # does not interfere with the scrape-wait gate. The worker uses a PodMonitor
+  # (under rawResources below) because its activity drain can run for the full
+  # WORKER_STOP_TIMEOUT, during which a ServiceMonitor would lose the pod from
+  # Endpoints and break the scrape-on-shutdown gate.
   serviceMonitor:
+    # suffix kept to preserve the resource name across the migration to a single
+    # serviceMonitor entry (bjw-s only auto-suffixes when itemCount > 1).
     watcher:
       enabled: '{{ .Values.config.watcher.metrics.enabled }}'
+      suffix: watcher
       service:
         identifier: watcher-metrics
       endpoints:
         - port: metrics
-          scheme: http
-          path: /metrics
           interval: 1m
           scrapeTimeout: 10s
-    worker:
+  rawResources:
+    worker-podmonitor:
       enabled: '{{ .Values.config.worker.metrics.enabled }}'
-      service:
-        identifier: worker-metrics
-      endpoints:
-        - port: metrics
-          scheme: http
-          path: /metrics
-          interval: 1m
-          scrapeTimeout: 10s
+      suffix: worker
+      apiVersion: monitoring.coreos.com/v1
+      kind: PodMonitor
+      # The bjw-s rawResource renderer emits the contents of .spec directly under the
+      # resource (without a spec: wrapper), so PodMonitor's actual spec fields go one
+      # level deeper.
+      spec:
+        spec:
+          # selectorLabels: chart name + release instance + controller. Uses the bjw-s
+          # name helper so the chart-name source of truth stays in lockstep with the
+          # pod's own selectorLabels.
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: '{{ include "bjw-s.common.lib.chart.names.name" $ }}'
+              app.kubernetes.io/instance: '{{ .Release.Name }}'
+              app.kubernetes.io/controller: worker
+          podMetricsEndpoints:
+            - port: metrics
+              interval: 1m
+              scrapeTimeout: 10s

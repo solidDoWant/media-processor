@@ -103,14 +103,15 @@ Shared observability settings applied to both watcher and worker.
 
 ### `config.watcher`
 
-| Field                            | Type   | Default     | Description                                                                                                                                                                                              |
-| -------------------------------- | ------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.watcher.configType`      | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                   |
-| `config.watcher.scanInterval`    | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config |
-| `config.watcher.volumes`         | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                    |
-| `config.watcher.watches`         | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                               |
-| `config.watcher.logLevel`        | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                |
-| `config.watcher.metrics.enabled` | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container                                                                                                                                            |
+| Field                                      | Type   | Default     | Description                                                                                                                                                                                                                                |
+| ------------------------------------------ | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config.watcher.configType`                | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                                                     |
+| `config.watcher.scanInterval`              | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config                                   |
+| `config.watcher.volumes`                   | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                                                      |
+| `config.watcher.watches`                   | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                                                 |
+| `config.watcher.logLevel`                  | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                                                  |
+| `config.watcher.metrics.enabled`           | bool   | `false`     | When true, sets `METRICS_ADDR=:9090` on the watcher container and emits a `ServiceMonitor` (see [Metrics scraping](#metrics-scraping))                                                                                                     |
+| `config.watcher.metrics.scrapeWaitTimeout` | string | `""`        | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain) for the relationship with `terminationGracePeriodSeconds` |
 
 The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `configType: Secret`) and mounted read-only at `/etc/media-processor/`. The watcher container receives `--config /etc/media-processor/watcher.yaml`.
 
@@ -166,10 +167,12 @@ config:
 
 ### `config.worker`
 
-| Field                           | Type   | Default | Description                                                  |
-| ------------------------------- | ------ | ------- | ------------------------------------------------------------ |
-| `config.worker.logLevel`        | string | `info`  | Sets `LOG_LEVEL` on the worker container                     |
-| `config.worker.metrics.enabled` | bool   | `false` | When true, sets `METRICS_ADDR=:9090` on the worker container |
+| Field                                     | Type   | Default | Description                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.worker.logLevel`                  | string | `info`  | Sets `LOG_LEVEL` on the worker container                                                                                                                                                                                                                                                                                                                                                          |
+| `config.worker.stopTimeout`               | string | `30s`   | Sets `WORKER_STOP_TIMEOUT` on the worker container. The chart default of `30s` keeps the SIGTERM-to-SIGKILL window inside the default `terminationGracePeriodSeconds` of `120s`. Operators running long transcodes must raise this together with `metrics.scrapeWaitTimeout` and the worker controller's `pod.terminationGracePeriodSeconds`. See [Termination and drain](#termination-and-drain) |
+| `config.worker.metrics.enabled`           | bool   | `false` | When true, sets `METRICS_ADDR=:9090` on the worker container and emits a `PodMonitor` (see [Metrics scraping](#metrics-scraping))                                                                                                                                                                                                                                                                 |
+| `config.worker.metrics.scrapeWaitTimeout` | string | `""`    | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the worker container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain)                                                                                                                                                                                                                   |
 
 ### `config.worker.media.hardware`
 
@@ -229,6 +232,62 @@ Default image repositories are set here:
 | `resources.controllers.watcher.containers.watcher.image.tag`        | `""` (defaults to `Chart.AppVersion`) |
 | `resources.controllers.worker.containers.worker.image.repository`   | `ghcr.io/soliddowant/worker`          |
 | `resources.controllers.worker.containers.worker.image.tag`          | `""` (defaults to `Chart.AppVersion`) |
+
+## Metrics scraping
+
+When `config.watcher.metrics.enabled` or `config.worker.metrics.enabled` is true, the chart emits a Prometheus-operator monitor for the matching controller. The watcher and worker use different monitor types because their drain behavior differs.
+
+| Controller | Monitor type     | Resource name suffix | Why                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | ---------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| watcher    | `ServiceMonitor` | `-watcher`           | The scan loop exits within milliseconds of SIGTERM. The pod is removed from the `Endpoints` object on termination, but the metrics scrape-wait gate completes well before that matters                                                                                                                                                |
+| worker     | `PodMonitor`     | `-worker`            | The activity drain can run for the full `WORKER_STOP_TIMEOUT`. A `ServiceMonitor` would lose the terminating pod from `Endpoints` immediately and the final scrape would be missed, breaking the [scrape-on-shutdown gate](configuration.md#shared-watcher-and-worker). `PodMonitor` watches pods directly and is unaffected by drain |
+
+The watcher's metrics service (`{release}-media-processor-watcher-metrics`) and the worker's (`{release}-media-processor-worker-metrics`) are still emitted; they remain useful for `kubectl port-forward` even though the worker no longer relies on a Service for scrape discovery.
+
+The `PodMonitor` is added via the bjw-s `rawResources` mechanism (the bundled `common` library does not yet have a native `podMonitor` template). The PodMonitor selector matches `app.kubernetes.io/name`, `app.kubernetes.io/instance`, and `app.kubernetes.io/controller: worker` — the labels the bjw-s app-template applies to every controller's pods. The worker container exposes the metrics port under the name `metrics` so the PodMonitor can reference it by port name.
+
+## Termination and drain
+
+The chart sets the following defaults to make the SIGTERM → drain → final-scrape → exit sequence fit inside the Kubernetes pod grace period:
+
+| Knob                                                              | Default | Notes                                                                                                                                                                                  |
+| ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources.controllers.watcher.pod.terminationGracePeriodSeconds` | `120`   | Covers the watcher's near-instant scan-loop teardown plus the binary's `60s` `METRICS_SCRAPE_WAIT_TIMEOUT` plus a buffer                                                               |
+| `resources.controllers.worker.pod.terminationGracePeriodSeconds`  | `120`   | Sized for the chart's `WORKER_STOP_TIMEOUT=30s` + binary's `METRICS_SCRAPE_WAIT_TIMEOUT=60s` + 30s buffer                                                                              |
+| `config.worker.stopTimeout`                                       | `30s`   | Sets `WORKER_STOP_TIMEOUT`. Overrides the binary's much longer fallback (which tracks `MEDIA_TRANSCODE_TIMEOUT`) so a fresh-out-of-the-box install drains within its 120s grace period |
+| `config.watcher.metrics.scrapeWaitTimeout`                        | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher                                                                                            |
+| `config.worker.metrics.scrapeWaitTimeout`                         | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the worker                                                                                             |
+
+The required relationship is:
+
+```
+terminationGracePeriodSeconds >= WORKER_STOP_TIMEOUT + METRICS_SCRAPE_WAIT_TIMEOUT + buffer
+```
+
+For the worker chart defaults this works out to `120 >= 30 + 60 + 30` (30s buffer for SIGKILL margin). For the watcher there is no `WORKER_STOP_TIMEOUT` and the scan loop teardown is sub-second, so `120 >= 0 + 60 + 60` holds with room to spare.
+
+**Operators running long transcodes must raise all three together.** The chart's 120s grace will SIGKILL an in-flight activity on shutdown unless `config.worker.stopTimeout`, `config.worker.metrics.scrapeWaitTimeout`, and the worker controller's `pod.terminationGracePeriodSeconds` are all increased to fit the longest expected activity:
+
+```yaml
+config:
+  worker:
+    # Allow up to 6h for an in-flight transcode to drain on SIGTERM.
+    stopTimeout: "6h"
+    metrics:
+      enabled: true
+      scrapeWaitTimeout: "60s"
+
+resources:
+  controllers:
+    worker:
+      pod:
+        # 6h drain + 60s scrape wait + 60s buffer.
+        terminationGracePeriodSeconds: 21720
+```
+
+### Autoscaling note
+
+Count-based HPA can misbehave during long worker drains because `status.replicas` includes terminating pods, so a scale-out triggered while one pod is still draining may not actually create a new replica. Operators that need autoscaling here should prefer KEDA driven by Temporal queue-depth metrics rather than HPA on CPU or pod count.
 
 ## Hard-coded internals
 

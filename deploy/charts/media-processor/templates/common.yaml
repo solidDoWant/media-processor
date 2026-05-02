@@ -127,6 +127,11 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.watcher.metrics.otel.endpoint -}}
 {{- end -}}
 
+{{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
+{{- if .Values.config.watcher.metrics.scrapeWaitTimeout -}}
+  {{- $_ := set $watcherEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.watcher.metrics.scrapeWaitTimeout -}}
+{{- end -}}
+
 
 {{/* ============================================================ */}}
 {{/* Worker env vars                                              */}}
@@ -211,6 +216,11 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* METRICS_HIGH_CARDINALITY_LABELS */}}
 {{- if .Values.config.worker.metrics.highCardinalityLabels -}}
   {{- $_ := set $workerEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
+{{- end -}}
+
+{{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
+{{- if .Values.config.worker.metrics.scrapeWaitTimeout -}}
+  {{- $_ := set $workerEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.worker.metrics.scrapeWaitTimeout -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
@@ -475,8 +485,8 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- end -}}
 {{- end -}}
 
-{{- range $key := list "service" "serviceMonitor" -}}
-  {{- range $obj := values (index $mergedResources $key) -}}
+{{- range $key := list "service" "serviceMonitor" "rawResources" -}}
+  {{- range $obj := values (index $mergedResources $key | default dict) -}}
     {{- if and (kindIs "map" $obj) (hasKey $obj "enabled") -}}
       {{- $_ := set $obj "enabled" (eq (tpl (get $obj "enabled" | toString) $) "true") -}}
     {{- end -}}
