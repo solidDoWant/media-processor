@@ -177,11 +177,23 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 
 // resolveHighCardinalityLabels fetches per-item metadata from the arr library
 // and returns it as a tag map (id, title, year, plus episode-specific fields
-// for shows). The episode-specific keys are present with empty-string values
-// for movies so the resulting tag set keeps a consistent shape across both
-// media types. On lookup failure the metrics-errors counter is incremented
-// and nil is returned so the caller can proceed without high-cardinality tags.
+// for shows). The full key set is always returned: episode-specific keys
+// carry empty strings for movies, and on lookup failure every key carries
+// an empty string. Returning a stable key set is required because tally's
+// prom reporter caches metrics on (name, sortedTagKeys); a varying tag-key
+// set across emissions for the same metric name would trigger a Prometheus
+// "same name, different label names" registration conflict and silently
+// drop one variant. On failure the metrics-errors counter is incremented.
 func (a *Activities) resolveHighCardinalityLabels(ctx context.Context, input MediaInput, library medialib.ArrLibrary) map[string]string {
+	tags := map[string]string{
+		"id":             "",
+		"title":          "",
+		"year":           "",
+		"series_title":   "",
+		"season_number":  "",
+		"episode_number": "",
+	}
+
 	info, err := library.GetInfo(ctx, input.FilePath)
 	if err != nil || info == nil {
 		if err != nil {
@@ -190,17 +202,13 @@ func (a *Activities) resolveHighCardinalityLabels(ctx context.Context, input Med
 
 		activity.GetMetricsHandler(ctx).Counter(metricMetricsErrors).Inc(1)
 
-		return nil
+		return tags
 	}
 
-	tags := map[string]string{
-		"id":             strconv.FormatInt(info.GetID(), 10),
-		"title":          info.GetTitle(),
-		"year":           strconv.Itoa(info.GetYear()),
-		"series_title":   "",
-		"season_number":  "",
-		"episode_number": "",
-	}
+	tags["id"] = strconv.FormatInt(info.GetID(), 10)
+	tags["title"] = info.GetTitle()
+	tags["year"] = strconv.Itoa(info.GetYear())
+
 	if input.MediaType == medialib.ShowType {
 		tags["series_title"] = info.GetSeriesTitle()
 		tags["season_number"] = strconv.Itoa(info.GetSeasonNumber())

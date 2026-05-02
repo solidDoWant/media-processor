@@ -29,8 +29,10 @@ func (e *stepError) Unwrap() error { return e.err }
 //
 // Each activity is invoked with the retry policy that fits its idempotency
 // profile: idempotent operations (Notify, Cleanup) use retryableMaxAttempts
-// so transient flakes do not fail the run; non-idempotent operations
-// (transcode, failure-webhook) use defaultMaxAttempts (single attempt).
+// so transient flakes do not fail the run; everything else (Probe,
+// DetectCrop, Transcode, NotifyFailure) uses defaultMaxAttempts (single
+// attempt) because retrying would either duplicate non-idempotent side
+// effects or repeat expensive work that will not recover.
 //
 // Per-run application metrics are emitted by the activities themselves through
 // the SDK MetricsHandler. End-to-end workflow latency comes for free from the

@@ -1,12 +1,15 @@
 package media
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,9 +40,10 @@ func newActivityEnv(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medial
 
 	env := suite.NewTestActivityEnvironment()
 	env.RegisterActivity(a.Probe)
+	env.RegisterActivity(a.DetectCrop)
+	env.RegisterActivity(a.Transcode)
 	env.RegisterActivity(a.Notify)
 	env.RegisterActivity(a.Cleanup)
-	env.RegisterActivity(a.Transcode)
 	env.RegisterActivity(a.NotifyFailure)
 
 	return a, env
@@ -166,6 +170,75 @@ func TestNotifyFailure_NoWebhookUrlIsNoop(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.NotifyFailure, MediaInput{FilePath: "/in/movie.mkv"}, "probe", "boom")
 	require.NoError(t, err, "missing webhook URL is acceptable; activity must not error")
+}
+
+// TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes guards against
+// the tally→Prometheus registration-conflict pitfall: every outcome of the
+// arr-library lookup (success, error, nil-info) must produce the same set
+// of tag keys, otherwise the tally cached reporter would attempt two
+// Prometheus registrations of the same metric name with different label
+// names — the second one becoming a noopMetric and silently dropping
+// observations for whichever outcome registered second.
+func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		stub   *stubLibraryClient
+		input  MediaInput
+		assert func(t *testing.T, tags map[string]string)
+	}{
+		{
+			name:  "success movie populates id/title/year and leaves episode keys empty",
+			stub:  &stubLibraryClient{infoResult: &medialib.Movie{ID: 1, Title: "Movie", Year: 2020}},
+			input: MediaInput{MediaType: medialib.MovieType, FilePath: "/x"},
+			assert: func(t *testing.T, tags map[string]string) {
+				assert.Equal(t, "1", tags["id"])
+				assert.Equal(t, "", tags["series_title"])
+			},
+		},
+		{
+			name:   "GetInfo error returns empty values for every key",
+			stub:   &stubLibraryClient{infoErr: errors.New("radarr down")},
+			input:  MediaInput{MediaType: medialib.MovieType, FilePath: "/x"},
+			assert: func(t *testing.T, tags map[string]string) { assert.Equal(t, "", tags["id"]) },
+		},
+		{
+			name:   "GetInfo nil result returns empty values for every key",
+			stub:   &stubLibraryClient{},
+			input:  MediaInput{MediaType: medialib.MovieType, FilePath: "/x"},
+			assert: func(t *testing.T, tags map[string]string) { assert.Equal(t, "", tags["id"]) },
+		},
+	}
+
+	wantKeys := []string{"episode_number", "id", "season_number", "series_title", "title", "year"}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := NewActivities(MediaWorkflowConfig{HighCardinalityLabels: true}, tc.stub, &stubLibraryClient{}, &webhook.Client{})
+			require.NoError(t, err)
+
+			// resolveHighCardinalityLabels is a method, not a registered
+			// activity. Wrap it in an inline activity so its inner
+			// activity.GetMetricsHandler / GetLogger calls find a real
+			// activity context.
+			wrap := func(ctx context.Context, in MediaInput) (map[string]string, error) {
+				return a.resolveHighCardinalityLabels(ctx, in, tc.stub), nil
+			}
+
+			suite := &testsuite.WorkflowTestSuite{}
+			env := suite.NewTestActivityEnvironment()
+			env.RegisterActivity(wrap)
+
+			val, err := env.ExecuteActivity(wrap, tc.input)
+			require.NoError(t, err)
+
+			var got map[string]string
+			require.NoError(t, val.Get(&got))
+
+			assert.Equal(t, wantKeys, slices.Sorted(maps.Keys(got)),
+				"key set must be identical across all GetInfo outcomes")
+			tc.assert(t, got)
+		})
+	}
 }
 
 // TestProbe_InvalidMediaEmitsCounterOnly probes a non-media input and verifies
