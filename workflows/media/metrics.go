@@ -7,7 +7,6 @@ import (
 	"github.com/uber-go/tally/v4"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // Bucket boundaries for histogram metrics. Factor-2 exponential sweeps cover
@@ -57,7 +56,7 @@ func baseTags(input mediatypes.MediaInput) map[string]string {
 // non-nil; the keys must match the full registered set (see
 // resolveHighCardinalityLabels) so the tally→Prometheus reporter does not
 // see a varying tag-key set across emissions for the same metric name.
-func transcodeTags(input mediatypes.MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput, hcTags map[string]string) map[string]string {
+func transcodeTags(input mediatypes.MediaInput, probe ProbeOutput, transcode TranscodeOutput, hcTags map[string]string) map[string]string {
 	tags := baseTags(input)
 	tags["source_codec"] = probe.VideoCodec
 	tags["destination_codec"] = transcode.DestCodec

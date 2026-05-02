@@ -1,5 +1,4 @@
-// Package steps provides workflow step implementations for the media processing workflows.
-package steps
+package media
 
 import (
 	"context"

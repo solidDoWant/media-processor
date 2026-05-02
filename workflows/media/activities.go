@@ -18,7 +18,6 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // errTypeNonRetryable tags ApplicationErrors raised for pure-data problems
@@ -66,14 +65,14 @@ func (a *Activities) Register(w worker.Worker) {
 	w.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
 }
 
-// Probe is the Temporal activity that wraps steps.RunProbe. Per-run metrics
+// Probe is the Temporal activity that wraps RunProbe. Per-run metrics
 // are emitted inline: source-duration histogram + audio/subtitle gauges for
 // valid media, or the invalid-files counter when the file fails to probe as
 // media.
-func (a *Activities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOutput, error) {
+func (a *Activities) Probe(ctx context.Context, input MediaInput) (ProbeOutput, error) {
 	start := time.Now()
 
-	out, err := steps.RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+	out, err := RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 	logStepResult(ctx, "probe", input.FilePath, start, err)
 
 	if err != nil {
@@ -89,7 +88,7 @@ func (a *Activities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOu
 // pipeline. Histogram emission uses the underlying tally scope obtained via
 // contribtally.ScopeFromHandler so source-duration carries an explicit bucket
 // set; counters and gauges go through the standard MetricsHandler interface.
-func emitProbeMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput) {
+func emitProbeMetrics(ctx context.Context, input MediaInput, probe ProbeOutput) {
 	handler := activity.GetMetricsHandler(ctx)
 	tags := baseTags(input)
 
@@ -114,23 +113,23 @@ func scopedHistograms(handler client.MetricsHandler, tags map[string]string) tal
 	return contribtally.ScopeFromHandler(handler).Tagged(tags)
 }
 
-// DetectCrop is the Temporal activity that wraps steps.RunDetectCrop. It
+// DetectCrop is the Temporal activity that wraps RunDetectCrop. It
 // returns a DetectCropOutput with a nil Crop when the cropdetect filter
 // produced no usable crop region.
-func (a *Activities) DetectCrop(ctx context.Context, input MediaInput, probe steps.ProbeOutput) (steps.DetectCropOutput, error) {
+func (a *Activities) DetectCrop(ctx context.Context, input MediaInput, probe ProbeOutput) (DetectCropOutput, error) {
 	start := time.Now()
 
-	crop, err := steps.RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, a.cfg.MinCropX, a.cfg.MinCropY)
+	crop, err := RunDetectCrop(ctx, input.FilePath, probe.VideoWidth, probe.VideoHeight, a.cfg.MinCropX, a.cfg.MinCropY)
 	logStepResult(ctx, "detectcrop", input.FilePath, start, err)
 
 	if err != nil {
-		return steps.DetectCropOutput{}, err
+		return DetectCropOutput{}, err
 	}
 
-	return steps.DetectCropOutput{Crop: crop}, nil
+	return DetectCropOutput{Crop: crop}, nil
 }
 
-// Transcode is the Temporal activity that wraps steps.RunTranscode. After a
+// Transcode is the Temporal activity that wraps RunTranscode. After a
 // successful transcode it emits the per-run file-size and transcode-duration
 // histograms and the artwork-fetch-skipped counter when applicable. When
 // high-cardinality labels are enabled it also looks up per-item metadata
@@ -139,7 +138,7 @@ func (a *Activities) DetectCrop(ctx context.Context, input MediaInput, probe ste
 // but only with worker-context tags; the application metric carries the media
 // tags (codec, container, hardware_accelerated, crop_applied, …) that make
 // runtime correlatable with source size, source duration, and codec choice.
-func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe steps.ProbeOutput, cropOut steps.DetectCropOutput) (steps.TranscodeOutput, error) {
+func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe ProbeOutput, cropOut DetectCropOutput) (TranscodeOutput, error) {
 	start := time.Now()
 
 	library, err := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient)
@@ -147,7 +146,7 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 		wrappedErr := fmt.Errorf("get arr library for artwork: %w", err)
 		logStepResult(ctx, "transcode", input.FilePath, start, wrappedErr)
 
-		return steps.TranscodeOutput{}, wrappedErr
+		return TranscodeOutput{}, wrappedErr
 	}
 
 	outputPath := filepath.Clean(strings.TrimSpace(input.OutputPath))
@@ -155,10 +154,10 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 		emptyErr := fmt.Errorf("output_path is required")
 		logStepResult(ctx, "transcode", input.FilePath, start, emptyErr)
 
-		return steps.TranscodeOutput{}, emptyErr
+		return TranscodeOutput{}, emptyErr
 	}
 
-	out, err := steps.RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, library)
+	out, err := RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, library)
 	logStepResult(ctx, "transcode", input.FilePath, start, err)
 
 	if err != nil {
@@ -222,7 +221,7 @@ func (a *Activities) resolveHighCardinalityLabels(ctx context.Context, input Med
 // metrics pipeline. File-size histograms use explicit buckets via the tally
 // scope obtained from the SDK handler; the artwork-fetch-skipped counter goes
 // through the standard MetricsHandler interface.
-func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput, hcTags map[string]string) {
+func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe ProbeOutput, transcode TranscodeOutput, hcTags map[string]string) {
 	handler := activity.GetMetricsHandler(ctx)
 	tags := transcodeTags(input, probe, transcode, hcTags)
 
@@ -243,7 +242,7 @@ func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe steps.Pro
 // failures. Pure-data errors (unknown media type, output_remote_path outside
 // the output tree) are returned as non-retryable so Temporal does not burn the
 // retry budget on inputs that cannot recover.
-func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode steps.TranscodeOutput) error {
+func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode TranscodeOutput) error {
 	start := time.Now()
 
 	library, err := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient)
@@ -297,9 +296,9 @@ func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
 
 	var err error
 	if input.PreserveSource {
-		err = steps.WriteSentinel(input.FilePath)
+		err = WriteSentinel(input.FilePath)
 	} else {
-		err = steps.RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+		err = RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
 	}
 
 	logStepResult(ctx, "cleanup", input.FilePath, start, err)
@@ -319,7 +318,7 @@ func (a *Activities) NotifyFailure(ctx context.Context, input MediaInput, failed
 		stepErrors[failedStep] = failureMsg
 	}
 
-	err := steps.NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, input.FilePath, a.webhookClient)
+	err := NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, input.FilePath, a.webhookClient)
 	logStepResult(ctx, "notify_failure", input.FilePath, start, err)
 
 	return err

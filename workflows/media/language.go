@@ -1,4 +1,4 @@
-package steps
+package media
 
 import iso639 "github.com/barbashov/iso639-3"
 

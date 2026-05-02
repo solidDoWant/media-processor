@@ -20,7 +20,6 @@ import (
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // newActivityEnv builds an Activities backed by the supplied stubs and a
@@ -55,7 +54,7 @@ func TestNotify_CallsLibraryImport(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
-		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
 	)
 	require.NoError(t, err)
 
@@ -72,7 +71,7 @@ func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 			FilePath: "/in/movie.mkv", MediaType: medialib.MovieType,
 			OutputPath: "/processed", OutputRemotePath: "/remote/movies",
 		},
-		steps.TranscodeOutput{DestFilePath: "/processed/movie.mkv"},
+		TranscodeOutput{DestFilePath: "/processed/movie.mkv"},
 	)
 	require.NoError(t, err)
 
@@ -86,7 +85,7 @@ func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
-		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
 	)
 	require.Error(t, err, "library import failure should propagate")
 }
@@ -282,8 +281,8 @@ func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
 			env := suite.NewTestActivityEnvironment()
 
 			input := MediaInput{MediaType: medialib.MovieType, MappingName: "downloads"}
-			probe := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"}
-			out := steps.TranscodeOutput{
+			probe := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"}
+			out := TranscodeOutput{
 				DestCodec:                "hevc",
 				DestContainer:            "mkv",
 				SourceFileSizeBytes:      5_000_000_000,

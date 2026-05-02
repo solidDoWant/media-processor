@@ -5,8 +5,6 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
-
-	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
 // stepError wraps an activity error with the step name where it originated.
@@ -76,7 +74,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 	})
 
-	var probe steps.ProbeOutput
+	var probe ProbeOutput
 	if err := workflow.ExecuteActivity(probeCtx, ProbeActivityName, input).Get(probeCtx, &probe); err != nil {
 		return &stepError{step: "probe", err: err}
 	}
@@ -103,7 +101,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 	})
 
-	var crop steps.DetectCropOutput
+	var crop DetectCropOutput
 	if err := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); err != nil {
 		return &stepError{step: "detectcrop", err: err}
 	}
@@ -113,7 +111,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 	})
 
-	var transcode steps.TranscodeOutput
+	var transcode TranscodeOutput
 	if err := workflow.ExecuteActivity(transcodeCtx, TranscodeActivityName, input, probe, crop).Get(transcodeCtx, &transcode); err != nil {
 		return &stepError{step: "transcode", err: err}
 	}
