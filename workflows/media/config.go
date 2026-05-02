@@ -5,8 +5,6 @@ package media
 import (
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
@@ -21,14 +19,12 @@ const MediaWorkflowName = mediatypes.MediaWorkflowName
 // exactly one concern and each concern is invoked under the retry policy that
 // fits it.
 const (
-	ProbeActivityName            = "Probe"
-	DetectCropActivityName       = "DetectCrop"
-	TranscodeActivityName        = "Transcode"
-	NotifyActivityName           = "Notify"
-	CleanupActivityName          = "Cleanup"
-	RecordRunMetricsActivityName = "RecordRunMetrics"
-	RecordInvalidActivityName    = "RecordInvalid"
-	NotifyFailureActivityName    = "NotifyFailure"
+	ProbeActivityName         = "Probe"
+	DetectCropActivityName    = "DetectCrop"
+	TranscodeActivityName     = "Transcode"
+	NotifyActivityName        = "Notify"
+	CleanupActivityName       = "Cleanup"
+	NotifyFailureActivityName = "NotifyFailure"
 )
 
 const (
@@ -48,10 +44,10 @@ const (
 	defaultFinalizeTimeout = 10 * time.Minute
 
 	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
-	// detectcrop, transcode, the metrics activities, the invalid path, and the
-	// failure-webhook. Single attempt: retry would either repeat expensive
-	// work that will not recover (probe / detectcrop / transcode) or duplicate
-	// a non-idempotent side effect (metrics emission, webhook).
+	// detectcrop, transcode, and the failure-webhook. Single attempt: retry
+	// would either repeat expensive work that will not recover (probe /
+	// detectcrop / transcode) or duplicate a non-idempotent side effect
+	// (webhook).
 	defaultMaxAttempts = 1
 	// retryableMaxAttempts is the RetryPolicy MaximumAttempts applied to the
 	// notify and cleanup activities. Both are idempotent — the arr scan
@@ -67,10 +63,6 @@ type MediaWorkflowConfig struct {
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
 	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
 	HardwareDevicePath string
-	// MetricsRegisterer is the Prometheus registerer collectors are registered
-	// against for per-run metrics. When nil, a private throwaway registry is
-	// used and observations go unscraped.
-	MetricsRegisterer prometheus.Registerer
 	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
 	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
 	HighCardinalityLabels bool

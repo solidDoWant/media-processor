@@ -19,7 +19,7 @@ import (
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
-// registerWorkflow wires the workflow + eight activities into the test
+// registerWorkflow wires the workflow + six activities into the test
 // environment. Mirrors Activities.Register, which targets a real worker.Worker.
 func registerWorkflow(env *testsuite.TestWorkflowEnvironment, a *Activities) {
 	env.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
@@ -28,8 +28,6 @@ func registerWorkflow(env *testsuite.TestWorkflowEnvironment, a *Activities) {
 	env.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
 	env.RegisterActivityWithOptions(a.Notify, activity.RegisterOptions{Name: NotifyActivityName})
 	env.RegisterActivityWithOptions(a.Cleanup, activity.RegisterOptions{Name: CleanupActivityName})
-	env.RegisterActivityWithOptions(a.RecordRunMetrics, activity.RegisterOptions{Name: RecordRunMetricsActivityName})
-	env.RegisterActivityWithOptions(a.RecordInvalid, activity.RegisterOptions{Name: RecordInvalidActivityName})
 	env.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
 }
 
@@ -52,7 +50,7 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
 
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080, StartedAt: time.Now()}
+	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	cropOut := steps.DetectCropOutput{}
 	transOut := steps.TranscodeOutput{DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/file.mkv"}
 
@@ -61,7 +59,6 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(RecordRunMetricsActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -70,7 +67,7 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanupAndRecordInvalid(t *testing.T) {
+func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
 	registerWorkflow(env, newWorkflowActivities(t))
@@ -78,11 +75,10 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanupAndRecordInvalid
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 		Return(steps.ProbeOutput{IsValidMedia: false}, nil).Once()
 	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(RecordInvalidActivityName, mock.Anything, mock.Anything).Return(nil).Once()
 
-	// DetectCrop, Transcode, Notify, RecordRunMetrics must NOT be invoked.
-	// The mock fails the test if any unexpected call arrives because no
-	// .Return was registered for them.
+	// DetectCrop, Transcode, and Notify must NOT be invoked. The mock fails
+	// the test if any unexpected call arrives because no .Return was
+	// registered for them.
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.txt", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -144,7 +140,7 @@ func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 
 // TestMediaWorkflow_NotifyAndCleanupRetry verifies that the notify and cleanup
 // activities each retry up to 3 times when their first attempts fail
-// transiently, and that metrics still emits exactly once afterwards.
+// transiently.
 func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -158,7 +154,6 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 
 	notifyAttempts := 0
 	cleanupAttempts := 0
-	metricsAttempts := 0
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).
 		Return(func(_ context.Context, _ MediaInput, _ steps.TranscodeOutput) error {
@@ -180,94 +175,12 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 			return nil
 		})
 
-	env.OnActivity(RecordRunMetricsActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ steps.ProbeOutput, _ steps.TranscodeOutput) error {
-			metricsAttempts++
-			return nil
-		})
-
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, 3, notifyAttempts, "notify should retry up to 3 times")
 	assert.Equal(t, 3, cleanupAttempts, "cleanup should retry up to 3 times")
-	assert.Equal(t, 1, metricsAttempts, "metrics should fire exactly once after the retried steps succeed")
-}
-
-// TestMediaWorkflow_MetricsFailureDoesNotFailWorkflow verifies that a metrics
-// activity error does not propagate to the workflow result and that the
-// activity is invoked exactly once. Histogram emission is not idempotent, so
-// retries would double-count.
-func TestMediaWorkflow_MetricsFailureDoesNotFailWorkflow(t *testing.T) {
-	suite := &testsuite.WorkflowTestSuite{}
-	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
-
-	probeOut := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
-	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
-	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(steps.DetectCropOutput{}, nil).Once()
-	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(steps.TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil).Once()
-	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
-
-	metricsAttempts := 0
-	failureWebhookCalled := false
-
-	env.OnActivity(RecordRunMetricsActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ steps.ProbeOutput, _ steps.TranscodeOutput) error {
-			metricsAttempts++
-			return errors.New("OTel sdk panic")
-		})
-
-	env.OnActivity(NotifyFailureActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _, _ string) error {
-			failureWebhookCalled = true
-			return nil
-		})
-
-	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError(), "metrics failure must not fail the workflow")
-	assert.Equal(t, 1, metricsAttempts, "metrics activity should not be retried")
-	assert.False(t, failureWebhookCalled, "failure-webhook must not fire when only metrics fail")
-}
-
-// TestMediaWorkflow_RecordInvalidFailureDoesNotFailWorkflow verifies that a
-// failure in the invalid-path metrics activity does not propagate to the
-// workflow result.
-func TestMediaWorkflow_RecordInvalidFailureDoesNotFailWorkflow(t *testing.T) {
-	suite := &testsuite.WorkflowTestSuite{}
-	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
-
-	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
-		Return(steps.ProbeOutput{IsValidMedia: false}, nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
-
-	invalidAttempts := 0
-	failureWebhookCalled := false
-
-	env.OnActivity(RecordInvalidActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput) error {
-			invalidAttempts++
-			return errors.New("OTel sdk panic")
-		})
-
-	env.OnActivity(NotifyFailureActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _, _ string) error {
-			failureWebhookCalled = true
-			return nil
-		})
-
-	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.txt", MediaType: medialib.MovieType, OutputPath: "/out"})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError(), "invalid-metrics failure must not fail the workflow")
-	assert.Equal(t, 1, invalidAttempts, "record-invalid activity should not be retried")
-	assert.False(t, failureWebhookCalled, "failure-webhook must not fire when only invalid-metrics fail")
 }
 
 // TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry verifies that

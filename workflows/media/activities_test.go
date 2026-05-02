@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uber-go/tally/v4"
+	contribtally "go.temporal.io/sdk/contrib/tally"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -19,32 +20,34 @@ import (
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
-// newRecordingActivities builds an Activities backed by a fresh prometheus.Registry
-// + the supplied stubs, plus a TestActivityEnvironment with all activities registered
-// so callers can invoke them via env.ExecuteActivity in a real activity context.
-func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) (*Activities, *testsuite.TestActivityEnvironment, *prometheus.Registry) {
+// newActivityEnv builds an Activities backed by the supplied stubs and a
+// TestActivityEnvironment with all activities registered. The supplied tally
+// TestScope is wired through as the SDK metrics handler so emissions made via
+// activity.GetMetricsHandler land in the snapshot.
+func newActivityEnv(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client, scope tally.TestScope) (*Activities, *testsuite.TestActivityEnvironment) {
 	t.Helper()
-
-	reg := prometheus.NewRegistry()
-	cfg.MetricsRegisterer = reg
 
 	a, err := NewActivities(cfg, radarr, sonarr, wh)
 	require.NoError(t, err)
 
 	suite := &testsuite.WorkflowTestSuite{}
+	if scope != nil {
+		suite.SetMetricsHandler(contribtally.NewMetricsHandler(scope))
+	}
+
 	env := suite.NewTestActivityEnvironment()
+	env.RegisterActivity(a.Probe)
 	env.RegisterActivity(a.Notify)
 	env.RegisterActivity(a.Cleanup)
-	env.RegisterActivity(a.RecordRunMetrics)
-	env.RegisterActivity(a.RecordInvalid)
+	env.RegisterActivity(a.Transcode)
 	env.RegisterActivity(a.NotifyFailure)
 
-	return a, env, reg
+	return a, env
 }
 
 func TestNotify_CallsLibraryImport(t *testing.T) {
 	radarr := &stubLibraryClient{}
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
@@ -58,7 +61,7 @@ func TestNotify_CallsLibraryImport(t *testing.T) {
 
 func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 	radarr := &stubLibraryClient{}
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{
@@ -75,7 +78,7 @@ func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 
 func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 	radarr := &stubLibraryClient{err: errors.New("radarr unreachable")}
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
@@ -89,7 +92,7 @@ func TestCleanup_DeletesSource(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
@@ -103,7 +106,7 @@ func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
 		FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true,
@@ -124,40 +127,10 @@ func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 	// Do NOT create the file: simulate a retried cleanup after the previous
 	// attempt already removed it.
 
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err, "cleanup must be idempotent so retries do not fail when the file is already gone")
-}
-
-func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
-	a, env, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-
-	_, err := env.ExecuteActivity(a.RecordRunMetrics,
-		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType},
-		steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"},
-		steps.TranscodeOutput{
-			DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/movie.mkv",
-		},
-	)
-	require.NoError(t, err)
-
-	require.NotNil(t, findMetricFamily(t, reg, "media_workflow_total_duration_seconds"),
-		"metrics activity should record per-run histograms")
-}
-
-func TestRecordInvalid_RecordsInvalidFileMetric(t *testing.T) {
-	a, env, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
-
-	_, err := env.ExecuteActivity(a.RecordInvalid, MediaInput{
-		FilePath: "/in/not-a-video.txt", MediaType: medialib.MovieType, MappingName: "downloads",
-	})
-	require.NoError(t, err)
-
-	mf := findMetricFamily(t, reg, "media_workflow_invalid_files_total")
-	require.NotNil(t, mf, "invalid_files_total counter should be present")
-	require.Len(t, mf.GetMetric(), 1)
-	assert.EqualValues(t, 1, mf.GetMetric()[0].GetCounter().GetValue())
 }
 
 func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
@@ -175,7 +148,7 @@ func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{URL: srv.URL})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{URL: srv.URL}, nil)
 
 	_, err := env.ExecuteActivity(a.NotifyFailure, MediaInput{FilePath: "/in/movie.mkv"}, "transcode", "ffmpeg exited with code 1")
 	require.NoError(t, err)
@@ -189,8 +162,173 @@ func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
 }
 
 func TestNotifyFailure_NoWebhookUrlIsNoop(t *testing.T) {
-	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
 	_, err := env.ExecuteActivity(a.NotifyFailure, MediaInput{FilePath: "/in/movie.mkv"}, "probe", "boom")
 	require.NoError(t, err, "missing webhook URL is acceptable; activity must not error")
+}
+
+// TestProbe_InvalidMediaEmitsCounterOnly probes a non-media input and verifies
+// only the invalid-files counter is incremented; the per-run histograms and
+// gauges are skipped because there is no media to describe.
+func TestProbe_InvalidMediaEmitsCounterOnly(t *testing.T) {
+	scope := tally.NewTestScope("", nil)
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, scope)
+
+	notMedia := filepath.Join(t.TempDir(), "not-a-video.txt")
+	require.NoError(t, os.WriteFile(notMedia, []byte("hello"), 0o600))
+
+	_, err := env.ExecuteActivity(a.Probe, MediaInput{
+		FilePath: notMedia, MediaType: medialib.MovieType, MappingName: "downloads",
+	})
+	require.NoError(t, err)
+
+	snap := scope.Snapshot()
+	wantTags := map[string]string{"media_type": "movie", "mapping_name": "downloads"}
+
+	counter := findCounter(t, snap, "media_workflow_invalid_files", wantTags)
+	assert.EqualValues(t, 1, counter.Value())
+
+	assert.Empty(t, findHistograms(snap, "media_workflow_audio_track_count"), "track histograms must not be emitted for invalid files")
+	assert.Empty(t, findHistograms(snap, "media_workflow_subtitle_track_count"))
+	assert.Empty(t, findHistograms(snap, "media_workflow_source_duration_seconds"))
+}
+
+// TestProbe_ValidMediaEmitsHistogramsAndGauges runs probe against a real
+// fixture video and verifies the source-duration histogram + audio/subtitle
+// gauges are emitted with the base tag set.
+func TestProbe_ValidMediaEmitsHistogramsAndGauges(t *testing.T) {
+	scope := tally.NewTestScope("", nil)
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, scope)
+
+	srcPath := copyTestVideo(t)
+
+	_, err := env.ExecuteActivity(a.Probe, MediaInput{
+		FilePath: srcPath, MediaType: medialib.MovieType, MappingName: "downloads",
+	})
+	require.NoError(t, err)
+
+	snap := scope.Snapshot()
+	wantTags := map[string]string{"media_type": "movie", "mapping_name": "downloads"}
+
+	durHist := findHistogram(t, snap, "media_workflow_source_duration_seconds", wantTags)
+	assertHistogramSampleCount(t, durHist, 1)
+
+	audioGauge := findGauge(t, snap, "media_workflow_audio_track_count", wantTags)
+	assert.GreaterOrEqual(t, audioGauge.Value(), float64(0))
+
+	_ = findGauge(t, snap, "media_workflow_subtitle_track_count", wantTags)
+}
+
+// hasSubsetTags returns true when actual contains every key/value pair in
+// want. Used to look up tally snapshots by metric name + an application
+// subset of tags, ignoring SDK-injected worker tags
+// (activity_type, namespace, task_queue, workflow_type) that vary by env.
+func hasSubsetTags(actual, want map[string]string) bool {
+	for k, v := range want {
+		if actual[k] != v {
+			return false
+		}
+	}
+
+	return true
+}
+
+func findCounter(t *testing.T, snap tally.Snapshot, name string, wantTags map[string]string) tally.CounterSnapshot {
+	t.Helper()
+
+	for _, c := range snap.Counters() {
+		if c.Name() == name && hasSubsetTags(c.Tags(), wantTags) {
+			return c
+		}
+	}
+
+	t.Fatalf("counter %q with tags %v not in snapshot; got %v", name, wantTags, allCounterKeys(snap))
+
+	return nil
+}
+
+func findGauge(t *testing.T, snap tally.Snapshot, name string, wantTags map[string]string) tally.GaugeSnapshot {
+	t.Helper()
+
+	for _, g := range snap.Gauges() {
+		if g.Name() == name && hasSubsetTags(g.Tags(), wantTags) {
+			return g
+		}
+	}
+
+	t.Fatalf("gauge %q with tags %v not in snapshot; got %v", name, wantTags, allGaugeKeys(snap))
+
+	return nil
+}
+
+func findHistogram(t *testing.T, snap tally.Snapshot, name string, wantTags map[string]string) tally.HistogramSnapshot {
+	t.Helper()
+
+	for _, h := range snap.Histograms() {
+		if h.Name() == name && hasSubsetTags(h.Tags(), wantTags) {
+			return h
+		}
+	}
+
+	t.Fatalf("histogram %q with tags %v not in snapshot; got %v", name, wantTags, allHistogramKeys(snap))
+
+	return nil
+}
+
+// findHistograms returns every snapshot whose metric name matches.
+func findHistograms(snap tally.Snapshot, name string) []tally.HistogramSnapshot {
+	var out []tally.HistogramSnapshot
+
+	for _, h := range snap.Histograms() {
+		if h.Name() == name {
+			out = append(out, h)
+		}
+	}
+
+	return out
+}
+
+// assertHistogramSampleCount verifies that exactly want samples were recorded
+// across all of the histogram's buckets (value- or duration-typed).
+func assertHistogramSampleCount(t *testing.T, h tally.HistogramSnapshot, want int64) {
+	t.Helper()
+
+	var total int64
+	for _, n := range h.Values() {
+		total += n
+	}
+
+	for _, n := range h.Durations() {
+		total += n
+	}
+
+	assert.EqualValues(t, want, total, "histogram %q should have %d samples", h.Name(), want)
+}
+
+func allCounterKeys(snap tally.Snapshot) []string {
+	out := make([]string, 0, len(snap.Counters()))
+	for k := range snap.Counters() {
+		out = append(out, k)
+	}
+
+	return out
+}
+
+func allGaugeKeys(snap tally.Snapshot) []string {
+	out := make([]string, 0, len(snap.Gauges()))
+	for k := range snap.Gauges() {
+		out = append(out, k)
+	}
+
+	return out
+}
+
+func allHistogramKeys(snap tally.Snapshot) []string {
+	out := make([]string, 0, len(snap.Histograms()))
+	for k := range snap.Histograms() {
+		out = append(out, k)
+	}
+
+	return out
 }

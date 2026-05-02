@@ -30,10 +30,12 @@ func (e *stepError) Unwrap() error { return e.err }
 // Each activity is invoked with the retry policy that fits its idempotency
 // profile: idempotent operations (Notify, Cleanup) use retryableMaxAttempts
 // so transient flakes do not fail the run; non-idempotent operations
-// (RecordRunMetrics, RecordInvalid, NotifyFailure) use defaultMaxAttempts
-// (single attempt) so retries cannot duplicate side effects, and the workflow
-// swallows their errors so a metrics or webhook issue does not fail an
-// otherwise-successful run.
+// (transcode, failure-webhook) use defaultMaxAttempts (single attempt).
+//
+// Per-run application metrics are emitted by the activities themselves through
+// the SDK MetricsHandler. End-to-end workflow latency comes for free from the
+// SDK's temporal_workflow_endtoend_latency_seconds histogram (tagged with
+// workflow_type), so the workflow body does not emit a duration metric.
 func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err error) {
 	log := workflow.GetLogger(ctx)
 	log.Info("processing file", "file", input.FilePath)
@@ -78,9 +80,10 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 	}
 
 	if !probe.IsValidMedia {
-		// Invalid path. Probe has already removed the source file; Cleanup
-		// here is a near-no-op for the file (RunCleanup tolerates ErrNotExist)
-		// but still writes the .done sentinel when PreserveSource is set.
+		// Invalid path. Probe has already removed the source file and emitted
+		// the invalid-files counter; Cleanup here is a near-no-op for the file
+		// (RunCleanup tolerates ErrNotExist) but still writes the .done
+		// sentinel when PreserveSource is set.
 		invalidCleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 			StartToCloseTimeout: defaultFinalizeTimeout,
 			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
@@ -88,15 +91,6 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input).Get(invalidCleanupCtx, nil); err != nil {
 			return &stepError{step: "cleanup", err: err}
-		}
-
-		invalidMetricsCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: defaultFinalizeTimeout,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-		})
-
-		if invalidErr := workflow.ExecuteActivity(invalidMetricsCtx, RecordInvalidActivityName, input).Get(invalidMetricsCtx, nil); invalidErr != nil {
-			log.Warn("invalid-metrics activity failed; workflow proceeds", "error", invalidErr.Error())
 		}
 
 		return nil
@@ -138,18 +132,6 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input).Get(cleanupCtx, nil); err != nil {
 		return &stepError{step: "cleanup", err: err}
-	}
-
-	// Metrics are best-effort: a failure here means an OTel SDK panic or the
-	// activity being killed mid-record — neither is worth failing the
-	// workflow over after the file has already been imported and cleaned up.
-	metricsCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
-
-	if metricsErr := workflow.ExecuteActivity(metricsCtx, RecordRunMetricsActivityName, input, probe, transcode).Get(metricsCtx, nil); metricsErr != nil {
-		log.Warn("metrics activity failed; workflow proceeds", "error", metricsErr.Error())
 	}
 
 	return nil

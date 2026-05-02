@@ -137,7 +137,6 @@ func run(ctx context.Context) error {
 
 	activities, err := media.NewActivities(media.MediaWorkflowConfig{
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
-		MetricsRegisterer:     metricsProvider.PrometheusRegisterer(),
 		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
 		MinCropX:              minCropX,
 		MinCropY:              minCropY,

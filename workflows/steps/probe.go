@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
@@ -59,10 +58,6 @@ type ProbeOutput struct {
 	// Only meaningful when IsValidMedia is true; zero otherwise.
 	VideoWidth  int `json:"video_width,omitempty"`
 	VideoHeight int `json:"video_height,omitempty"`
-	// StartedAt is the wall-clock time at which the probe step began. It is NOT set
-	// by RunProbe; the workflow step closure sets it before calling RunProbe so that
-	// downstream steps can compute elapsed durations.
-	StartedAt time.Time `json:"started_at,omitempty"`
 }
 
 // RunProbe reads codec and container info for filePath. If the file is not a
