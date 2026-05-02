@@ -52,7 +52,12 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init health server: %w", err)
 	}
 
-	metricsProvider, shutdown, err := metrics.NewFromEnv()
+	// Default to :9090 (paired with the worker's health port at :8080) so
+	// running the watcher and worker side-by-side on the same host doesn't
+	// collide on the metrics port. METRICS_ADDR overrides this.
+	const defaultMetricsAddr = ":9090"
+
+	metricsProvider, shutdown, err := metrics.NewFromEnv(defaultMetricsAddr)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}

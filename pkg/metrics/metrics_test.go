@@ -70,21 +70,41 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 	require.NoError(t, p.Shutdown(context.Background()))
 }
 
-func TestDefaultMetricsAddr(t *testing.T) {
-	// NewFromEnv binds DefaultMetricsAddr when METRICS_ADDR is unset. We can't
-	// exercise that path directly in tests without binding the real :9090 port
-	// (which would collide with anything else listening), so just lock the
-	// public constant. cmd/{watcher,worker} rely on this default; if the
-	// constant changes, the helm chart docs and configuration.md need updating
-	// in lockstep.
-	assert.Equal(t, ":9090", metrics.DefaultMetricsAddr)
+func TestNewFromEnv_FallsBackToDefaultAddr(t *testing.T) {
+	addr := freeAddr(t)
+	t.Setenv("METRICS_ADDR", "")
+
+	// NewFromEnv binds the supplied default when METRICS_ADDR is unset.
+	p, shutdown, err := metrics.NewFromEnv(addr)
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+
+	require.NotNil(t, p.PrometheusRegisterer())
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/metrics") //nolint:noctx
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestNewFromEnv_EmptyDefault_KeepsMetricsDisabled(t *testing.T) {
+	t.Setenv("METRICS_ADDR", "")
+
+	// Empty defaultAddr leaves the endpoint disabled when METRICS_ADDR is
+	// also unset — useful for tests that want the env path without binding
+	// any real port.
+	p, shutdown, err := metrics.NewFromEnv("")
+	require.NoError(t, err)
+	t.Cleanup(shutdown)
+
+	require.Nil(t, p.PrometheusRegisterer())
 }
 
 func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("METRICS_ADDR", addr)
 
-	p, shutdown, err := metrics.NewFromEnv()
+	p, shutdown, err := metrics.NewFromEnv("")
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 	require.NotNil(t, p)
@@ -219,7 +239,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_DisabledViaZeroEnvVar(t *testing.T) {
 	t.Setenv("METRICS_ADDR", addr)
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "0s")
 
-	p, shutdown, err := metrics.NewFromEnv()
+	p, shutdown, err := metrics.NewFromEnv("")
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 
@@ -236,7 +256,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {
 	t.Setenv("METRICS_ADDR", addr)
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "100ms")
 
-	p, shutdown, err := metrics.NewFromEnv()
+	p, shutdown, err := metrics.NewFromEnv("")
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 
@@ -253,7 +273,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_InvalidDurationErrors(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "not-a-duration")
 
-	_, _, err := metrics.NewFromEnv()
+	_, _, err := metrics.NewFromEnv("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "METRICS_SCRAPE_WAIT_TIMEOUT")
 }

@@ -109,7 +109,7 @@ Shared observability settings applied to both watcher and worker.
 | `config.watcher.volumes`                   | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                                                      |
 | `config.watcher.watches`                   | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                                                 |
 | `config.watcher.logLevel`                  | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                                                  |
-| `config.watcher.metrics.enabled`           | bool   | `false`     | When true, the chart emits the watcher-metrics `Service` and its `ServiceMonitor`. The watcher binary always exposes `/metrics` on port 9090 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping)) |
+| `config.watcher.metrics.enabled`           | bool   | `false`     | When true, the chart emits the watcher-metrics `Service` and its `ServiceMonitor`. The watcher binary always exposes `/metrics` on port 9091 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping)) |
 | `config.watcher.metrics.scrapeWaitTimeout` | string | `""`        | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain) for the relationship with `terminationGracePeriodSeconds` |
 
 The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `configType: Secret`) and mounted read-only at `/etc/media-processor/`. The watcher container receives `--config /etc/media-processor/watcher.yaml`.
@@ -234,7 +234,7 @@ Default image repositories are set here:
 
 ## Metrics scraping
 
-The watcher and worker binaries always expose `/metrics` on port 9090. The `config.{watcher,worker}.metrics.enabled` toggles control whether the chart creates the cluster-side scraping infrastructure on top — the metrics `Service` and its Prometheus-operator monitor. Leave both off when running without prometheus-operator CRDs installed; the binaries still serve `/metrics` for `kubectl port-forward` or any other in-cluster client.
+The watcher and worker binaries always expose `/metrics` (worker on `:9090`, watcher on `:9091` — defaults chosen so the two can run side-by-side on the same host). The `config.{watcher,worker}.metrics.enabled` toggles control whether the chart creates the cluster-side scraping infrastructure on top — the metrics `Service` and its Prometheus-operator monitor. Leave both off when running without prometheus-operator CRDs installed; the binaries still serve `/metrics` for `kubectl port-forward` or any other in-cluster client.
 
 When a toggle is true, the chart emits a monitor for the matching controller. The watcher and worker use different monitor types because their drain behavior differs.
 
@@ -302,7 +302,8 @@ These values are intentionally not configurable in `values.yaml`:
 | Temporal TLS root     | `/etc/temporal-tls/<name>/` |
 | Watcher health port   | `8081`                      |
 | Worker health port    | `8080`                      |
-| Metrics port          | `9090`                      |
+| Watcher metrics port  | `9091`                      |
+| Worker metrics port   | `9090`                      |
 | Liveness probe path   | `/healthz`                  |
 | Readiness probe path  | `/readyz`                   |
 

@@ -146,7 +146,7 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `TEMPORAL_NAMESPACE` | string | `default` | Optional | Temporal namespace the workflows execute in. When empty, the Temporal Go SDK uses its built-in default `default`. |
 | `TEMPORAL_TASK_QUEUE` | string | — | **Required** | Task queue the worker polls and the watcher dispatches to. Both binaries explicitly check this at startup and exit immediately if it is empty. |
 | `HEALTH_ADDR` | string (TCP address) | `:8080` (worker) / `:8081` (watcher) | Optional | TCP address for the HTTP health server. Exposes `/healthz` (liveness) and `/readyz` (readiness). Always enabled; override to change the listen address. |
-| `METRICS_ADDR` | string (TCP address) | `""` | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint (e.g. `:9090`). Disabled when empty. |
+| `METRICS_ADDR` | string (TCP address) | `:9090` (worker) / `:9091` (watcher) | Optional | TCP address on which to expose the Prometheus `/metrics` pull endpoint. Always exposed; override to change the listen address. The two binaries default to distinct ports so they can run side-by-side on the same host. |
 
 #### `cmd/worker`
 

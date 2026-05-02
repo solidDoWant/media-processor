@@ -2,10 +2,13 @@
 
 ## Prometheus endpoint
 
-Both the watcher and the worker expose an opt-in Prometheus pull endpoint. Set `METRICS_ADDR` to a TCP address (e.g. `:9090`) to start an HTTP server that exposes metrics in Prometheus text format at `/metrics`. When `METRICS_ADDR` is empty, no metrics endpoint is started.
+Both the watcher and the worker always serve metrics in Prometheus text format on `/metrics`. The defaults pair with each binary's health port (worker `:8080` / metrics `:9090`, watcher `:8081` / metrics `:9091`) so the two binaries can run side-by-side on the same host without colliding. Override either per-binary by setting `METRICS_ADDR` on that container.
 
 ```sh
+# Worker default; override only if needed
 METRICS_ADDR=:9090
+# Watcher default
+METRICS_ADDR=:9091
 ```
 
 Scrape config example:
@@ -14,7 +17,7 @@ Scrape config example:
 scrape_configs:
   - job_name: media-processor
     static_configs:
-      - targets: ["worker:9090", "watcher:9090"]
+      - targets: ["worker:9090", "watcher:9091"]
 ```
 
 ## Metric reference

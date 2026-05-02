@@ -293,7 +293,7 @@ resources:
       controller: watcher
       ports:
         metrics:
-          port: 9090
+          port: 9091
           protocol: TCP
     worker-metrics:
       enabled: '{{ .Values.config.worker.metrics.enabled }}'

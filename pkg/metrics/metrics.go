@@ -179,28 +179,27 @@ func (p *Provider) WaitForScrape(ctx context.Context) error {
 	}
 }
 
-// DefaultMetricsAddr is the address NewFromEnv binds the /metrics HTTP
-// server on when METRICS_ADDR is unset. The metrics endpoint is always
-// exposed by the binary; the Helm chart's metrics.enabled toggle controls
-// whether cluster-side scraping infrastructure (Service / ServiceMonitor /
-// PodMonitor) is created on top of it.
-const DefaultMetricsAddr = ":9090"
-
 // NewFromEnv creates a Provider using standard environment variables.
-// METRICS_ADDR sets the Prometheus /metrics HTTP listen address (default
-// ":9090" when unset). METRICS_SCRAPE_WAIT_TIMEOUT (Go duration string)
-// bounds Provider.WaitForScrape.
+// METRICS_ADDR sets the Prometheus /metrics HTTP listen address; when
+// unset, defaultAddr is used instead. Callers pick a default that does
+// not collide with their peer binary on a shared host (the watcher and
+// worker each pass their own value). Pass "" as defaultAddr to keep the
+// endpoint disabled when METRICS_ADDR is unset.
+// METRICS_SCRAPE_WAIT_TIMEOUT (Go duration string) bounds Provider.WaitForScrape.
 //
 // The returned shutdown func must be deferred by the caller. It stops the
 // metrics HTTP server with a 10-second deadline and writes any error to
 // stderr.
-func NewFromEnv() (*Provider, func(), error) {
+func NewFromEnv(defaultAddr string) (*Provider, func(), error) {
 	addr := os.Getenv("METRICS_ADDR")
 	if addr == "" {
-		addr = DefaultMetricsAddr
+		addr = defaultAddr
 	}
 
-	opts := []Option{WithMetricsAddr(addr)}
+	var opts []Option
+	if addr != "" {
+		opts = append(opts, WithMetricsAddr(addr))
+	}
 
 	if raw := os.Getenv("METRICS_SCRAPE_WAIT_TIMEOUT"); raw != "" {
 		d, err := time.ParseDuration(raw)

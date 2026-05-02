@@ -13,10 +13,10 @@ This page documents every network connection made by the watcher and worker pods
 
 ### Ingress
 
-| Source          | Protocol   | Port                           | Notes                                                                   |
-| --------------- | ---------- | ------------------------------ | ----------------------------------------------------------------------- |
-| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8081`) | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
-| Metrics scraper | HTTP (TCP) | `METRICS_ADDR`                 | `/metrics` endpoint. Only enabled when `METRICS_ADDR` is set.           |
+| Source          | Protocol   | Port                                       | Notes                                                                   |
+| --------------- | ---------- | ------------------------------------------ | ----------------------------------------------------------------------- |
+| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8081`)             | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
+| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9091`)           | `/metrics` endpoint. Always enabled.                                    |
 
 ## Worker
 
@@ -35,10 +35,10 @@ This page documents every network connection made by the watcher and worker pods
 
 ### Ingress
 
-| Source          | Protocol   | Port                           | Notes                                                                   |
-| --------------- | ---------- | ------------------------------ | ----------------------------------------------------------------------- |
-| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8080`) | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
-| Metrics scraper | HTTP (TCP) | `METRICS_ADDR`                 | `/metrics` endpoint. Only enabled when `METRICS_ADDR` is set.           |
+| Source          | Protocol   | Port                                       | Notes                                                                   |
+| --------------- | ---------- | ------------------------------------------ | ----------------------------------------------------------------------- |
+| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8080`)             | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
+| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9090`)           | `/metrics` endpoint. Always enabled.                                    |
 
 ## TLS notes
 
@@ -72,7 +72,7 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
       ports:
-        - port: 9090
+        - port: 9091
           protocol: TCP
   egress:
     # Temporal frontend gRPC
