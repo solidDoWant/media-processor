@@ -7,7 +7,6 @@
 {{- $temporalConfigDir  := "/etc/temporal" -}}
 {{- $temporalTLSRoot    := "/etc/temporal-tls" -}}
 {{- $temporalConfigFile := printf "%s/temporal.toml" $temporalConfigDir -}}
-{{- $metricsPort        := 9090 -}}
 
 {{/* ============================================================ */}}
 {{/* Image tag: evaluate tpl strings (e.g. {{ .Chart.AppVersion }}) */}}
@@ -117,16 +116,6 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* LOG_LEVEL */}}
 {{- $_ := set $watcherEnv "LOG_LEVEL" .Values.config.watcher.logLevel -}}
 
-{{/* METRICS_ADDR */}}
-{{- if .Values.config.watcher.metrics.enabled -}}
-  {{- $_ := set $watcherEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
-{{- end -}}
-
-{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.watcher.metrics.otel.endpoint -}}
-  {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.watcher.metrics.otel.endpoint -}}
-{{- end -}}
-
 {{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
 {{- if .Values.config.watcher.metrics.scrapeWaitTimeout -}}
   {{- $_ := set $watcherEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.watcher.metrics.scrapeWaitTimeout -}}
@@ -201,16 +190,6 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* MEDIA_H265_CRF */}}
 {{- if .Values.config.worker.media.transcode.videoQuality -}}
   {{- $_ := set $workerEnv "MEDIA_H265_CRF" (.Values.config.worker.media.transcode.videoQuality | toString) -}}
-{{- end -}}
-
-{{/* METRICS_ADDR */}}
-{{- if .Values.config.worker.metrics.enabled -}}
-  {{- $_ := set $workerEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
-{{- end -}}
-
-{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.worker.metrics.otel.endpoint -}}
-  {{- $_ := set $workerEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.worker.metrics.otel.endpoint -}}
 {{- end -}}
 
 {{/* METRICS_HIGH_CARDINALITY_LABELS */}}

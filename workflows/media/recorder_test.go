@@ -4,65 +4,52 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/workflows/steps"
 )
 
-// attributeKey converts a label name to an OTel attribute.Key for use in test assertions.
-func attributeKey(name string) attribute.Key { return attribute.Key(name) }
-
-// newTestRecorder creates a Recorder backed by a ManualReader and returns both.
-func newTestRecorder(t *testing.T, highCardinality bool) (*Recorder, *sdkmetric.ManualReader) {
+// newTestRecorder creates a Recorder backed by a fresh prometheus.Registry and returns both.
+func newTestRecorder(t *testing.T, highCardinality bool) (*Recorder, *prometheus.Registry) {
 	t.Helper()
 
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	reg := prometheus.NewRegistry()
 
-	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
-
-	rec, err := NewRecorder(provider, highCardinality)
+	rec, err := NewRecorder(reg, highCardinality)
 	require.NoError(t, err)
 
-	return rec, reader
+	return rec, reg
 }
 
-// collectMetrics gathers all current metric data from the reader.
-func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+// findMetricFamily returns the *dto.MetricFamily whose name matches, or nil if absent.
+func findMetricFamily(t *testing.T, reg prometheus.Gatherer, name string) *dto.MetricFamily {
 	t.Helper()
 
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(t.Context(), &rm))
+	mfs, err := reg.Gather()
+	require.NoError(t, err)
 
-	return rm
-}
-
-// findMetric returns the first Metrics entry whose Name matches name, or nil.
-func findMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metrics {
-	for _, sm := range rm.ScopeMetrics {
-		for i := range sm.Metrics {
-			if sm.Metrics[i].Name == name {
-				return &sm.Metrics[i]
-			}
+	for _, mf := range mfs {
+		if mf.GetName() == name {
+			return mf
 		}
 	}
 
 	return nil
 }
 
-// histogramDataPoints returns all data points from a Float64Histogram metric.
-func histogramDataPoints(t *testing.T, m *metricdata.Metrics) []metricdata.HistogramDataPoint[float64] {
-	t.Helper()
-	require.NotNil(t, m, "expected metric to be present")
-	h, ok := m.Data.(metricdata.Histogram[float64])
-	require.True(t, ok, "expected metric %q to be a float64 histogram", m.Name)
+// labelValue returns the value of the named label on m, or ("", false) if absent.
+func labelValue(m *dto.Metric, name string) (string, bool) {
+	for _, lp := range m.GetLabel() {
+		if lp.GetName() == name {
+			return lp.GetValue(), true
+		}
+	}
 
-	return h.DataPoints
+	return "", false
 }
 
 // sampleInput returns a MediaInput suitable for testing.
@@ -105,11 +92,9 @@ func sampleTranscode() steps.TranscodeOutput {
 }
 
 func TestRecorder_ValidRunRecordsAllProcessingHistograms(t *testing.T) {
-	rec, reader := newTestRecorder(t, false)
+	rec, reg := newTestRecorder(t, false)
 
-	rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), nil, false, 5*time.Second)
-
-	rm := collectMetrics(t, reader)
+	rec.RecordRun(sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), nil, false, 5*time.Second)
 
 	processingMetrics := []string{
 		"media_workflow_audio_track_count",
@@ -121,10 +106,10 @@ func TestRecorder_ValidRunRecordsAllProcessingHistograms(t *testing.T) {
 		"media_workflow_total_duration_seconds",
 	}
 	for _, name := range processingMetrics {
-		m := findMetric(rm, name)
-		require.NotNil(t, m, "expected metric %q to be present", name)
-		dps := histogramDataPoints(t, m)
-		assert.Len(t, dps, 1, "metric %q should have exactly one data point", name)
+		mf := findMetricFamily(t, reg, name)
+		require.NotNil(t, mf, "expected metric %q to be present", name)
+		require.Len(t, mf.GetMetric(), 1, "metric %q should have exactly one series", name)
+		assert.EqualValues(t, 1, mf.GetMetric()[0].GetHistogram().GetSampleCount(), "metric %q should have one observation", name)
 	}
 }
 
@@ -148,23 +133,20 @@ func TestRecorder_CropAppliedLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, reader := newTestRecorder(t, false)
+			rec, reg := newTestRecorder(t, false)
 
 			transcode := sampleTranscode()
 			transcode.CropApplied = tc.cropApplied
 
-			rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, false, 5*time.Second)
+			rec.RecordRun(sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, false, 5*time.Second)
 
-			rm := collectMetrics(t, reader)
+			mf := findMetricFamily(t, reg, "media_workflow_audio_track_count")
+			require.NotNil(t, mf)
+			require.Len(t, mf.GetMetric(), 1)
 
-			m := findMetric(rm, "media_workflow_audio_track_count")
-			require.NotNil(t, m)
-			dps := histogramDataPoints(t, m)
-			require.Len(t, dps, 1)
-
-			val, present := dps[0].Attributes.Value(attributeKey("crop_applied"))
+			val, present := labelValue(mf.GetMetric()[0], "crop_applied")
 			assert.True(t, present, "crop_applied label should be present")
-			assert.Equal(t, tc.wantCropApplied, val.AsString())
+			assert.Equal(t, tc.wantCropApplied, val)
 		})
 	}
 }
@@ -189,50 +171,43 @@ func TestRecorder_HardwareAcceleratedLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, reader := newTestRecorder(t, false)
+			rec, reg := newTestRecorder(t, false)
 
 			transcode := sampleTranscode()
 			transcode.HardwareAccelerated = tc.hardwareAccelerated
 
-			rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, tc.hardwareAccelerated, 5*time.Second)
+			rec.RecordRun(sampleInput(medialib.MovieType), sampleProbe(), transcode, nil, tc.hardwareAccelerated, 5*time.Second)
 
-			rm := collectMetrics(t, reader)
+			mf := findMetricFamily(t, reg, "media_workflow_audio_track_count")
+			require.NotNil(t, mf)
+			require.Len(t, mf.GetMetric(), 1)
 
-			m := findMetric(rm, "media_workflow_audio_track_count")
-			require.NotNil(t, m)
-			dps := histogramDataPoints(t, m)
-			require.Len(t, dps, 1)
-
-			val, present := dps[0].Attributes.Value(attributeKey("hardware_accelerated"))
+			val, present := labelValue(mf.GetMetric()[0], "hardware_accelerated")
 			assert.True(t, present, "hardware_accelerated label should be present")
-			assert.Equal(t, tc.wantHardwareAccelerated, val.AsString())
+			assert.Equal(t, tc.wantHardwareAccelerated, val)
 		})
 	}
 }
 
 func TestRecorder_InvalidFileRecordsOnlyCounter(t *testing.T) {
-	rec, reader := newTestRecorder(t, false)
+	rec, reg := newTestRecorder(t, false)
 
-	rec.RecordInvalidFile(t.Context(), medialib.MovieType, "test-mapping")
-
-	rm := collectMetrics(t, reader)
+	rec.RecordInvalidFile(medialib.MovieType, "test-mapping")
 
 	// Counter must be present with correct labels.
-	m := findMetric(rm, "media_workflow_invalid_files_total")
-	require.NotNil(t, m, "invalid_files_total counter should be present")
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok, "invalid_files_total should be an int64 sum/counter")
-	require.Len(t, sum.DataPoints, 1)
-	dp := sum.DataPoints[0]
-	assert.EqualValues(t, 1, dp.Value)
+	mf := findMetricFamily(t, reg, "media_workflow_invalid_files_total")
+	require.NotNil(t, mf, "invalid_files_total counter should be present")
+	require.Len(t, mf.GetMetric(), 1)
+	m := mf.GetMetric()[0]
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 
-	mediaTypeVal, hasMT := dp.Attributes.Value(attributeKey("media_type"))
+	mediaTypeVal, hasMT := labelValue(m, "media_type")
 	assert.True(t, hasMT, "media_type label should be present")
-	assert.Equal(t, string(medialib.MovieType), mediaTypeVal.AsString())
+	assert.Equal(t, string(medialib.MovieType), mediaTypeVal)
 
-	mappingVal, hasMN := dp.Attributes.Value(attributeKey("mapping_name"))
+	mappingVal, hasMN := labelValue(m, "mapping_name")
 	assert.True(t, hasMN, "mapping_name label should be present")
-	assert.Equal(t, "test-mapping", mappingVal.AsString())
+	assert.Equal(t, "test-mapping", mappingVal)
 
 	// None of the processing histograms should be present.
 	processingMetrics := []string{
@@ -245,65 +220,61 @@ func TestRecorder_InvalidFileRecordsOnlyCounter(t *testing.T) {
 		"media_workflow_total_duration_seconds",
 	}
 	for _, name := range processingMetrics {
-		assert.Nil(t, findMetric(rm, name), "processing metric %q should not be present for invalid file", name)
+		assert.Nil(t, findMetricFamily(t, reg, name), "processing metric %q should not be present for invalid file", name)
 	}
 }
 
 func TestRecorder_LowCardinalityMode_NoHighCardinalityLabels(t *testing.T) {
-	rec, reader := newTestRecorder(t, false)
+	rec, reg := newTestRecorder(t, false)
 
 	movie := &medialib.Movie{ID: 42, Title: "Test Movie", Year: 2020}
-	rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), movie, false, 5*time.Second)
+	rec.RecordRun(sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), movie, false, 5*time.Second)
 
-	rm := collectMetrics(t, reader)
-
-	m := findMetric(rm, "media_workflow_audio_track_count")
-	require.NotNil(t, m)
-	dps := histogramDataPoints(t, m)
-	require.Len(t, dps, 1)
+	mf := findMetricFamily(t, reg, "media_workflow_audio_track_count")
+	require.NotNil(t, mf)
+	require.Len(t, mf.GetMetric(), 1)
 
 	highCardKeys := []string{"id", "title", "year", "series_title", "season_number", "episode_number"}
 	for _, key := range highCardKeys {
-		_, present := dps[0].Attributes.Value(attributeKey(key))
+		_, present := labelValue(mf.GetMetric()[0], key)
 		assert.False(t, present, "high-cardinality label %q should not be present when disabled", key)
 	}
 }
 
 func TestRecorder_HighCardinalityMode_MovieLabels(t *testing.T) {
-	rec, reader := newTestRecorder(t, true)
+	rec, reg := newTestRecorder(t, true)
 
 	movie := &medialib.Movie{ID: 42, Title: "Test Movie", Year: 2020}
-	rec.RecordRun(t.Context(), sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), movie, false, 5*time.Second)
+	rec.RecordRun(sampleInput(medialib.MovieType), sampleProbe(), sampleTranscode(), movie, false, 5*time.Second)
 
-	rm := collectMetrics(t, reader)
+	mf := findMetricFamily(t, reg, "media_workflow_audio_track_count")
+	require.NotNil(t, mf)
+	require.Len(t, mf.GetMetric(), 1)
+	m := mf.GetMetric()[0]
 
-	m := findMetric(rm, "media_workflow_audio_track_count")
-	require.NotNil(t, m)
-	dps := histogramDataPoints(t, m)
-	require.Len(t, dps, 1)
-	dp := dps[0]
-
-	idVal, hasID := dp.Attributes.Value(attributeKey("id"))
+	idVal, hasID := labelValue(m, "id")
 	assert.True(t, hasID, "id label should be present")
-	assert.Equal(t, "42", idVal.AsString())
+	assert.Equal(t, "42", idVal)
 
-	titleVal, hasTitle := dp.Attributes.Value(attributeKey("title"))
+	titleVal, hasTitle := labelValue(m, "title")
 	assert.True(t, hasTitle, "title label should be present")
-	assert.Equal(t, "Test Movie", titleVal.AsString())
+	assert.Equal(t, "Test Movie", titleVal)
 
-	yearVal, hasYear := dp.Attributes.Value(attributeKey("year"))
+	yearVal, hasYear := labelValue(m, "year")
 	assert.True(t, hasYear, "year label should be present")
-	assert.Equal(t, "2020", yearVal.AsString())
+	assert.Equal(t, "2020", yearVal)
 
-	// Episode-only labels must be absent for movies.
+	// Episode-specific labels are present in HC mode but empty for movies, so the
+	// HistogramVec's fixed label set stays consistent across observations.
 	for _, key := range []string{"series_title", "season_number", "episode_number"} {
-		_, present := dp.Attributes.Value(attributeKey(key))
-		assert.False(t, present, "episode label %q should not be present for a movie", key)
+		val, present := labelValue(m, key)
+		assert.True(t, present, "episode label %q should be present in HC mode (empty for movies)", key)
+		assert.Equal(t, "", val, "episode label %q should be empty for a movie", key)
 	}
 }
 
 func TestRecorder_HighCardinalityMode_EpisodeLabels(t *testing.T) {
-	rec, reader := newTestRecorder(t, true)
+	rec, reg := newTestRecorder(t, true)
 
 	episode := &medialib.Episode{
 		ID:            99,
@@ -313,15 +284,12 @@ func TestRecorder_HighCardinalityMode_EpisodeLabels(t *testing.T) {
 		SeasonNumber:  1,
 		EpisodeNumber: 1,
 	}
-	rec.RecordRun(t.Context(), sampleInput(medialib.ShowType), sampleProbe(), sampleTranscode(), episode, false, 5*time.Second)
+	rec.RecordRun(sampleInput(medialib.ShowType), sampleProbe(), sampleTranscode(), episode, false, 5*time.Second)
 
-	rm := collectMetrics(t, reader)
-
-	m := findMetric(rm, "media_workflow_audio_track_count")
-	require.NotNil(t, m)
-	dps := histogramDataPoints(t, m)
-	require.Len(t, dps, 1)
-	dp := dps[0]
+	mf := findMetricFamily(t, reg, "media_workflow_audio_track_count")
+	require.NotNil(t, mf)
+	require.Len(t, mf.GetMetric(), 1)
+	m := mf.GetMetric()[0]
 
 	expected := map[string]string{
 		"id":             "99",
@@ -332,8 +300,8 @@ func TestRecorder_HighCardinalityMode_EpisodeLabels(t *testing.T) {
 		"episode_number": "1",
 	}
 	for key, want := range expected {
-		val, present := dp.Attributes.Value(attributeKey(key))
+		val, present := labelValue(m, key)
 		assert.True(t, present, "label %q should be present for an episode", key)
-		assert.Equal(t, want, val.AsString(), "label %q value mismatch", key)
+		assert.Equal(t, want, val, "label %q value mismatch", key)
 	}
 }

@@ -60,13 +60,18 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("invalid watch configuration: %w", err)
 	}
 
-	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
+	// Default to :9091 (paired with the watcher's health port at :8081) so
+	// running the watcher and worker side-by-side on the same host doesn't
+	// collide on the metrics port. METRICS_ADDR overrides this.
+	const defaultMetricsAddr = ":9091"
+
+	metricsProvider, shutdown, err := metrics.NewFromEnv(defaultMetricsAddr)
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}
 	defer shutdown()
 
-	instruments, err := newScanInstruments(metricsProvider.MeterProvider())
+	instruments, err := newScanInstruments(metricsProvider.PrometheusRegisterer())
 	if err != nil {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}

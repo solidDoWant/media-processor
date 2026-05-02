@@ -96,10 +96,12 @@ config:
     #     server: nas.example.com
     #     path: /volume1/media
     logLevel: info
+    # The watcher always exposes /metrics on port 9091 regardless of this value.
+    # The toggle controls whether cluster-side scraping infrastructure (the
+    # watcher-metrics Service and its ServiceMonitor) is created. Leave false
+    # when running without prometheus-operator CRDs installed.
     metrics:
       enabled: false
-      otel:
-        endpoint: ""
       # scrapeWaitTimeout bounds how long the watcher's metrics endpoint stays open
       # after the scan loop exits, waiting for one final Prometheus scrape. Go duration
       # string (e.g. "30s", "2m"). Sets METRICS_SCRAPE_WAIT_TIMEOUT. Must be at least
@@ -118,10 +120,12 @@ config:
     # and the worker's pod.terminationGracePeriodSeconds. When empty, the binary default
     # (the effective MEDIA_TRANSCODE_TIMEOUT, normally 4h) applies.
     stopTimeout: "30s"
+    # The worker always exposes /metrics on port 9090 regardless of this value.
+    # The toggle controls whether cluster-side scraping infrastructure (the
+    # worker-metrics Service and its PodMonitor) is created. Leave false when
+    # running without prometheus-operator CRDs installed.
     metrics:
       enabled: false
-      otel:
-        endpoint: ""
       highCardinalityLabels: false
       # scrapeWaitTimeout bounds how long the worker's metrics endpoint stays open
       # after activity drain completes, waiting for one final Prometheus scrape. Go
@@ -289,7 +293,7 @@ resources:
       controller: watcher
       ports:
         metrics:
-          port: 9090
+          port: 9091
           protocol: TCP
     worker-metrics:
       enabled: '{{ .Values.config.worker.metrics.enabled }}'

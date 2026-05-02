@@ -13,8 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-	otelmetric "go.opentelemetry.io/otel/metric"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
@@ -29,37 +28,22 @@ import (
 // loop counts it as neither a dispatch nor a dispatch error.
 var errWorkflowAlreadyStarted = errors.New("workflow already started")
 
-func mappingNameAttr(name string) attribute.KeyValue {
-	return attribute.String("mapping_name", name)
-}
-
-func mediaTypeAttr(mt medialib.MediaType) attribute.KeyValue {
-	return attribute.String("media_type", string(mt))
-}
-
-func statusAttr(status string) attribute.KeyValue {
-	return attribute.String("status", status)
-}
-
 // dispatchFunc submits a workflow run for the given absolute file path, media type, mapping name,
 // whether to preserve the source file after processing, the watch root directory, whether to
 // retain empty parent directories after source-file deletion, the absolute output directory path,
 // and the arr-side remote output path prefix (empty means no translation).
 type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error
 
-// scanInstruments holds all OTel instruments used during scan. Instruments are registered
-// once at startup and reused across every scan invocation.
+// scanInstruments holds all Prometheus collectors used during scan. Collectors
+// are registered once at startup and reused across every scan invocation.
 type scanInstruments struct {
-	scansTotal           otelmetric.Int64Counter
-	scanDuration         otelmetric.Float64Histogram
-	lastSuccessfulScan   otelmetric.Float64Gauge
-	filesDiscoveredTotal otelmetric.Int64Counter
-	dispatchesTotal      otelmetric.Int64Counter
-	dispatchErrorsTotal  otelmetric.Int64Counter
+	scansTotal           *prometheus.CounterVec
+	scanDuration         *prometheus.HistogramVec
+	lastSuccessfulScan   *prometheus.GaugeVec
+	filesDiscoveredTotal *prometheus.CounterVec
+	dispatchesTotal      *prometheus.CounterVec
+	dispatchErrorsTotal  *prometheus.CounterVec
 }
-
-// meterName is the OTel instrumentation scope name for this package.
-const meterName = "github.com/solidDoWant/media-processor/cmd/watcher"
 
 // scan status label values used with watcher_scans_total.
 const (
@@ -67,46 +51,59 @@ const (
 	scanStatusError   = "error"
 )
 
-// newScanInstruments registers all watcher scan instruments with the given MeterProvider.
-func newScanInstruments(mp otelmetric.MeterProvider) (*scanInstruments, error) {
-	meter := mp.Meter(meterName)
+// scanDurationBuckets bound the per-mapping walk durations expected in
+// practice (sub-second through a couple of minutes for very large libraries).
+var scanDurationBuckets = []float64{0.001, 0.01, 0.1, 0.5, 1, 5, 30, 60, 120}
 
-	scansTotal, err := meter.Int64Counter("watcher_scans_total",
-		otelmetric.WithDescription("Total number of per-mapping directory scans completed."))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_scans_total: %w", err)
+// newScanInstruments registers all watcher scan collectors with reg.
+func newScanInstruments(reg prometheus.Registerer) (*scanInstruments, error) {
+	scansTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "watcher_scans_total",
+		Help: "Total number of per-mapping directory scans completed.",
+	}, []string{"mapping_name", "status"})
+	if err := reg.Register(scansTotal); err != nil {
+		return nil, fmt.Errorf("register watcher_scans_total: %w", err)
 	}
 
-	scanDuration, err := meter.Float64Histogram("watcher_scan_duration_seconds",
-		otelmetric.WithDescription("Wall-clock duration of each per-mapping directory walk in seconds."),
-		otelmetric.WithUnit("s"))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_scan_duration_seconds: %w", err)
+	scanDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "watcher_scan_duration_seconds",
+		Help:    "Wall-clock duration of each per-mapping directory walk in seconds.",
+		Buckets: scanDurationBuckets,
+	}, []string{"mapping_name"})
+	if err := reg.Register(scanDuration); err != nil {
+		return nil, fmt.Errorf("register watcher_scan_duration_seconds: %w", err)
 	}
 
-	lastSuccessfulScan, err := meter.Float64Gauge("watcher_last_successful_scan_unix_seconds",
-		otelmetric.WithDescription("Unix timestamp of the most recent successful per-mapping scan."),
-		otelmetric.WithUnit("s"))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_last_successful_scan_unix_seconds: %w", err)
+	lastSuccessfulScan := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "watcher_last_successful_scan_unix_seconds",
+		Help: "Unix timestamp of the most recent successful per-mapping scan.",
+	}, []string{"mapping_name"})
+	if err := reg.Register(lastSuccessfulScan); err != nil {
+		return nil, fmt.Errorf("register watcher_last_successful_scan_unix_seconds: %w", err)
 	}
 
-	filesDiscoveredTotal, err := meter.Int64Counter("watcher_files_discovered_total",
-		otelmetric.WithDescription("Total number of files found during directory scans."))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_files_discovered_total: %w", err)
+	filesDiscoveredTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "watcher_files_discovered_total",
+		Help: "Total number of files found during directory scans.",
+	}, []string{"mapping_name", "media_type"})
+	if err := reg.Register(filesDiscoveredTotal); err != nil {
+		return nil, fmt.Errorf("register watcher_files_discovered_total: %w", err)
 	}
 
-	dispatchesTotal, err := meter.Int64Counter("watcher_dispatches_total",
-		otelmetric.WithDescription("Total number of workflow dispatches successfully submitted."))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_dispatches_total: %w", err)
+	dispatchesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "watcher_dispatches_total",
+		Help: "Total number of workflow dispatches successfully submitted.",
+	}, []string{"mapping_name", "media_type"})
+	if err := reg.Register(dispatchesTotal); err != nil {
+		return nil, fmt.Errorf("register watcher_dispatches_total: %w", err)
 	}
 
-	dispatchErrorsTotal, err := meter.Int64Counter("watcher_dispatch_errors_total",
-		otelmetric.WithDescription("Total number of workflow dispatch failures."))
-	if err != nil {
-		return nil, fmt.Errorf("create watcher_dispatch_errors_total: %w", err)
+	dispatchErrorsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "watcher_dispatch_errors_total",
+		Help: "Total number of workflow dispatch failures.",
+	}, []string{"mapping_name", "media_type"})
+	if err := reg.Register(dispatchErrorsTotal); err != nil {
+		return nil, fmt.Errorf("register watcher_dispatch_errors_total: %w", err)
 	}
 
 	return &scanInstruments{
@@ -246,13 +243,6 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			return err
 		}
 
-		// Precompute attribute option sets once per watch entry to avoid repeated
-		// allocation inside the WalkDir callback (one set per file found).
-		mappingOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name))
-		fileOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), mediaTypeAttr(w.MediaType))
-		successOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusSuccess))
-		errorOpt := otelmetric.WithAttributes(mappingNameAttr(w.Name), statusAttr(scanStatusError))
-
 		var (
 			mappingErrs     []error
 			filesDiscovered int
@@ -329,7 +319,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return nil
 			}
 
-			instruments.filesDiscoveredTotal.Add(ctx, 1, fileOpt)
+			instruments.filesDiscoveredTotal.WithLabelValues(w.Name, string(w.MediaType)).Inc()
 
 			filesDiscovered++
 
@@ -337,7 +327,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			switch {
 			case dispatchErr == nil:
-				instruments.dispatchesTotal.Add(ctx, 1, fileOpt)
+				instruments.dispatchesTotal.WithLabelValues(w.Name, string(w.MediaType)).Inc()
 
 				jobsSubmitted++
 
@@ -348,7 +338,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 			default:
 				mappingErrs = append(mappingErrs, fmt.Errorf("dispatch workflow for %q (media type %v): %w", path, w.MediaType, dispatchErr))
 
-				instruments.dispatchErrorsTotal.Add(ctx, 1, fileOpt)
+				instruments.dispatchErrorsTotal.WithLabelValues(w.Name, string(w.MediaType)).Inc()
 			}
 
 			return nil
@@ -367,13 +357,13 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 		)
 
 		duration := time.Since(start).Seconds()
-		instruments.scanDuration.Record(ctx, duration, mappingOpt)
+		instruments.scanDuration.WithLabelValues(w.Name).Observe(duration)
 
 		if len(mappingErrs) == 0 {
-			instruments.scansTotal.Add(ctx, 1, successOpt)
-			instruments.lastSuccessfulScan.Record(ctx, float64(time.Now().Unix()), mappingOpt)
+			instruments.scansTotal.WithLabelValues(w.Name, scanStatusSuccess).Inc()
+			instruments.lastSuccessfulScan.WithLabelValues(w.Name).Set(float64(time.Now().Unix()))
 		} else {
-			instruments.scansTotal.Add(ctx, 1, errorOpt)
+			instruments.scansTotal.WithLabelValues(w.Name, scanStatusError).Inc()
 
 			errs = append(errs, mappingErrs...)
 		}

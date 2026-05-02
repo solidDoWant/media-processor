@@ -8,85 +8,85 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 )
 
-// noopInstruments returns a scanInstruments backed by a no-op MeterProvider.
+// noopInstruments returns a scanInstruments registered against a private throwaway registry.
 func noopInstruments(t *testing.T) *scanInstruments {
 	t.Helper()
 
-	inst, err := newScanInstruments(noop.NewMeterProvider())
+	inst, err := newScanInstruments(prometheus.NewRegistry())
 	require.NoError(t, err)
 
 	return inst
 }
 
-// newTestInstruments returns a scanInstruments backed by a ManualReader so metric
-// values can be inspected in acceptance tests.
-func newTestInstruments(t *testing.T) (*scanInstruments, *sdkmetric.ManualReader) {
+// newTestInstruments returns a scanInstruments backed by a fresh registry so
+// metric values can be inspected in acceptance tests.
+func newTestInstruments(t *testing.T) (*scanInstruments, *prometheus.Registry) {
 	t.Helper()
 
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	reg := prometheus.NewRegistry()
 
-	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
-
-	inst, err := newScanInstruments(provider)
+	inst, err := newScanInstruments(reg)
 	require.NoError(t, err)
 
-	return inst, reader
+	return inst, reg
 }
 
-// collectMetrics gathers all current metric data from the reader.
-func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+// findMetricFamily returns the *dto.MetricFamily whose name matches, or nil.
+func findMetricFamily(t *testing.T, reg prometheus.Gatherer, name string) *dto.MetricFamily {
 	t.Helper()
 
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(t.Context(), &rm))
+	mfs, err := reg.Gather()
+	require.NoError(t, err)
 
-	return rm
-}
-
-// findMetric returns the first Metrics entry whose Name matches name, or nil.
-func findMetric(rm metricdata.ResourceMetrics, name string) *metricdata.Metrics {
-	for _, sm := range rm.ScopeMetrics {
-		for i := range sm.Metrics {
-			if sm.Metrics[i].Name == name {
-				return &sm.Metrics[i]
-			}
+	for _, mf := range mfs {
+		if mf.GetName() == name {
+			return mf
 		}
 	}
 
 	return nil
 }
 
-// attrKey converts a label name to an OTel attribute.Key for use in test assertions.
-func attrKey(name string) attribute.Key { return attribute.Key(name) }
+// labelValue returns the value of the named label on m, or ("", false) if absent.
+func labelValue(m *dto.Metric, name string) (string, bool) {
+	for _, lp := range m.GetLabel() {
+		if lp.GetName() == name {
+			return lp.GetValue(), true
+		}
+	}
 
-// findCounterDP returns the int64 sum data point whose attributes match the given
-// mapping_name (and optionally status/media_type), or nil if not found.
-func findCounterDP(dps []metricdata.DataPoint[int64], attrs map[string]string) *metricdata.DataPoint[int64] {
-	for i := range dps {
+	return "", false
+}
+
+// findCounter returns the *dto.Metric in mf whose label set matches attrs, or nil.
+// Each entry of attrs must be present and equal on the metric.
+func findCounter(mf *dto.MetricFamily, attrs map[string]string) *dto.Metric {
+	if mf == nil {
+		return nil
+	}
+
+	for _, m := range mf.GetMetric() {
 		match := true
 
 		for k, v := range attrs {
-			val, ok := dps[i].Attributes.Value(attrKey(k))
-			if !ok || val.AsString() != v {
+			actual, ok := labelValue(m, k)
+			if !ok || actual != v {
 				match = false
 				break
 			}
 		}
 
 		if match {
-			return &dps[i]
+			return m
 		}
 	}
 
@@ -322,19 +322,17 @@ func TestScan_MetricsPresenceAfterScan(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
-
-	rm := collectMetrics(t, reader)
 
 	for _, name := range []string{
 		"watcher_scans_total",
 		"watcher_scan_duration_seconds",
 		"watcher_last_successful_scan_unix_seconds",
 	} {
-		assert.NotNil(t, findMetric(rm, name), "expected metric %q to be present", name)
+		assert.NotNil(t, findMetricFamily(t, reg, name), "expected metric %q to be present", name)
 	}
 }
 
@@ -352,21 +350,17 @@ func TestScan_SuccessCounterIncrements(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_scans_total")
-	require.NotNil(t, m, "watcher_scans_total should be present")
+	mf := findMetricFamily(t, reg, "watcher_scans_total")
+	require.NotNil(t, mf, "watcher_scans_total should be present")
 
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{"mapping_name": "movies", "status": "success"})
-	require.NotNil(t, dp, "expected data point with mapping_name=movies status=success")
-	assert.EqualValues(t, 1, dp.Value)
+	m := findCounter(mf, map[string]string{"mapping_name": "movies", "status": "success"})
+	require.NotNil(t, m, "expected data point with mapping_name=movies status=success")
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
 // TestScan_ErrorCounterIncrements verifies that watcher_scans_total{status="error",
@@ -383,21 +377,17 @@ func TestScan_ErrorCounterIncrements(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return errors.New("simulated dispatch failure")
 	})
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_scans_total")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_scans_total")
+	require.NotNil(t, mf)
 
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{"mapping_name": "movies", "status": "error"})
-	require.NotNil(t, dp, "expected data point with mapping_name=movies status=error")
-	assert.EqualValues(t, 1, dp.Value)
+	m := findCounter(mf, map[string]string{"mapping_name": "movies", "status": "error"})
+	require.NotNil(t, m, "expected data point with mapping_name=movies status=error")
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
 // TestScan_DurationObservedPerMapping verifies that watcher_scan_duration_seconds
@@ -415,28 +405,25 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_scan_duration_seconds")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_scan_duration_seconds")
+	require.NotNil(t, mf)
 
-	h, ok := m.Data.(metricdata.Histogram[float64])
-	require.True(t, ok)
-	require.Len(t, h.DataPoints, 2, "expected one histogram data point per mapping")
+	require.Len(t, mf.GetMetric(), 2, "expected one histogram series per mapping")
 
 	mappingNames := make(map[string]bool)
 
-	for _, dp := range h.DataPoints {
-		val, ok := dp.Attributes.Value(attrKey("mapping_name"))
+	for _, m := range mf.GetMetric() {
+		val, ok := labelValue(m, "mapping_name")
 		require.True(t, ok, "mapping_name label should be present")
 
-		mappingNames[val.AsString()] = true
+		mappingNames[val] = true
 
-		assert.EqualValues(t, 1, dp.Count, "each mapping should have exactly one observation")
+		assert.EqualValues(t, 1, m.GetHistogram().GetSampleCount(), "each mapping should have exactly one observation")
 	}
 
 	assert.True(t, mappingNames["movies"])
@@ -456,19 +443,16 @@ func TestScan_LastSuccessfulScanSetOnSuccess(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_last_successful_scan_unix_seconds")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_last_successful_scan_unix_seconds")
+	require.NotNil(t, mf)
 
-	g, ok := m.Data.(metricdata.Gauge[float64])
-	require.True(t, ok)
-	require.Len(t, g.DataPoints, 1)
-	assert.Greater(t, g.DataPoints[0].Value, float64(0), "last successful scan timestamp should be non-zero")
+	require.Len(t, mf.GetMetric(), 1)
+	assert.Greater(t, mf.GetMetric()[0].GetGauge().GetValue(), float64(0), "last successful scan timestamp should be non-zero")
 }
 
 // TestScan_FilesDiscoveredCounter verifies that watcher_files_discovered_total increments
@@ -486,24 +470,20 @@ func TestScan_FilesDiscoveredCounter(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_files_discovered_total")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_files_discovered_total")
+	require.NotNil(t, mf)
 
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{
+	m := findCounter(mf, map[string]string{
 		"mapping_name": "movies",
 		"media_type":   string(medialib.MovieType),
 	})
-	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
-	assert.EqualValues(t, 2, dp.Value)
+	require.NotNil(t, m, "expected data point with mapping_name=movies media_type=movie")
+	assert.EqualValues(t, 2, m.GetCounter().GetValue())
 }
 
 // TestScan_DispatchesTotalCounter verifies that watcher_dispatches_total increments by 1
@@ -520,24 +500,20 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return nil
 	}))
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_dispatches_total")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_dispatches_total")
+	require.NotNil(t, mf)
 
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{
+	m := findCounter(mf, map[string]string{
 		"mapping_name": "movies",
 		"media_type":   string(medialib.MovieType),
 	})
-	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
-	assert.EqualValues(t, 1, dp.Value)
+	require.NotNil(t, m, "expected data point with mapping_name=movies media_type=movie")
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
 // TestScan_IgnorePatternSkipsMatchingFile verifies that a file whose absolute path matches
@@ -637,24 +613,20 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return errors.New("temporal unavailable")
 	})
 
-	rm := collectMetrics(t, reader)
-	m := findMetric(rm, "watcher_dispatch_errors_total")
-	require.NotNil(t, m)
+	mf := findMetricFamily(t, reg, "watcher_dispatch_errors_total")
+	require.NotNil(t, mf)
 
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{
+	m := findCounter(mf, map[string]string{
 		"mapping_name": "movies",
 		"media_type":   string(medialib.MovieType),
 	})
-	require.NotNil(t, dp, "expected data point with mapping_name=movies media_type=movie")
-	assert.EqualValues(t, 1, dp.Value)
+	require.NotNil(t, m, "expected data point with mapping_name=movies media_type=movie")
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
 // TestScan_AlreadyStartedNotCountedAsDispatchOrError verifies that a dispatch returning
@@ -673,28 +645,23 @@ func TestScan_AlreadyStartedNotCountedAsDispatchOrError(t *testing.T) {
 		},
 	}
 
-	instruments, reader := newTestInstruments(t)
+	instruments, reg := newTestInstruments(t)
 	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
 		return errWorkflowAlreadyStarted
 	}))
 
-	rm := collectMetrics(t, reader)
-
-	dispatches := findMetric(rm, "watcher_dispatches_total")
+	dispatches := findMetricFamily(t, reg, "watcher_dispatches_total")
 	assert.Nil(t, dispatches, "watcher_dispatches_total should not be emitted when dedup suppressed dispatch")
 
-	dispatchErrors := findMetric(rm, "watcher_dispatch_errors_total")
+	dispatchErrors := findMetricFamily(t, reg, "watcher_dispatch_errors_total")
 	assert.Nil(t, dispatchErrors, "watcher_dispatch_errors_total should not be emitted on dedup")
 
-	scans := findMetric(rm, "watcher_scans_total")
+	scans := findMetricFamily(t, reg, "watcher_scans_total")
 	require.NotNil(t, scans, "watcher_scans_total should be present")
 
-	sum, ok := scans.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-
-	dp := findCounterDP(sum.DataPoints, map[string]string{"mapping_name": "movies", "status": "success"})
-	require.NotNil(t, dp, "scan should be recorded as success when dedup suppresses dispatch")
-	assert.EqualValues(t, 1, dp.Value)
+	m := findCounter(scans, map[string]string{"mapping_name": "movies", "status": "success"})
+	require.NotNil(t, m, "scan should be recorded as success when dedup suppresses dispatch")
+	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
 // TestWorkflowID_DeterministicAndPathSensitive verifies that workflowID is stable for

@@ -146,7 +146,7 @@ func TestDialEmitsTemporalSDKMetrics(t *testing.T) {
 
 	addr := freeAddr(t)
 
-	provider, err := metrics.New(t.Context(), metrics.WithMetricsAddr(addr))
+	provider, err := metrics.New(metrics.WithMetricsAddr(addr))
 	require.NoError(t, err)
 
 	defer func() {

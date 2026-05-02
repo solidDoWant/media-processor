@@ -1,15 +1,14 @@
 # Metrics and observability
 
-## Exporters
+## Prometheus endpoint
 
-Both the watcher and the worker support two independent, opt-in metric exporters. Neither is enabled by default.
-
-### Prometheus pull endpoint
-
-Set `METRICS_ADDR` to a TCP address (e.g. `:9090`) to start an HTTP server that exposes metrics in Prometheus text format at `/metrics`.
+Both the watcher and the worker always serve metrics in Prometheus text format on `/metrics`. The defaults pair with each binary's health port (worker `:8080` / metrics `:9090`, watcher `:8081` / metrics `:9091`) so the two binaries can run side-by-side on the same host without colliding. Override either per-binary by setting `METRICS_ADDR` on that container.
 
 ```sh
+# Worker default; override only if needed
 METRICS_ADDR=:9090
+# Watcher default
+METRICS_ADDR=:9091
 ```
 
 Scrape config example:
@@ -18,26 +17,8 @@ Scrape config example:
 scrape_configs:
   - job_name: media-processor
     static_configs:
-      - targets: ["worker:9090", "watcher:9090"]
+      - targets: ["worker:9090", "watcher:9091"]
 ```
-
-### OTLP push (OpenTelemetry)
-
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP gRPC endpoint to push metrics periodically (default interval: 60 seconds).
-
-```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-```
-
-This follows the standard [OpenTelemetry environment variable convention](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/). Point it at the gRPC port of your collector (typically 4317).
-
-Both exporters can be active simultaneously.
-
-### Choosing between the two
-
-Use **Prometheus pull** if you already run a Prometheus server that scrapes targets directly. It is simpler to configure and requires no additional infrastructure beyond what Prometheus already provides.
-
-Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compatible backend such as Grafana Alloy, Datadog Agent, or Honeycomb) already running. Push is also the better fit when the worker is run once per job rather than long-lived: metrics are flushed on shutdown, so each workflow run's observations are guaranteed to be delivered before the worker exits. A pull endpoint that is never scraped during a short-lived run would lose that data. The trade-off is that OTLP requires a running collector to receive and forward the metrics.
 
 ## Metric reference
 
@@ -125,14 +106,16 @@ All watcher metrics carry `mapping_name`. `watcher_files_discovered_total`, `wat
 
 Set `METRICS_HIGH_CARDINALITY_LABELS=true` to attach per-item labels to every `media_workflow_*` histogram observation. These labels are **not** added to counters or watcher metrics.
 
-| Label            | Applies to | Description                         |
-| ---------------- | ---------- | ----------------------------------- |
-| `id`             | all        | Library item ID from Radarr/Sonarr. |
-| `title`          | all        | Title of the movie or episode.      |
-| `year`           | all        | Release year.                       |
-| `series_title`   | shows only | Series title.                       |
-| `season_number`  | shows only | Season number.                      |
-| `episode_number` | shows only | Episode number.                     |
+| Label            | Applies to                | Description                         |
+| ---------------- | ------------------------- | ----------------------------------- |
+| `id`             | all                       | Library item ID from Radarr/Sonarr. |
+| `title`          | all                       | Title of the movie or episode.      |
+| `year`           | all                       | Release year.                       |
+| `series_title`   | shows (empty for movies)  | Series title.                       |
+| `season_number`  | shows (empty for movies)  | Season number.                      |
+| `episode_number` | shows (empty for movies)  | Episode number.                     |
+
+When high-cardinality labels are enabled, every `media_workflow_*` histogram series carries the full set of six labels. For movie observations, the show-only labels (`series_title`, `season_number`, `episode_number`) are present with empty-string values so the label set stays consistent across observations.
 
 These labels significantly increase the cardinality of your metrics. Enable them only if your metrics backend can handle the volume and you need per-item drill-down.
 

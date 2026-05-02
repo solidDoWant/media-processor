@@ -88,7 +88,7 @@ The worker is configured entirely via environment variables. Required variables:
 
 ## Metrics and observability
 
-Both binaries support Prometheus pull and OTLP push metrics. See [docs/metrics.md](docs/metrics.md).
+Both binaries always serve a Prometheus pull endpoint on `/metrics` (worker `:9090`, watcher `:9091` by default). See [docs/metrics.md](docs/metrics.md).
 
 ## Kubernetes deployment
 
