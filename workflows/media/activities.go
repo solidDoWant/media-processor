@@ -293,12 +293,13 @@ func (a *Activities) NotifyFailure(ctx context.Context, input MediaInput, failed
 }
 
 func logStepResult(ctx context.Context, stepName, filePath string, start time.Time, err error) {
+	log := activity.GetLogger(ctx)
 	if err != nil {
-		slog.ErrorContext(ctx, "step failed", slog.String("step", stepName), slog.String("file", filePath), slog.Any("error", err))
+		log.Error("step failed", "step", stepName, "file", filePath, "error", err)
 		return
 	}
 
-	slog.InfoContext(ctx, "step complete", slog.String("step", stepName), slog.String("file", filePath), slog.Duration("elapsed", time.Since(start)))
+	log.Info("step complete", "step", stepName, "file", filePath, "elapsed", time.Since(start))
 }
 
 // getArrLibrary returns the LibraryClient corresponding to mediaType, using

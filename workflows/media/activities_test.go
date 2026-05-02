@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/testsuite"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
@@ -19,8 +20,9 @@ import (
 )
 
 // newRecordingActivities builds an Activities backed by a fresh prometheus.Registry
-// + the supplied stubs, ready for direct method-level testing.
-func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) (*Activities, *prometheus.Registry) {
+// + the supplied stubs, plus a TestActivityEnvironment with all activities registered
+// so callers can invoke them via env.ExecuteActivity in a real activity context.
+func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) (*Activities, *testsuite.TestActivityEnvironment, *prometheus.Registry) {
 	t.Helper()
 
 	reg := prometheus.NewRegistry()
@@ -29,14 +31,22 @@ func newRecordingActivities(t *testing.T, cfg MediaWorkflowConfig, radarr, sonar
 	a, err := NewActivities(cfg, radarr, sonarr, wh)
 	require.NoError(t, err)
 
-	return a, reg
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestActivityEnvironment()
+	env.RegisterActivity(a.Notify)
+	env.RegisterActivity(a.Cleanup)
+	env.RegisterActivity(a.RecordRunMetrics)
+	env.RegisterActivity(a.RecordInvalid)
+	env.RegisterActivity(a.NotifyFailure)
+
+	return a, env, reg
 }
 
 func TestNotify_CallsLibraryImport(t *testing.T) {
 	radarr := &stubLibraryClient{}
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Notify(t.Context(),
+	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
 		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
 	)
@@ -48,9 +58,9 @@ func TestNotify_CallsLibraryImport(t *testing.T) {
 
 func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 	radarr := &stubLibraryClient{}
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Notify(t.Context(),
+	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{
 			FilePath: "/in/movie.mkv", MediaType: medialib.MovieType,
 			OutputPath: "/processed", OutputRemotePath: "/remote/movies",
@@ -65,9 +75,9 @@ func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
 
 func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 	radarr := &stubLibraryClient{err: errors.New("radarr unreachable")}
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Notify(t.Context(),
+	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
 		steps.TranscodeOutput{DestFilePath: "/out/movie.mkv"},
 	)
@@ -79,9 +89,9 @@ func TestCleanup_DeletesSource(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Cleanup(t.Context(), MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
@@ -93,9 +103,9 @@ func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "movie.mkv")
 	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
 
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Cleanup(t.Context(), MediaInput{
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
 		FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true,
 	})
 	require.NoError(t, err)
@@ -114,16 +124,16 @@ func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 	// Do NOT create the file: simulate a retried cleanup after the previous
 	// attempt already removed it.
 
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.Cleanup(t.Context(), MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
 	require.NoError(t, err, "cleanup must be idempotent so retries do not fail when the file is already gone")
 }
 
 func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
-	a, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.RecordRunMetrics(t.Context(),
+	_, err := env.ExecuteActivity(a.RecordRunMetrics,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType},
 		steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"},
 		steps.TranscodeOutput{
@@ -137,9 +147,9 @@ func TestRecordRunMetrics_RecordsRunHistograms(t *testing.T) {
 }
 
 func TestRecordInvalid_RecordsInvalidFileMetric(t *testing.T) {
-	a, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, reg := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.RecordInvalid(t.Context(), MediaInput{
+	_, err := env.ExecuteActivity(a.RecordInvalid, MediaInput{
 		FilePath: "/in/not-a-video.txt", MediaType: medialib.MovieType, MappingName: "downloads",
 	})
 	require.NoError(t, err)
@@ -165,9 +175,9 @@ func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{URL: srv.URL})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{URL: srv.URL})
 
-	err := a.NotifyFailure(t.Context(), MediaInput{FilePath: "/in/movie.mkv"}, "transcode", "ffmpeg exited with code 1")
+	_, err := env.ExecuteActivity(a.NotifyFailure, MediaInput{FilePath: "/in/movie.mkv"}, "transcode", "ffmpeg exited with code 1")
 	require.NoError(t, err)
 	require.NoError(t, bodyError)
 	require.True(t, called, "webhook should be invoked")
@@ -179,8 +189,8 @@ func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {
 }
 
 func TestNotifyFailure_NoWebhookUrlIsNoop(t *testing.T) {
-	a, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a, env, _ := newRecordingActivities(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 
-	err := a.NotifyFailure(t.Context(), MediaInput{FilePath: "/in/movie.mkv"}, "probe", "boom")
+	_, err := env.ExecuteActivity(a.NotifyFailure, MediaInput{FilePath: "/in/movie.mkv"}, "probe", "boom")
 	require.NoError(t, err, "missing webhook URL is acceptable; activity must not error")
 }
