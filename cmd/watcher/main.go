@@ -60,7 +60,7 @@ func run(ctx context.Context, configPath string) error {
 		return fmt.Errorf("invalid watch configuration: %w", err)
 	}
 
-	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
+	metricsProvider, shutdown, err := metrics.NewFromEnv()
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}

@@ -52,7 +52,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init health server: %w", err)
 	}
 
-	metricsProvider, shutdown, err := metrics.NewFromEnv(ctx)
+	metricsProvider, shutdown, err := metrics.NewFromEnv()
 	if err != nil {
 		return fmt.Errorf("init metrics: %w", err)
 	}

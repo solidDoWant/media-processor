@@ -31,7 +31,7 @@ func freeAddr(t *testing.T) string {
 func TestPrometheusEndpoint_Enabled(t *testing.T) {
 	addr := freeAddr(t)
 
-	p, err := metrics.New(t.Context(), metrics.WithMetricsAddr(addr))
+	p, err := metrics.New(metrics.WithMetricsAddr(addr))
 	require.NoError(t, err)
 
 	defer func() {
@@ -58,7 +58,7 @@ func TestPrometheusEndpoint_Enabled(t *testing.T) {
 }
 
 func TestPrometheusEndpoint_Disabled(t *testing.T) {
-	p, err := metrics.New(t.Context())
+	p, err := metrics.New()
 	require.NoError(t, err)
 
 	// MeterProvider must still be usable (noop).
@@ -72,7 +72,7 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 
-	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv()
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 	require.NotNil(t, p.MeterProvider())
@@ -82,7 +82,7 @@ func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("METRICS_ADDR", addr)
 
-	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv()
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 	require.NotNil(t, p)
@@ -97,7 +97,7 @@ func TestWaitForScrape_ReturnsWhenScrapeArrives(t *testing.T) {
 	addr := freeAddr(t)
 
 	// Generous configured timeout — the test must not hit it on the happy path.
-	p, err := metrics.New(t.Context(),
+	p, err := metrics.New(
 		metrics.WithMetricsAddr(addr),
 		metrics.WithScrapeWaitTimeout(5*time.Second),
 	)
@@ -142,7 +142,7 @@ func TestWaitForScrape_ReturnsWhenScrapeArrives(t *testing.T) {
 func TestWaitForScrape_HonorsTimeout(t *testing.T) {
 	addr := freeAddr(t)
 
-	p, err := metrics.New(t.Context(),
+	p, err := metrics.New(
 		metrics.WithMetricsAddr(addr),
 		metrics.WithScrapeWaitTimeout(100*time.Millisecond),
 	)
@@ -169,7 +169,7 @@ func TestWaitForScrape_HonorsTimeout(t *testing.T) {
 func TestWaitForScrape_NoOpWhenNoHTTPServer(t *testing.T) {
 	// No metrics address configured → no Prometheus HTTP server, so WaitForScrape
 	// must return nil immediately rather than blocking on a non-existent gate.
-	p, err := metrics.New(t.Context(), metrics.WithScrapeWaitTimeout(10*time.Second))
+	p, err := metrics.New(metrics.WithScrapeWaitTimeout(10 * time.Second))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -192,7 +192,7 @@ func TestWaitForScrape_DisabledByExplicitZero(t *testing.T) {
 	// Explicit zero must short-circuit the wait rather than fall back to the
 	// default 60s. This distinguishes "not provided" (which uses the default)
 	// from "explicitly disabled" (which returns immediately).
-	p, err := metrics.New(t.Context(),
+	p, err := metrics.New(
 		metrics.WithMetricsAddr(addr),
 		metrics.WithScrapeWaitTimeout(0),
 	)
@@ -217,7 +217,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_DisabledViaZeroEnvVar(t *testing.T) {
 	t.Setenv("METRICS_ADDR", addr)
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "0s")
 
-	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv()
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 
@@ -234,7 +234,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {
 	t.Setenv("METRICS_ADDR", addr)
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "100ms")
 
-	p, shutdown, err := metrics.NewFromEnv(t.Context())
+	p, shutdown, err := metrics.NewFromEnv()
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
 
@@ -251,7 +251,7 @@ func TestNewFromEnv_ScrapeWaitTimeout_InvalidDurationErrors(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "not-a-duration")
 
-	_, _, err := metrics.NewFromEnv(t.Context())
+	_, _, err := metrics.NewFromEnv()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "METRICS_SCRAPE_WAIT_TIMEOUT")
 }

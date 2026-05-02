@@ -22,8 +22,12 @@ import (
 // METRICS_SCRAPE_WAIT_TIMEOUT.
 const DefaultScrapeWaitTimeout = 60 * time.Second
 
-// Provider manages an optional Prometheus pull endpoint, controlled by the
-// options passed to New.
+// Provider exposes a Prometheus /metrics endpoint and the OTel
+// MeterProvider whose recordings flow into it. The Prometheus registry is
+// also surfaced so external sources (e.g. the Temporal SDK tally bridge)
+// can register collectors that share the same scrape. When the metrics
+// address is empty, a no-op MeterProvider is returned and the HTTP server
+// is not started.
 type Provider struct {
 	meterProvider     otelmetric.MeterProvider
 	promRegistry      *prometheus.Registry
@@ -56,9 +60,10 @@ func WithScrapeWaitTimeout(d time.Duration) Option {
 	return func(c *config) { c.scrapeWaitTimeout = &d }
 }
 
-// New creates a Provider. If WithMetricsAddr is not supplied, a no-op
-// MeterProvider is returned.
-func New(ctx context.Context, opts ...Option) (*Provider, error) {
+// New creates a Provider. When WithMetricsAddr is not supplied, the returned
+// Provider exposes a no-op MeterProvider and starts no HTTP server; Shutdown
+// and WaitForScrape on it are safe no-ops.
+func New(opts ...Option) (*Provider, error) {
 	cfg := &config{}
 	for _, opt := range opts {
 		opt(cfg)
@@ -72,84 +77,59 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		scrapeWaitTimeout = *cfg.scrapeWaitTimeout
 	}
 
-	var (
-		readers       []sdkmetric.Reader
-		shutdownFuncs []func(context.Context) error
-		promRegistry  *prometheus.Registry
-		scrapeNotify  chan struct{}
-	)
-
-	if cfg.metricsAddr != "" {
-		promRegistry = prometheus.NewRegistry()
-
-		promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
-		if err != nil {
-			return nil, fmt.Errorf("create prometheus exporter: %w", err)
-		}
-
-		readers = append(readers, promReader)
-
-		listener, err := net.Listen("tcp", cfg.metricsAddr)
-		if err != nil {
-			return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.metricsAddr, err)
-		}
-
-		// Buffered notify channel signals that a /metrics scrape has been served.
-		// Buffer size 1 is enough: WaitForScrape drains any pending tick before
-		// it blocks, so only fresh post-drain scrapes can satisfy the wait.
-		scrapeNotify = make(chan struct{}, 1)
-		promHandler := promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
-
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			promHandler.ServeHTTP(w, r)
-
-			select {
-			case scrapeNotify <- struct{}{}:
-			default:
-			}
-		}))
-		srv := &http.Server{Handler: mux}
-
-		go func() {
-			if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				fmt.Fprintf(os.Stderr, "metrics HTTP server error: %v\n", err)
-			}
-		}()
-
-		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
-	}
-
-	if len(readers) == 0 {
+	if cfg.metricsAddr == "" {
 		return &Provider{
 			meterProvider:     noop.NewMeterProvider(),
-			promRegistry:      promRegistry,
 			shutdown:          func(context.Context) error { return nil },
-			scrapeNotify:      scrapeNotify,
 			scrapeWaitTimeout: scrapeWaitTimeout,
 		}, nil
 	}
 
-	sdkOpts := make([]sdkmetric.Option, 0, len(readers))
-	for _, reader := range readers {
-		sdkOpts = append(sdkOpts, sdkmetric.WithReader(reader))
+	promRegistry := prometheus.NewRegistry()
+
+	promReader, err := prometheusexporter.New(prometheusexporter.WithRegisterer(promRegistry))
+	if err != nil {
+		return nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
-	sdkProvider := sdkmetric.NewMeterProvider(sdkOpts...)
-	shutdownFuncs = append(shutdownFuncs, sdkProvider.Shutdown)
+	listener, err := net.Listen("tcp", cfg.metricsAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on metrics addr %s: %w", cfg.metricsAddr, err)
+	}
+
+	// Buffered notify channel signals that a /metrics scrape has been served.
+	// Buffer size 1 is enough: WaitForScrape drains any pending tick before
+	// it blocks, so only fresh post-drain scrapes can satisfy the wait.
+	scrapeNotify := make(chan struct{}, 1)
+	promHandler := promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		promHandler.ServeHTTP(w, r)
+
+		select {
+		case scrapeNotify <- struct{}{}:
+		default:
+		}
+	}))
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "metrics HTTP server error: %v\n", err)
+		}
+	}()
+
+	sdkProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(promReader))
 
 	return &Provider{
 		meterProvider: sdkProvider,
 		promRegistry:  promRegistry,
 		shutdown: func(ctx context.Context) error {
-			var errs []error
-			// Shut down in reverse (LIFO) order so the OTel MeterProvider is
-			// flushed before the Prometheus HTTP server is stopped.
-			for i := len(shutdownFuncs) - 1; i >= 0; i-- {
-				errs = append(errs, shutdownFuncs[i](ctx))
-			}
-
-			return errors.Join(errs...)
+			return errors.Join(
+				sdkProvider.Shutdown(ctx),
+				srv.Shutdown(ctx),
+			)
 		},
 		scrapeNotify:      scrapeNotify,
 		scrapeWaitTimeout: scrapeWaitTimeout,
@@ -229,7 +209,7 @@ func (p *Provider) WaitForScrape(ctx context.Context) error {
 //
 // The returned shutdown func must be deferred by the caller. It shuts down all
 // exporters with a 10-second deadline and writes any error to stderr.
-func NewFromEnv(ctx context.Context) (*Provider, func(), error) {
+func NewFromEnv() (*Provider, func(), error) {
 	var opts []Option
 	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
 		opts = append(opts, WithMetricsAddr(addr))
@@ -244,7 +224,7 @@ func NewFromEnv(ctx context.Context) (*Provider, func(), error) {
 		opts = append(opts, WithScrapeWaitTimeout(d))
 	}
 
-	p, err := New(ctx, opts...)
+	p, err := New(opts...)
 	if err != nil {
 		return nil, func() {}, err
 	}
