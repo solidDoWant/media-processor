@@ -2,6 +2,9 @@
 
 media-processor sits transparently between a download client and Sonarr/Radarr. When a file lands in the watched download directory, it is automatically transcoded to H.265 in a Matroska container and the appropriate library service is notified to import the result.
 
+> [!NOTICE]
+> A large part of the reason why I worked on this project was to improve how I ues LLMs. All code was reviewed by me, but very little was hand-written by me. Use at your own risk.
+
 ## How it works
 
 Two binaries run as separate processes and coordinate through [Temporal](https://temporal.io), a self-hosted workflow engine:
@@ -74,15 +77,15 @@ watches:
 
 The worker is configured entirely via environment variables. Required variables:
 
-| Variable              | Description                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------- |
-| `TEMPORAL_ADDRESS`    | Temporal frontend `host:port` (e.g. `temporal-frontend:7233`)                            |
-| `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (e.g. `default`)                             |
-| `TEMPORAL_TASK_QUEUE` | Task queue the worker polls and the watcher dispatches to (e.g. `media-processor`)       |
-| `RADARR_URL`          | Radarr base URL (e.g. `http://radarr:7878`)                                              |
-| `RADARR_API_KEY`      | Radarr API key                                                                           |
-| `SONARR_URL`          | Sonarr base URL (e.g. `http://sonarr:8989`)                                              |
-| `SONARR_API_KEY`      | Sonarr API key                                                                           |
+| Variable              | Description                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| `TEMPORAL_ADDRESS`    | Temporal frontend `host:port` (e.g. `temporal-frontend:7233`)                      |
+| `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (e.g. `default`)                       |
+| `TEMPORAL_TASK_QUEUE` | Task queue the worker polls and the watcher dispatches to (e.g. `media-processor`) |
+| `RADARR_URL`          | Radarr base URL (e.g. `http://radarr:7878`)                                        |
+| `RADARR_API_KEY`      | Radarr API key                                                                     |
+| `SONARR_URL`          | Sonarr base URL (e.g. `http://sonarr:8989`)                                        |
+| `SONARR_API_KEY`      | Sonarr API key                                                                     |
 
 `TEMPORAL_TASK_QUEUE`, `RADARR_*`, and `SONARR_*` are explicitly checked as non-empty at startup; `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` silently fall back to the Temporal Go SDK defaults (`localhost:7233` and `default`) when empty, so production deployments must set them explicitly. See [docs/configuration.md](docs/configuration.md) for the full reference including optional variables.
 
