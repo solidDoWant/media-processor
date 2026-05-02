@@ -125,7 +125,7 @@ func probeOutputFile(t *testing.T, path string) outputFileInfo {
 }
 
 // metricSeries wraps the metric-family map returned by expfmt.TextParser,
-// keyed by the base metric name (e.g. "media_workflow_total_duration_seconds").
+// keyed by the base metric name (e.g. "media_workflow_transcode_duration_seconds").
 type metricSeries map[string]*dto.MetricFamily
 
 // sum returns the combined value of all samples of the named metric that match

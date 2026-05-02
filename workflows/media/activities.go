@@ -3,13 +3,15 @@ package media
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/uber-go/tally/v4"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
+	contribtally "go.temporal.io/sdk/contrib/tally"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -31,14 +33,10 @@ type Activities struct {
 	radarrClient  medialib.ArrLibrary
 	sonarrClient  medialib.ArrLibrary
 	webhookClient *webhook.Client
-	recorder      *Recorder
 }
 
 // NewActivities constructs an Activities ready for registration. Defaults are
-// applied to cfg.DetectCropTimeout and cfg.TranscodeTimeout when zero, and a
-// metrics Recorder is built from cfg.MetricsRegisterer (with a private
-// throwaway registry as a fallback if registration against the supplied
-// registerer fails).
+// applied to cfg.DetectCropTimeout and cfg.TranscodeTimeout when zero.
 func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client) (*Activities, error) {
 	if cfg.DetectCropTimeout == 0 {
 		cfg.DetectCropTimeout = DefaultDetectCropTimeout
@@ -48,37 +46,16 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 		cfg.TranscodeTimeout = DefaultTranscodeTimeout
 	}
 
-	registerer := cfg.MetricsRegisterer
-	if registerer == nil {
-		registerer = prometheus.NewRegistry()
-	}
-
-	recorder, err := NewRecorder(registerer, cfg.HighCardinalityLabels)
-	if err != nil {
-		// Registration errors are non-fatal: log for observability and fall
-		// back to a private registry so the workflow can still run without
-		// exposing metrics.
-		slog.Warn("media: failed to register metrics collectors, falling back to private registry", "error", err)
-
-		var noopErr error
-
-		recorder, noopErr = NewRecorder(prometheus.NewRegistry(), false)
-		if noopErr != nil {
-			return nil, fmt.Errorf("create fallback metrics recorder: %w", noopErr)
-		}
-	}
-
 	return &Activities{
 		cfg:           cfg,
 		radarrClient:  radarrClient,
 		sonarrClient:  sonarrClient,
 		webhookClient: webhookClient,
-		recorder:      recorder,
 	}, nil
 }
 
-// Register attaches the workflow function and the eight activities to the
-// given Temporal worker.
+// Register attaches the workflow function and the six activities to the given
+// Temporal worker.
 func (a *Activities) Register(w worker.Worker) {
 	w.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
 	w.RegisterActivityWithOptions(a.Probe, activity.RegisterOptions{Name: ProbeActivityName})
@@ -86,14 +63,13 @@ func (a *Activities) Register(w worker.Worker) {
 	w.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
 	w.RegisterActivityWithOptions(a.Notify, activity.RegisterOptions{Name: NotifyActivityName})
 	w.RegisterActivityWithOptions(a.Cleanup, activity.RegisterOptions{Name: CleanupActivityName})
-	w.RegisterActivityWithOptions(a.RecordRunMetrics, activity.RegisterOptions{Name: RecordRunMetricsActivityName})
-	w.RegisterActivityWithOptions(a.RecordInvalid, activity.RegisterOptions{Name: RecordInvalidActivityName})
 	w.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
 }
 
-// Probe is the Temporal activity that wraps steps.RunProbe. It records the
-// step start time on the returned ProbeOutput so downstream metrics can compute
-// the full probe→cleanup wall-clock duration.
+// Probe is the Temporal activity that wraps steps.RunProbe. Per-run metrics
+// are emitted inline: source-duration histogram + audio/subtitle gauges for
+// valid media, or the invalid-files counter when the file fails to probe as
+// media.
 func (a *Activities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOutput, error) {
 	start := time.Now()
 
@@ -104,9 +80,38 @@ func (a *Activities) Probe(ctx context.Context, input MediaInput) (steps.ProbeOu
 		return out, err
 	}
 
-	out.StartedAt = start
+	emitProbeMetrics(ctx, input, out)
 
 	return out, nil
+}
+
+// emitProbeMetrics reports the per-probe observations to the SDK metrics
+// pipeline. Histogram emission uses the underlying tally scope obtained via
+// contribtally.ScopeFromHandler so source-duration carries an explicit bucket
+// set; counters and gauges go through the standard MetricsHandler interface.
+func emitProbeMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput) {
+	handler := activity.GetMetricsHandler(ctx)
+	tags := baseTags(input)
+
+	if !probe.IsValidMedia {
+		handler.WithTags(tags).Counter(metricInvalidFiles).Inc(1)
+		return
+	}
+
+	tagged := handler.WithTags(tags)
+	tagged.Gauge(metricAudioTrackCount).Update(float64(len(probe.AudioStreams)))
+	tagged.Gauge(metricSubtitleTrackCount).Update(float64(len(probe.SubtitleStreams)))
+
+	scopedHistograms(handler, tags).
+		Histogram(metricSourceDurationSeconds, durationBuckets).
+		RecordDuration(time.Duration(probe.DurationSeconds * float64(time.Second)))
+}
+
+// scopedHistograms returns the tally scope that backs handler, tagged with
+// tags. Activities are not replayed, so no IsReplaying guard is needed (unlike
+// workflow code).
+func scopedHistograms(handler client.MetricsHandler, tags map[string]string) tally.Scope {
+	return contribtally.ScopeFromHandler(handler).Tagged(tags)
 }
 
 // DetectCrop is the Temporal activity that wraps steps.RunDetectCrop. It
@@ -125,9 +130,15 @@ func (a *Activities) DetectCrop(ctx context.Context, input MediaInput, probe ste
 	return steps.DetectCropOutput{Crop: crop}, nil
 }
 
-// Transcode is the Temporal activity that wraps steps.RunTranscode. It also
-// emits the artwork-fetch-skipped counter when the transcode succeeded but no
-// poster image was attached.
+// Transcode is the Temporal activity that wraps steps.RunTranscode. After a
+// successful transcode it emits the per-run file-size and transcode-duration
+// histograms and the artwork-fetch-skipped counter when applicable. When
+// high-cardinality labels are enabled it also looks up per-item metadata
+// from the arr library to attach as tags. The SDK's
+// temporal_activity_execution_latency_seconds also tracks transcode wall-clock,
+// but only with worker-context tags; the application metric carries the media
+// tags (codec, container, hardware_accelerated, crop_applied, …) that make
+// runtime correlatable with source size, source duration, and codec choice.
 func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe steps.ProbeOutput, cropOut steps.DetectCropOutput) (steps.TranscodeOutput, error) {
 	start := time.Now()
 
@@ -148,13 +159,82 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe step
 	}
 
 	out, err := steps.RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, library)
-	if err == nil && out.ArtworkFetchSkipped {
-		a.recorder.RecordArtworkFetchSkipped()
-	}
-
 	logStepResult(ctx, "transcode", input.FilePath, start, err)
 
-	return out, err
+	if err != nil {
+		return out, err
+	}
+
+	var hcTags map[string]string
+	if a.cfg.HighCardinalityLabels {
+		hcTags = a.resolveHighCardinalityLabels(ctx, input, library)
+	}
+
+	emitTranscodeMetrics(ctx, input, probe, out, hcTags)
+
+	return out, nil
+}
+
+// resolveHighCardinalityLabels fetches per-item metadata from the arr library
+// and returns it as a tag map (id, title, year, plus episode-specific fields
+// for shows). The full key set is always returned: episode-specific keys
+// carry empty strings for movies, and on lookup failure every key carries
+// an empty string. Returning a stable key set is required because tally's
+// prom reporter caches metrics on (name, sortedTagKeys); a varying tag-key
+// set across emissions for the same metric name would trigger a Prometheus
+// "same name, different label names" registration conflict and silently
+// drop one variant. On failure the metrics-errors counter is incremented.
+func (a *Activities) resolveHighCardinalityLabels(ctx context.Context, input MediaInput, library medialib.ArrLibrary) map[string]string {
+	tags := map[string]string{
+		"id":             "",
+		"title":          "",
+		"year":           "",
+		"series_title":   "",
+		"season_number":  "",
+		"episode_number": "",
+	}
+
+	info, err := library.GetInfo(ctx, input.FilePath)
+	if err != nil || info == nil {
+		if err != nil {
+			activity.GetLogger(ctx).Warn("media workflow metrics: GetInfo failed", "error", err)
+		}
+
+		activity.GetMetricsHandler(ctx).Counter(metricMetricsErrors).Inc(1)
+
+		return tags
+	}
+
+	tags["id"] = strconv.FormatInt(info.GetID(), 10)
+	tags["title"] = info.GetTitle()
+	tags["year"] = strconv.Itoa(info.GetYear())
+
+	if input.MediaType == medialib.ShowType {
+		tags["series_title"] = info.GetSeriesTitle()
+		tags["season_number"] = strconv.Itoa(info.GetSeasonNumber())
+		tags["episode_number"] = strconv.Itoa(info.GetEpisodeNumber())
+	}
+
+	return tags
+}
+
+// emitTranscodeMetrics reports the per-transcode observations to the SDK
+// metrics pipeline. File-size histograms use explicit buckets via the tally
+// scope obtained from the SDK handler; the artwork-fetch-skipped counter goes
+// through the standard MetricsHandler interface.
+func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput, hcTags map[string]string) {
+	handler := activity.GetMetricsHandler(ctx)
+	tags := transcodeTags(input, probe, transcode, hcTags)
+
+	scope := scopedHistograms(handler, tags)
+	scope.Histogram(metricSourceFileSizeBytes, fileSizeBuckets).RecordValue(float64(transcode.SourceFileSizeBytes))
+	scope.Histogram(metricDestFileSizeBytes, fileSizeBuckets).RecordValue(float64(transcode.DestFileSizeBytes))
+	scope.Histogram(metricTranscodeDurationSecs, durationBuckets).
+		RecordDuration(time.Duration(transcode.TranscodeDurationSeconds * float64(time.Second)))
+
+	if transcode.ArtworkFetchSkipped {
+		handler.Counter(metricArtworkFetchSkipped).Inc(1)
+	}
 }
 
 // Notify issues the library import (Sonarr/Radarr scan command). The import is
@@ -210,8 +290,8 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode ste
 // tolerates ErrNotExist so retrying after a partial cleanup is safe;
 // WriteSentinel re-writes the same zero-byte file. Shared between the valid
 // and invalid paths — in the invalid path the source has already been removed
-// by Probe and Cleanup is a near-no-op, but the sentinel branch is still
-// exercised when PreserveSource is set.
+// by Probe and Cleanup is a near-no-op for the file, but the sentinel branch
+// is still exercised when PreserveSource is set.
 func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
 	start := time.Now()
 
@@ -225,53 +305,6 @@ func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
 	logStepResult(ctx, "cleanup", input.FilePath, start, err)
 
 	return err
-}
-
-// RecordRunMetrics records per-run histograms and (when high-cardinality
-// labels are enabled) attaches Sonarr/Radarr metadata via GetInfo. Histogram
-// emission is not idempotent — every Record() call adds a fresh sample — so
-// the workflow invokes this activity with MaximumAttempts: 1 and ignores the
-// returned error. A metrics issue must not fail an otherwise-successful run
-// after the file has already been imported and cleaned up.
-func (a *Activities) RecordRunMetrics(ctx context.Context, input MediaInput, probe steps.ProbeOutput, transcode steps.TranscodeOutput) error {
-	start := time.Now()
-
-	var mediaInfo medialib.MediaInfo
-
-	if a.cfg.HighCardinalityLabels {
-		if lib, libErr := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient); libErr == nil {
-			info, infoErr := lib.GetInfo(ctx, input.FilePath)
-			if infoErr != nil {
-				// GetInfo failure is best-effort: log + count it but do not
-				// fail the activity. Metrics are still recorded without the
-				// high-cardinality labels.
-				a.recorder.RecordMetricsError(fmt.Errorf("GetInfo: %w", infoErr))
-			} else {
-				mediaInfo = info
-			}
-		}
-	}
-
-	totalElapsed := time.Since(probe.StartedAt)
-	a.recorder.RecordRun(input, probe, transcode, mediaInfo, transcode.HardwareAccelerated, totalElapsed)
-
-	logStepResult(ctx, "record_run_metrics", input.FilePath, start, nil)
-
-	return nil
-}
-
-// RecordInvalid increments the invalid-files counter for files that the probe
-// activity determined were not valid media. Counter increment is not
-// idempotent so the workflow invokes this activity with MaximumAttempts: 1
-// and ignores the returned error.
-func (a *Activities) RecordInvalid(ctx context.Context, input MediaInput) error {
-	start := time.Now()
-
-	a.recorder.RecordInvalidFile(input.MediaType, input.MappingName)
-
-	logStepResult(ctx, "record_invalid", input.FilePath, start, nil)
-
-	return nil
 }
 
 // NotifyFailure sends the configured failure webhook for a workflow that

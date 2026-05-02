@@ -106,17 +106,28 @@ func TestSonarrHappyPath(t *testing.T) {
 func assertSonarrPipelineMetrics(t *testing.T) {
 	t.Helper()
 
-	// The watcher counters are updated synchronously from the scan goroutine;
-	// the worker's record_metrics task runs after cleanup, so poll until it lands.
+	// The watcher counters are updated synchronously from the scan goroutine.
+	// On the worker side, application metrics flush through the tally→Prometheus
+	// pipeline on a 1-second interval; the SDK records temporal_workflow_endtoend_latency
+	// only when the workflow's close command fires (after Notify + Cleanup), so it
+	// lands strictly later than the per-mapping transcode_duration. Poll until BOTH:
+	//   - the per-mapping transcode_duration histogram (proves THIS workflow
+	//     reached transcode), and
+	//   - the SDK end-to-end histogram (proves SOME MediaWorkflow has fully
+	//     closed; replaces the removed media_workflow_total_duration_seconds)
+	// are present, so the snapshot is internally consistent for the per-metric
+	// assertions below.
 	filter := map[string]string{"mapping_name": "sonarr"}
+	sdkFilter := map[string]string{"workflow_type": "Media"}
 
 	var workerSeries metricSeries
 
 	require.Eventually(t, func() bool {
 		workerSeries = fetchMetrics(t, workerMetricsAddr)
-		return workerSeries.sum("media_workflow_total_duration_seconds_count", filter) >= 1
+		return workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter) >= 1 &&
+			workerSeries.sum("temporal_workflow_endtoend_latency_seconds_count", sdkFilter) >= 1
 	}, 30*time.Second, 500*time.Millisecond,
-		"expected worker to record at least one completed media_workflow run for the sonarr mapping")
+		"expected worker to record one transcode-duration observation for the sonarr mapping AND one Media-workflow end-to-end latency observation")
 
 	watcherSeries := fetchMetrics(t, watcherMetricsAddr)
 	assert.Greater(t, watcherSeries.sum("watcher_scans_total", filter), 0.0,
@@ -126,8 +137,6 @@ func assertSonarrPipelineMetrics(t *testing.T) {
 	assert.Greater(t, watcherSeries.sum("watcher_dispatches_total", filter), 0.0,
 		"watcher should have dispatched the sonarr workflow to Temporal")
 
-	assert.GreaterOrEqual(t, workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter), 1.0,
-		"worker should have recorded the sonarr transcode duration")
 	assert.Greater(t, workerSeries.sum("media_workflow_destination_file_size_bytes_sum", filter), 0.0,
 		"worker should have recorded a positive destination-file-size observation")
 }
