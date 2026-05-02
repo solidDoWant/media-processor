@@ -61,8 +61,10 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 	p, err := metrics.New()
 	require.NoError(t, err)
 
-	// PrometheusRegisterer must still be usable so callers can register without nil checks.
-	require.NotNil(t, p.PrometheusRegisterer())
+	// PrometheusRegisterer must be nil so downstream consumers (e.g.
+	// pkg/temporalclient.newMetricsHandler) can detect "metrics off" and
+	// short-circuit to a noop rather than collecting into an unreachable registry.
+	require.Nil(t, p.PrometheusRegisterer())
 
 	// Shutdown must succeed without error.
 	require.NoError(t, p.Shutdown(context.Background()))
@@ -74,7 +76,9 @@ func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
 	p, shutdown, err := metrics.NewFromEnv()
 	require.NoError(t, err)
 	t.Cleanup(shutdown)
-	require.NotNil(t, p.PrometheusRegisterer())
+	// Same noop contract as TestPrometheusEndpoint_Disabled: nil registerer
+	// signals "metrics off" to downstream consumers.
+	require.Nil(t, p.PrometheusRegisterer())
 }
 
 func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {

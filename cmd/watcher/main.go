@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
@@ -66,7 +68,17 @@ func run(ctx context.Context, configPath string) error {
 	}
 	defer shutdown()
 
-	instruments, err := newScanInstruments(metricsProvider.PrometheusRegisterer())
+	// When metrics aren't exposed, register against a private throwaway so the
+	// scan loop can still record (the values just go unscraped). The Temporal
+	// SDK metrics path takes the same nil from the Provider and switches to
+	// the noop handler, so passing nil through to temporalclient.Dial below is
+	// the desired behaviour.
+	scanRegisterer := metricsProvider.PrometheusRegisterer()
+	if scanRegisterer == nil {
+		scanRegisterer = prometheus.NewRegistry()
+	}
+
+	instruments, err := newScanInstruments(scanRegisterer)
 	if err != nil {
 		return fmt.Errorf("register scan metrics: %w", err)
 	}

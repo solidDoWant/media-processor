@@ -21,12 +21,12 @@ const DefaultScrapeWaitTimeout = 60 * time.Second
 // Provider exposes a Prometheus /metrics endpoint backed by a
 // prometheus.Registry. Application code registers collectors against the
 // registry via PrometheusRegisterer; the same registry serves /metrics.
-// When the metrics address is empty, PrometheusRegisterer returns a private
-// throwaway registry, the HTTP server is not started, and Shutdown +
-// WaitForScrape are safe no-ops.
+// When the metrics address is empty, PrometheusRegisterer returns nil so
+// downstream consumers (e.g. pkg/temporalclient) can detect "metrics off"
+// and short-circuit to a noop, the HTTP server is not started, and
+// Shutdown + WaitForScrape are safe no-ops.
 type Provider struct {
 	promRegistry      *prometheus.Registry
-	exposed           bool
 	shutdown          func(context.Context) error
 	scrapeNotify      chan struct{}
 	scrapeWaitTimeout time.Duration
@@ -57,9 +57,8 @@ func WithScrapeWaitTimeout(d time.Duration) Option {
 }
 
 // New creates a Provider. When WithMetricsAddr is not supplied, the returned
-// Provider holds a private registry (collectors can still be registered, but
-// nothing scrapes them) and starts no HTTP server; Shutdown and WaitForScrape
-// are safe no-ops.
+// Provider has a nil registry, starts no HTTP server, and Shutdown +
+// WaitForScrape are safe no-ops.
 func New(opts ...Option) (*Provider, error) {
 	cfg := &config{}
 	for _, opt := range opts {
@@ -76,7 +75,6 @@ func New(opts ...Option) (*Provider, error) {
 
 	if cfg.metricsAddr == "" {
 		return &Provider{
-			promRegistry:      prometheus.NewRegistry(),
 			shutdown:          func(context.Context) error { return nil },
 			scrapeWaitTimeout: scrapeWaitTimeout,
 		}, nil
@@ -114,7 +112,6 @@ func New(opts ...Option) (*Provider, error) {
 
 	return &Provider{
 		promRegistry:      promRegistry,
-		exposed:           true,
 		shutdown:          srv.Shutdown,
 		scrapeNotify:      scrapeNotify,
 		scrapeWaitTimeout: scrapeWaitTimeout,
@@ -122,11 +119,19 @@ func New(opts ...Option) (*Provider, error) {
 }
 
 // PrometheusRegisterer returns the Prometheus registry collectors should be
-// registered against. The same registry backs the /metrics endpoint when one
-// is enabled. When the Provider is in no-op mode (no METRICS_ADDR), this still
-// returns a non-nil registerer so callers can register without nil checks;
-// observations simply go unscraped.
+// registered against, or nil when the Provider is in no-op mode (no
+// METRICS_ADDR). The same registry backs the /metrics endpoint when one is
+// enabled. The nil return lets downstream consumers detect "metrics off"
+// and short-circuit (e.g. pkg/temporalclient skips the tally→prom bridge).
+//
+// The return type is the prometheus.Registerer interface; a nil *Registry
+// is mapped to a nil interface so callers can use a plain `if reg == nil`
+// check without falling into the typed-nil interface gotcha.
 func (p *Provider) PrometheusRegisterer() prometheus.Registerer {
+	if p.promRegistry == nil {
+		return nil
+	}
+
 	return p.promRegistry
 }
 
@@ -148,7 +153,7 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 // of the wait. Callers should pass a non-cancelled parent context (typically
 // context.Background()) — passing a SIGTERM-cancelled context defeats the gate.
 func (p *Provider) WaitForScrape(ctx context.Context) error {
-	if !p.exposed {
+	if p.scrapeNotify == nil {
 		return nil
 	}
 
@@ -179,8 +184,9 @@ func (p *Provider) WaitForScrape(ctx context.Context) error {
 // METRICS_SCRAPE_WAIT_TIMEOUT (Go duration string) bounds Provider.WaitForScrape.
 // If METRICS_ADDR is not set, a no-op Provider is returned.
 //
-// The returned shutdown func must be deferred by the caller. It shuts down all
-// exporters with a 10-second deadline and writes any error to stderr.
+// The returned shutdown func must be deferred by the caller. It stops the
+// metrics HTTP server (when one was started) with a 10-second deadline and
+// writes any error to stderr; it is a no-op when no HTTP server is running.
 func NewFromEnv() (*Provider, func(), error) {
 	var opts []Option
 	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
