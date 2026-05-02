@@ -28,19 +28,6 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// bindListener opens a TCP listener on a random port and registers cleanup.
-// The cleanup silently ignores close errors because the listener may already be
-// closed by the HTTP server's Shutdown when a Provider is active.
-func bindListener(t *testing.T) net.Listener {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = l.Close() })
-
-	return l
-}
-
 func TestPrometheusEndpoint_Enabled(t *testing.T) {
 	addr := freeAddr(t)
 
@@ -82,67 +69,8 @@ func TestPrometheusEndpoint_Disabled(t *testing.T) {
 	require.NoError(t, p.Shutdown(context.Background()))
 }
 
-func TestOTLPExporter_Enabled(t *testing.T) {
-	// Start a dummy TCP listener to accept the gRPC connection so the exporter
-	// initialises successfully (it dials lazily, so we just need it not to error on init).
-	l := bindListener(t)
-	// The OTel SDK requires a URL-format endpoint (scheme://host:port).
-	p, err := metrics.New(t.Context(), metrics.WithOTLPEndpoint("http://"+l.Addr().String()))
-	require.NoError(t, err)
-
-	mp := p.MeterProvider()
-	require.NotNil(t, mp, "MeterProvider should be non-nil when OTLP endpoint is set")
-
-	// Shutdown should complete within the deadline (even if flushing fails because
-	// the listener is not a real gRPC server — the important thing is it is called).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_ = p.Shutdown(ctx) // error tolerated: no real gRPC server behind the listener
-}
-
-func TestOTLPExporter_Disabled(t *testing.T) {
-	p, err := metrics.New(t.Context())
-	require.NoError(t, err)
-
-	// Shutdown must succeed without attempting any OTLP export.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	require.NoError(t, p.Shutdown(ctx))
-}
-
-func TestBothExporters_Active(t *testing.T) {
-	promAddr := freeAddr(t)
-	otlpListener := bindListener(t)
-
-	p, err := metrics.New(t.Context(),
-		metrics.WithMetricsAddr(promAddr),
-		metrics.WithOTLPEndpoint("http://"+otlpListener.Addr().String()),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		_ = p.Shutdown(ctx) //nolint:errcheck
-	})
-
-	// Prometheus endpoint should respond.
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://" + promAddr + "/metrics") //nolint:noctx
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// MeterProvider should be non-nil since OTLP is also set.
-	mp := p.MeterProvider()
-	require.NotNil(t, mp)
-}
-
 func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 	p, shutdown, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
@@ -153,7 +81,6 @@ func TestNewFromEnv_NoEnvVars_ReturnsNoopProvider(t *testing.T) {
 func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("METRICS_ADDR", addr)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 	p, shutdown, err := metrics.NewFromEnv(t.Context())
 	require.NoError(t, err)
@@ -164,24 +91,6 @@ func TestNewFromEnv_MetricsAddr_StartsPrometheusEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestNewFromEnv_OTLPEndpoint_CreatesProvider(t *testing.T) {
-	l := bindListener(t)
-	t.Setenv("METRICS_ADDR", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+l.Addr().String())
-
-	// Use p.Shutdown with a short deadline rather than the fixed-10s shutdown func
-	// so the test does not block for the full flush timeout against a dummy listener.
-	p, _, err := metrics.NewFromEnv(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-
-		_ = p.Shutdown(ctx)
-	})
-	require.NotNil(t, p.MeterProvider())
 }
 
 func TestWaitForScrape_ReturnsWhenScrapeArrives(t *testing.T) {
@@ -306,7 +215,6 @@ func TestWaitForScrape_DisabledByExplicitZero(t *testing.T) {
 func TestNewFromEnv_ScrapeWaitTimeout_DisabledViaZeroEnvVar(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("METRICS_ADDR", addr)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "0s")
 
 	p, shutdown, err := metrics.NewFromEnv(t.Context())
@@ -324,7 +232,6 @@ func TestNewFromEnv_ScrapeWaitTimeout_DisabledViaZeroEnvVar(t *testing.T) {
 func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("METRICS_ADDR", addr)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "100ms")
 
 	p, shutdown, err := metrics.NewFromEnv(t.Context())
@@ -342,39 +249,9 @@ func TestNewFromEnv_ScrapeWaitTimeout_AppliedFromEnv(t *testing.T) {
 
 func TestNewFromEnv_ScrapeWaitTimeout_InvalidDurationErrors(t *testing.T) {
 	t.Setenv("METRICS_ADDR", "")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("METRICS_SCRAPE_WAIT_TIMEOUT", "not-a-duration")
 
 	_, _, err := metrics.NewFromEnv(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "METRICS_SCRAPE_WAIT_TIMEOUT")
-}
-
-func TestGracefulShutdown_FlushesOTLP(t *testing.T) {
-	l := bindListener(t)
-
-	p, err := metrics.New(t.Context(), metrics.WithOTLPEndpoint("http://"+l.Addr().String()))
-	require.NoError(t, err)
-
-	// Shutdown must complete (the MeterProvider.Shutdown must be called, attempting to
-	// flush buffered metrics). An error from the remote end is tolerated since the
-	// listener is not a real gRPC server. The overall test deadline is generous so
-	// the gRPC connection timeout can expire before we declare failure.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer shutdownCancel()
-
-	shutdownDone := make(chan struct{})
-
-	go func() {
-		defer close(shutdownDone)
-
-		_ = p.Shutdown(shutdownCtx)
-	}()
-
-	select {
-	case <-shutdownDone:
-		// passed: Shutdown completed (with or without error from the dummy server)
-	case <-time.After(10 * time.Second):
-		t.Fatal("Shutdown did not complete within 10 seconds")
-	}
 }

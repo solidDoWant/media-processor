@@ -98,7 +98,6 @@ Shared observability settings applied to both watcher and worker.
 
 | Field                                  | Type   | Default | Description                                                              |
 | -------------------------------------- | ------ | ------- | ------------------------------------------------------------------------ |
-| `config.metrics.otel.endpoint`         | string | `""`    | Sets `OTEL_EXPORTER_OTLP_ENDPOINT` on both containers when non-empty     |
 | `config.metrics.highCardinalityLabels` | bool   | `false` | Sets `METRICS_HIGH_CARDINALITY_LABELS=true` on both containers when true |
 
 ### `config.watcher`

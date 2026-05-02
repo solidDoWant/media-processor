@@ -11,7 +11,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	prometheusexporter "go.opentelemetry.io/otel/exporters/prometheus"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -23,8 +22,8 @@ import (
 // METRICS_SCRAPE_WAIT_TIMEOUT.
 const DefaultScrapeWaitTimeout = 60 * time.Second
 
-// Provider manages metrics exporters: a Prometheus pull endpoint and/or an OTLP push exporter.
-// Both are optional and independently controlled by the options passed to New.
+// Provider manages an optional Prometheus pull endpoint, controlled by the
+// options passed to New.
 type Provider struct {
 	meterProvider     otelmetric.MeterProvider
 	promRegistry      *prometheus.Registry
@@ -35,7 +34,6 @@ type Provider struct {
 
 type config struct {
 	metricsAddr       string
-	otlpEndpoint      string
 	scrapeWaitTimeout *time.Duration
 }
 
@@ -48,12 +46,6 @@ func WithMetricsAddr(addr string) Option {
 	return func(c *config) { c.metricsAddr = addr }
 }
 
-// WithOTLPEndpoint sets the OTLP gRPC endpoint URL (e.g. "http://otel-collector:4317").
-// When not supplied, no OTLP exporter is created.
-func WithOTLPEndpoint(endpoint string) Option {
-	return func(c *config) { c.otlpEndpoint = endpoint }
-}
-
 // WithScrapeWaitTimeout sets the upper bound for Provider.WaitForScrape.
 // When this option is not supplied at all, DefaultScrapeWaitTimeout is used.
 // A non-positive value (e.g. 0) disables the gate: WaitForScrape returns nil
@@ -64,8 +56,8 @@ func WithScrapeWaitTimeout(d time.Duration) Option {
 	return func(c *config) { c.scrapeWaitTimeout = &d }
 }
 
-// New creates a Provider. If neither WithMetricsAddr nor WithOTLPEndpoint is supplied,
-// a no-op MeterProvider is returned.
+// New creates a Provider. If WithMetricsAddr is not supplied, a no-op
+// MeterProvider is returned.
 func New(ctx context.Context, opts ...Option) (*Provider, error) {
 	cfg := &config{}
 	for _, opt := range opts {
@@ -128,25 +120,6 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		shutdownFuncs = append(shutdownFuncs, srv.Shutdown)
 	}
 
-	if cfg.otlpEndpoint != "" {
-		otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithEndpointURL(cfg.otlpEndpoint))
-		if err != nil {
-			// Shut down any already-started servers before returning. Use a fresh context
-			// because ctx may already be cancelled (a common reason for init failure).
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cleanupCancel()
-
-			var cleanupErrs []error
-			for _, shutdownFunc := range shutdownFuncs {
-				cleanupErrs = append(cleanupErrs, shutdownFunc(cleanupCtx))
-			}
-
-			return nil, errors.Join(append(cleanupErrs, fmt.Errorf("create OTLP metric exporter: %w", err))...)
-		}
-
-		readers = append(readers, sdkmetric.NewPeriodicReader(otlpExporter))
-	}
-
 	if len(readers) == 0 {
 		return &Provider{
 			meterProvider:     noop.NewMeterProvider(),
@@ -170,9 +143,8 @@ func New(ctx context.Context, opts ...Option) (*Provider, error) {
 		promRegistry:  promRegistry,
 		shutdown: func(ctx context.Context) error {
 			var errs []error
-			// Shut down in reverse (LIFO) order so the OTel MeterProvider is flushed
-			// before the Prometheus HTTP server is stopped, giving the full context
-			// deadline to the OTLP flush rather than splitting it with HTTP shutdown.
+			// Shut down in reverse (LIFO) order so the OTel MeterProvider is
+			// flushed before the Prometheus HTTP server is stopped.
 			for i := len(shutdownFuncs) - 1; i >= 0; i-- {
 				errs = append(errs, shutdownFuncs[i](ctx))
 			}
@@ -252,9 +224,8 @@ func (p *Provider) WaitForScrape(ctx context.Context) error {
 
 // NewFromEnv creates a Provider using standard environment variables.
 // METRICS_ADDR enables the Prometheus /metrics pull endpoint.
-// OTEL_EXPORTER_OTLP_ENDPOINT enables OTLP gRPC push export.
 // METRICS_SCRAPE_WAIT_TIMEOUT (Go duration string) bounds Provider.WaitForScrape.
-// If neither METRICS_ADDR nor OTEL_EXPORTER_OTLP_ENDPOINT is set, a no-op Provider is returned.
+// If METRICS_ADDR is not set, a no-op Provider is returned.
 //
 // The returned shutdown func must be deferred by the caller. It shuts down all
 // exporters with a 10-second deadline and writes any error to stderr.
@@ -262,10 +233,6 @@ func NewFromEnv(ctx context.Context) (*Provider, func(), error) {
 	var opts []Option
 	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
 		opts = append(opts, WithMetricsAddr(addr))
-	}
-
-	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
-		opts = append(opts, WithOTLPEndpoint(endpoint))
 	}
 
 	if raw := os.Getenv("METRICS_SCRAPE_WAIT_TIMEOUT"); raw != "" {

@@ -6,11 +6,10 @@ This page documents every network connection made by the watcher and worker pods
 
 ### Egress
 
-| Destination       | Protocol   | Port                                             | Required | Controlled by                 |
-| ----------------- | ---------- | ------------------------------------------------ | -------- | ----------------------------- |
-| Temporal frontend | gRPC (TCP) | Port from `TEMPORAL_ADDRESS` (typically `7233`)  | Yes      | `TEMPORAL_ADDRESS`            |
-| OTLP collector    | gRPC (TCP) | `OTEL_EXPORTER_OTLP_ENDPOINT` (typically `4317`) | No       | `OTEL_EXPORTER_OTLP_ENDPOINT` |
-| kube-dns          | UDP+TCP    | `53`                                             | Yes      | Cluster DNS                   |
+| Destination       | Protocol   | Port                                            | Required | Controlled by      |
+| ----------------- | ---------- | ----------------------------------------------- | -------- | ------------------ |
+| Temporal frontend | gRPC (TCP) | Port from `TEMPORAL_ADDRESS` (typically `7233`) | Yes      | `TEMPORAL_ADDRESS` |
+| kube-dns          | UDP+TCP    | `53`                                            | Yes      | Cluster DNS        |
 
 ### Ingress
 
@@ -23,15 +22,14 @@ This page documents every network connection made by the watcher and worker pods
 
 ### Egress
 
-| Destination         | Protocol            | Port                                             | Required | Controlled by                     |
-| ------------------- | ------------------- | ------------------------------------------------ | -------- | --------------------------------- |
-| Temporal frontend   | gRPC (TCP)          | Port from `TEMPORAL_ADDRESS` (typically `7233`)  | Yes      | `TEMPORAL_ADDRESS`                |
-| Radarr              | HTTP or HTTPS (TCP) | Port in `RADARR_URL`                             | Yes      | `RADARR_URL`                      |
-| Sonarr              | HTTP or HTTPS (TCP) | Port in `SONARR_URL`                             | Yes      | `SONARR_URL`                      |
-| Poster image server | HTTP or HTTPS (TCP) | `80` / `443`                                     | No       | URL returned by Radarr/Sonarr API |
-| OTLP collector      | gRPC (TCP)          | `OTEL_EXPORTER_OTLP_ENDPOINT` (typically `4317`) | No       | `OTEL_EXPORTER_OTLP_ENDPOINT`     |
-| Webhook endpoint    | HTTP or HTTPS (TCP) | Port in `MEDIA_WEBHOOK_URL`                      | No       | `MEDIA_WEBHOOK_URL`               |
-| kube-dns            | UDP+TCP             | `53`                                             | Yes      | Cluster DNS                       |
+| Destination         | Protocol            | Port                                            | Required | Controlled by                     |
+| ------------------- | ------------------- | ----------------------------------------------- | -------- | --------------------------------- |
+| Temporal frontend   | gRPC (TCP)          | Port from `TEMPORAL_ADDRESS` (typically `7233`) | Yes      | `TEMPORAL_ADDRESS`                |
+| Radarr              | HTTP or HTTPS (TCP) | Port in `RADARR_URL`                            | Yes      | `RADARR_URL`                      |
+| Sonarr              | HTTP or HTTPS (TCP) | Port in `SONARR_URL`                            | Yes      | `SONARR_URL`                      |
+| Poster image server | HTTP or HTTPS (TCP) | `80` / `443`                                    | No       | URL returned by Radarr/Sonarr API |
+| Webhook endpoint    | HTTP or HTTPS (TCP) | Port in `MEDIA_WEBHOOK_URL`                     | No       | `MEDIA_WEBHOOK_URL`               |
+| kube-dns            | UDP+TCP             | `53`                                            | Yes      | Cluster DNS                       |
 
 **Poster images:** the worker fetches artwork from URLs returned by the Radarr/Sonarr API. These URLs are typically relative paths served by the arr instance itself (same host and port as `RADARR_URL`/`SONARR_URL`), so no additional egress rule is needed in the common case. Some arr configurations include an external `RemoteURL` pointing to a CDN — if artwork fetch is enabled and your arr instance returns external image URLs, the worker will also connect to those hosts on port `443`.
 
@@ -84,14 +82,6 @@ spec:
               app: temporal-frontend
       ports:
         - port: 7233
-          protocol: TCP
-    # Optional: OTLP collector
-    - to:
-        - podSelector:
-            matchLabels:
-              app: otel-collector
-      ports:
-        - port: 4317
           protocol: TCP
     # DNS
     - ports:
@@ -149,14 +139,6 @@ spec:
               app: sonarr
       ports:
         - port: 8989
-          protocol: TCP
-    # Optional: OTLP collector
-    - to:
-        - podSelector:
-            matchLabels:
-              app: otel-collector
-      ports:
-        - port: 4317
           protocol: TCP
     # Optional: webhook and external poster images (if applicable)
     - ports:

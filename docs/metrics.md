@@ -1,12 +1,8 @@
 # Metrics and observability
 
-## Exporters
+## Prometheus endpoint
 
-Both the watcher and the worker support two independent, opt-in metric exporters. Neither is enabled by default.
-
-### Prometheus pull endpoint
-
-Set `METRICS_ADDR` to a TCP address (e.g. `:9090`) to start an HTTP server that exposes metrics in Prometheus text format at `/metrics`.
+Both the watcher and the worker expose an opt-in Prometheus pull endpoint. Set `METRICS_ADDR` to a TCP address (e.g. `:9090`) to start an HTTP server that exposes metrics in Prometheus text format at `/metrics`. When `METRICS_ADDR` is empty, no metrics endpoint is started.
 
 ```sh
 METRICS_ADDR=:9090
@@ -20,24 +16,6 @@ scrape_configs:
     static_configs:
       - targets: ["worker:9090", "watcher:9090"]
 ```
-
-### OTLP push (OpenTelemetry)
-
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP gRPC endpoint to push metrics periodically (default interval: 60 seconds).
-
-```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-```
-
-This follows the standard [OpenTelemetry environment variable convention](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/). Point it at the gRPC port of your collector (typically 4317).
-
-Both exporters can be active simultaneously.
-
-### Choosing between the two
-
-Use **Prometheus pull** if you already run a Prometheus server that scrapes targets directly. It is simpler to configure and requires no additional infrastructure beyond what Prometheus already provides.
-
-Use **OTLP push** if you have an OpenTelemetry Collector (or another OTLP-compatible backend such as Grafana Alloy, Datadog Agent, or Honeycomb) already running. Push is also the better fit when the worker is run once per job rather than long-lived: metrics are flushed on shutdown, so each workflow run's observations are guaranteed to be delivered before the worker exits. A pull endpoint that is never scraped during a short-lived run would lose that data. The trade-off is that OTLP requires a running collector to receive and forward the metrics.
 
 ## Metric reference
 

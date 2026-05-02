@@ -98,8 +98,6 @@ config:
     logLevel: info
     metrics:
       enabled: false
-      otel:
-        endpoint: ""
       # scrapeWaitTimeout bounds how long the watcher's metrics endpoint stays open
       # after the scan loop exits, waiting for one final Prometheus scrape. Go duration
       # string (e.g. "30s", "2m"). Sets METRICS_SCRAPE_WAIT_TIMEOUT. Must be at least
@@ -120,8 +118,6 @@ config:
     stopTimeout: "30s"
     metrics:
       enabled: false
-      otel:
-        endpoint: ""
       highCardinalityLabels: false
       # scrapeWaitTimeout bounds how long the worker's metrics endpoint stays open
       # after activity drain completes, waiting for one final Prometheus scrape. Go

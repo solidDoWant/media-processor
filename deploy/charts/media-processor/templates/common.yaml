@@ -122,11 +122,6 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $watcherEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
 {{- end -}}
 
-{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.watcher.metrics.otel.endpoint -}}
-  {{- $_ := set $watcherEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.watcher.metrics.otel.endpoint -}}
-{{- end -}}
-
 {{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
 {{- if .Values.config.watcher.metrics.scrapeWaitTimeout -}}
   {{- $_ := set $watcherEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.watcher.metrics.scrapeWaitTimeout -}}
@@ -206,11 +201,6 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* METRICS_ADDR */}}
 {{- if .Values.config.worker.metrics.enabled -}}
   {{- $_ := set $workerEnv "METRICS_ADDR" (printf ":%d" $metricsPort) -}}
-{{- end -}}
-
-{{/* OTEL_EXPORTER_OTLP_ENDPOINT */}}
-{{- if .Values.config.worker.metrics.otel.endpoint -}}
-  {{- $_ := set $workerEnv "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.config.worker.metrics.otel.endpoint -}}
 {{- end -}}
 
 {{/* METRICS_HIGH_CARDINALITY_LABELS */}}
