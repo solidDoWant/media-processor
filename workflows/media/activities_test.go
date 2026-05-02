@@ -414,9 +414,16 @@ func TestProbe_ValidMediaEmitsHistogramsAndGauges(t *testing.T) {
 // want. Used to look up tally snapshots by metric name + an application
 // subset of tags, ignoring SDK-injected worker tags
 // (activity_type, namespace, task_queue, workflow_type) that vary by env.
+//
+// The two-value map lookup is required so that an entry in want with an
+// empty-string value (e.g. an HC tag like series_title="" on a movie
+// observation) only matches snapshots that actually carry that key, not
+// snapshots that simply omit it (Go's zero-value map lookup would otherwise
+// return "" for missing keys and false-positive a match).
 func hasSubsetTags(actual, want map[string]string) bool {
 	for k, v := range want {
-		if actual[k] != v {
+		got, ok := actual[k]
+		if !ok || got != v {
 			return false
 		}
 	}
