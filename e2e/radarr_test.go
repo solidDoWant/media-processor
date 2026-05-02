@@ -110,7 +110,7 @@ func assertRadarrPipelineMetrics(t *testing.T) {
 	// are present, so the snapshot is internally consistent for the per-metric
 	// assertions below.
 	filter := map[string]string{"mapping_name": "radarr"}
-	sdkFilter := map[string]string{"workflow_type": "MediaWorkflow"}
+	sdkFilter := map[string]string{"workflow_type": "Media"}
 
 	var workerSeries metricSeries
 
@@ -119,7 +119,7 @@ func assertRadarrPipelineMetrics(t *testing.T) {
 		return workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter) >= 1 &&
 			workerSeries.sum("temporal_workflow_endtoend_latency_seconds_count", sdkFilter) >= 1
 	}, 30*time.Second, 500*time.Millisecond,
-		"expected worker to record one transcode-duration observation for the radarr mapping AND one MediaWorkflow end-to-end latency observation")
+		"expected worker to record one transcode-duration observation for the radarr mapping AND one Media-workflow end-to-end latency observation")
 
 	watcherSeries := fetchMetrics(t, watcherMetricsAddr)
 	assert.Greater(t, watcherSeries.sum("watcher_scans_total", filter), 0.0,
