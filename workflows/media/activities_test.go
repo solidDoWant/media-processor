@@ -241,6 +241,119 @@ func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
 	}
 }
 
+// TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter verifies the
+// post-transcode emission path: source/destination file-size histograms and
+// the transcode-duration histogram all carry the full transcode tag set
+// (with HC labels merged in when supplied), and the artwork-fetch-skipped
+// counter only fires when the corresponding TranscodeOutput flag is set.
+func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
+	tests := []struct {
+		name              string
+		artworkSkipped    bool
+		hcTags            map[string]string
+		extraTagAssertion func(t *testing.T, tags map[string]string)
+	}{
+		{
+			name:              "no HC, no artwork skip",
+			extraTagAssertion: func(t *testing.T, tags map[string]string) { assert.NotContains(t, tags, "id") },
+		},
+		{
+			name:           "artwork skipped fires counter",
+			artworkSkipped: true,
+		},
+		{
+			name: "HC tags merged into transcode tag set",
+			hcTags: map[string]string{
+				"id": "42", "title": "Movie", "year": "2020",
+				"series_title": "", "season_number": "", "episode_number": "",
+			},
+			extraTagAssertion: func(t *testing.T, tags map[string]string) {
+				assert.Equal(t, "42", tags["id"])
+				assert.Equal(t, "Movie", tags["title"])
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := tally.NewTestScope("", nil)
+			suite := &testsuite.WorkflowTestSuite{}
+			suite.SetMetricsHandler(contribtally.NewMetricsHandler(scope))
+			env := suite.NewTestActivityEnvironment()
+
+			input := MediaInput{MediaType: medialib.MovieType, MappingName: "downloads"}
+			probe := steps.ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"}
+			out := steps.TranscodeOutput{
+				DestCodec:                "hevc",
+				DestContainer:            "mkv",
+				SourceFileSizeBytes:      5_000_000_000,
+				DestFileSizeBytes:        2_000_000_000,
+				TranscodeDurationSeconds: 1800,
+				HardwareAccelerated:      true,
+				ArtworkFetchSkipped:      tc.artworkSkipped,
+			}
+
+			wrap := func(ctx context.Context) error {
+				emitTranscodeMetrics(ctx, input, probe, out, tc.hcTags)
+				return nil
+			}
+			env.RegisterActivity(wrap)
+			_, err := env.ExecuteActivity(wrap)
+			require.NoError(t, err)
+
+			snap := scope.Snapshot()
+
+			expectedBaseTags := map[string]string{
+				"media_type":            "movie",
+				"mapping_name":          "downloads",
+				"source_codec":          "h264",
+				"destination_codec":     "hevc",
+				"source_container":      "mp4",
+				"destination_container": "mkv",
+				"hardware_accelerated":  "true",
+				"crop_applied":          "false",
+			}
+
+			for _, name := range []string{
+				"media_workflow_source_file_size_bytes",
+				"media_workflow_destination_file_size_bytes",
+				"media_workflow_transcode_duration_seconds",
+			} {
+				h := findHistogram(t, snap, name, expectedBaseTags)
+				assertHistogramSampleCount(t, h, 1)
+
+				if tc.extraTagAssertion != nil {
+					tc.extraTagAssertion(t, h.Tags())
+				}
+			}
+
+			counters := findCounters(snap, "media_workflow_artwork_fetch_skipped")
+			if tc.artworkSkipped {
+				require.Len(t, counters, 1, "artwork-fetch-skipped counter should fire when flag is set")
+				assert.EqualValues(t, 1, counters[0].Value())
+			} else {
+				assert.Empty(t, counters, "artwork-fetch-skipped counter must not fire when flag is unset")
+			}
+		})
+	}
+}
+
+// findCounters returns every counter snapshot whose metric name matches
+// (after the _total suffix is appended by the naming scope, the on-snapshot
+// name is "media_workflow_artwork_fetch_skipped+..." with no suffix because
+// tally tracks the raw name; the test scope does not apply the naming scope).
+func findCounters(snap tally.Snapshot, name string) []tally.CounterSnapshot {
+	var out []tally.CounterSnapshot
+
+	for _, c := range snap.Counters() {
+		if c.Name() == name {
+			out = append(out, c)
+		}
+	}
+
+	return out
+}
+
 // TestProbe_InvalidMediaEmitsCounterOnly probes a non-media input and verifies
 // only the invalid-files counter is incremented; the per-run histograms and
 // gauges are skipped because there is no media to describe.
@@ -262,9 +375,13 @@ func TestProbe_InvalidMediaEmitsCounterOnly(t *testing.T) {
 	counter := findCounter(t, snap, "media_workflow_invalid_files", wantTags)
 	assert.EqualValues(t, 1, counter.Value())
 
-	assert.Empty(t, findHistograms(snap, "media_workflow_audio_track_count"), "track histograms must not be emitted for invalid files")
-	assert.Empty(t, findHistograms(snap, "media_workflow_subtitle_track_count"))
-	assert.Empty(t, findHistograms(snap, "media_workflow_source_duration_seconds"))
+	// Track counts are gauges and source-duration is a histogram; neither
+	// should fire on an invalid-media probe. (Asserting against the wrong
+	// snapshot map here would silently pass — gauge entries don't appear in
+	// snap.Histograms() regardless of whether they were emitted.)
+	assert.Empty(t, findGauges(snap, "media_workflow_audio_track_count"), "audio gauge must not be emitted for invalid files")
+	assert.Empty(t, findGauges(snap, "media_workflow_subtitle_track_count"), "subtitle gauge must not be emitted for invalid files")
+	assert.Empty(t, findHistograms(snap, "media_workflow_source_duration_seconds"), "source-duration histogram must not be emitted for invalid files")
 }
 
 // TestProbe_ValidMediaEmitsHistogramsAndGauges runs probe against a real
@@ -356,6 +473,19 @@ func findHistograms(snap tally.Snapshot, name string) []tally.HistogramSnapshot 
 	for _, h := range snap.Histograms() {
 		if h.Name() == name {
 			out = append(out, h)
+		}
+	}
+
+	return out
+}
+
+// findGauges returns every gauge snapshot whose metric name matches.
+func findGauges(snap tally.Snapshot, name string) []tally.GaugeSnapshot {
+	var out []tally.GaugeSnapshot
+
+	for _, g := range snap.Gauges() {
+		if g.Name() == name {
+			out = append(out, g)
 		}
 	}
 

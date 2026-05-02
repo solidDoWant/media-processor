@@ -40,7 +40,7 @@ const (
 	// defaultProbeTimeout is the StartToCloseTimeout applied to the probe activity.
 	defaultProbeTimeout = 5 * time.Minute
 	// defaultFinalizeTimeout is the StartToCloseTimeout applied to the
-	// post-transcode activities (notify, cleanup, metrics, invalid, failure-webhook).
+	// post-transcode activities (notify, cleanup, failure-webhook).
 	defaultFinalizeTimeout = 10 * time.Minute
 
 	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
