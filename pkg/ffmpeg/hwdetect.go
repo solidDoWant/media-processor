@@ -8,15 +8,15 @@ import "github.com/asticode/go-astiav"
 // opened, only codec registration is checked.
 func detectHardwareEncoders(codec Codec) []HWAccel {
 	accelerators := make([]HWAccel, 0, len(hwAccelPriority))
-	for _, hw := range hwAccelPriority {
-		profile, ok := hwProfiles[hw]
+	for _, accelerator := range hwAccelPriority {
+		profile, ok := hwProfiles[accelerator]
 		if !ok {
 			continue
 		}
 
 		name := profile.encoders[codec]
 		if name != "" && astiav.FindEncoderByName(name) != nil {
-			accelerators = append(accelerators, hw)
+			accelerators = append(accelerators, accelerator)
 		}
 	}
 
@@ -32,18 +32,18 @@ func GetHardwareEncoder(codec Codec, preferred HWAccel) HWAccel {
 		return HWAccelNone
 	}
 
-	accs := detectHardwareEncoders(codec)
-	if len(accs) == 0 {
+	availableAccelerators := detectHardwareEncoders(codec)
+	if len(availableAccelerators) == 0 {
 		return HWAccelNone
 	}
 
-	for _, acc := range accs {
-		if acc == preferred {
-			return acc
+	for _, accelerator := range availableAccelerators {
+		if accelerator == preferred {
+			return accelerator
 		}
 	}
 
 	// preferred is HWAccelAuto, or preferred is unavailable: fall back to the
 	// highest-priority available accelerator.
-	return accs[0]
+	return availableAccelerators[0]
 }
