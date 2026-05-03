@@ -191,7 +191,18 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe Prob
 		activity.RecordHeartbeat(ctx, p)
 	}
 
-	out, err := RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, heartbeat, library)
+	out, err := RunTranscode(ctx, TranscodeRequest{
+		FilePath:            input.FilePath,
+		Probe:               probe,
+		CropParams:          cropOut.Crop,
+		OutputDir:           outputPath,
+		WatcherRoot:         input.WatchRoot,
+		HardwareDevicePath:  a.cfg.HardwareDevicePath,
+		H265CRF:             a.cfg.H265CRF,
+		ProgressLogInterval: a.cfg.ProgressLogInterval,
+		Heartbeat:           heartbeat,
+		Library:             library,
+	})
 	logStepResult(ctx, "transcode", input.FilePath, start, err)
 
 	if err != nil {
