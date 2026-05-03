@@ -109,7 +109,6 @@ Shared observability settings applied to both watcher and worker.
 | `config.watcher.volumes`                   | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                                                      |
 | `config.watcher.watches`                   | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                                                 |
 | `config.watcher.logLevel`                  | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                                                  |
-| `config.watcher.healthPort`                | int    | `8081`      | TCP port the watcher's health server listens on. Drives both `HEALTH_ADDR` on the container and the liveness/readiness probe `httpGet.port`, so changing the chart value moves both halves together. Must be 1–65535 |
 | `config.watcher.metrics.enabled`           | bool   | `false`     | When true, the chart emits the watcher-metrics `Service` and its `ServiceMonitor`. The watcher binary always exposes `/metrics` on port 9091 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping)) |
 | `config.watcher.metrics.scrapeWaitTimeout` | string | `""`        | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain) for the relationship with `terminationGracePeriodSeconds` |
 
@@ -170,7 +169,6 @@ config:
 | Field                                     | Type   | Default | Description                                                                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `config.worker.logLevel`                  | string | `info`  | Sets `LOG_LEVEL` on the worker container                                                                                                                                                                                                                                                                                                                                                          |
-| `config.worker.healthPort`                | int    | `8080`  | TCP port the worker's health server listens on. Drives both `HEALTH_ADDR` on the container and the liveness/readiness probe `httpGet.port`, so changing the chart value moves both halves together. Must be 1–65535                                                                                                                                                                              |
 | `config.worker.stopTimeout`               | string | `30s`   | Sets `WORKER_STOP_TIMEOUT` on the worker container. The chart default of `30s` keeps the SIGTERM-to-SIGKILL window inside the default `terminationGracePeriodSeconds` of `120s`. Operators running long transcodes must raise this together with `metrics.scrapeWaitTimeout` and the worker controller's `pod.terminationGracePeriodSeconds`. See [Termination and drain](#termination-and-drain) |
 | `config.worker.metrics.enabled`           | bool   | `false` | When true, the chart emits the worker-metrics `Service` and its `PodMonitor`. The worker binary always exposes `/metrics` on port 9090 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping))                                                                                                                                     |
 | `config.worker.metrics.scrapeWaitTimeout` | string | `""`    | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the worker container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain)                                                                                                                                                                                                                   |
@@ -302,12 +300,14 @@ These values are intentionally not configurable in `values.yaml`:
 | Watcher config mount  | `/etc/media-processor/`     |
 | Temporal config mount | `/etc/temporal/`            |
 | Temporal TLS root     | `/etc/temporal-tls/<name>/` |
+| Watcher health port   | `8081`                      |
+| Worker health port    | `8080`                      |
 | Watcher metrics port  | `9091`                      |
 | Worker metrics port   | `9090`                      |
 | Liveness probe path   | `/healthz`                  |
 | Readiness probe path  | `/readyz`                   |
 
-The watcher and worker health ports default to `8081` and `8080` respectively but are configurable via `config.watcher.healthPort` and `config.worker.healthPort`; the chart drives both the binary's `HEALTH_ADDR` and the Kubernetes probe `httpGet.port` from those values so the two stay in lockstep.
+The chart matches the binary's defaults for the health ports. Operators who set `HEALTH_ADDR` to a non-default port via the `resources` passthrough must also override the corresponding probe `httpGet.port` to match.
 
 ## Using Secrets for credentials
 
