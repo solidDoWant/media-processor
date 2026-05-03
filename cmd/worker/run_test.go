@@ -15,7 +15,7 @@ import (
 func TestRun_MissingTaskQueue(t *testing.T) {
 	t.Setenv("TEMPORAL_TASK_QUEUE", "")
 
-	err := run(t.Context())
+	err := run(t.Context(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TEMPORAL_TASK_QUEUE")
 }
