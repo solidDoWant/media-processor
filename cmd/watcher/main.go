@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/solidDoWant/media-processor/internal/envvar"
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
@@ -32,9 +33,9 @@ func main() {
 func run(ctx context.Context, configPath string) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
-	if taskQueue == "" {
-		return fmt.Errorf("TEMPORAL_TASK_QUEUE is not set")
+	taskQueue, err := envvar.RequireEnv("TEMPORAL_TASK_QUEUE")
+	if err != nil {
+		return err
 	}
 
 	const defaultHealthAddr = ":8081"
