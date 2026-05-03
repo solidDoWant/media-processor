@@ -134,8 +134,8 @@ func workflowID(absFilePath string) string {
 // scenarios:
 //   - A previously failed workflow can be retried on the next tick.
 //   - A previously completed workflow can run again when an operator removes both the
-//     source file and its sentinel and re-adds the file (the parent issue #131's
-//     stated equivalent of today's `WithRunKey` semantics).
+//     source file and its sentinel and re-adds the file; AllowDuplicate lets Temporal
+//     start a fresh run under the same WorkflowID.
 //
 // The conflict policy controls behaviour when a run for this WorkflowID is currently
 // in progress. Fail makes Temporal reject the duplicate, and

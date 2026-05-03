@@ -308,17 +308,12 @@ func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
 
 // NotifyFailure sends the configured failure webhook for a workflow that
 // returned an error. Invoked from the workflow's defer block on any non-nil
-// return; the failed step name and error message are sourced from the
-// stepError that the workflow body returned.
+// return; the failed step name comes from temporal.ActivityError.ActivityType()
+// and the message from the wrapped activity error.
 func (a *Activities) NotifyFailure(ctx context.Context, input MediaInput, failedStep, failureMsg string) error {
 	start := time.Now()
 
-	stepErrors := map[string]string{}
-	if failedStep != "" {
-		stepErrors[failedStep] = failureMsg
-	}
-
-	err := NotifyWorkflowFailure(ctx, stepErrors, MediaWorkflowName, input.FilePath, a.webhookClient)
+	err := NotifyWorkflowFailure(ctx, failedStep, failureMsg, MediaWorkflowName, input.FilePath, a.webhookClient)
 	logStepResult(ctx, "notify_failure", input.FilePath, start, err)
 
 	return err
