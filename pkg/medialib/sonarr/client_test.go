@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,10 +23,13 @@ const unreachableURL = "http://127.0.0.1:1"
 
 // sonarrTestServerConfig holds configuration for test HTTP servers.
 type sonarrTestServerConfig struct {
-	parseResp  *sonarrlib.ParseOutput
-	seriesByID *sonarrlib.Series // response for /api/v3/series/{id}
-	imageBody  []byte
-	imageType  string
+	parseResp       *sonarrlib.ParseOutput
+	seriesByID      *sonarrlib.Series  // response for /api/v3/series/{id}
+	queueResp       *sonarrlib.Queue   // single-page queue response; nil returns empty queue
+	queuePages      []*sonarrlib.Queue // multi-page queue responses; index 0 = page 1; takes priority over queueResp
+	queueHTTPStatus int                // override HTTP status for /api/v3/queue; 0 means 200
+	imageBody       []byte
+	imageType       string
 	// onCommand is called with the raw command request when /api/v3/command is hit.
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
@@ -49,6 +53,42 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
+	})
+
+	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, r *http.Request) {
+		status := cfg.queueHTTPStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+
+		if status != http.StatusOK {
+			return
+		}
+
+		var q *sonarrlib.Queue
+
+		if cfg.queuePages != nil {
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page < 1 {
+				page = 1
+			}
+
+			if page-1 < len(cfg.queuePages) {
+				q = cfg.queuePages[page-1]
+			} else {
+				q = &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}}
+			}
+		} else {
+			q = cfg.queueResp
+			if q == nil {
+				q = &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}}
+			}
+		}
+
+		require.NoError(t, json.NewEncoder(w).Encode(q))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -79,29 +119,118 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 }
 
 func TestImportByFilePath(t *testing.T) {
+	episodeParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	pendingRecord := &sonarrlib.QueueRecord{
+		ID:                   1,
+		EpisodeID:            200,
+		DownloadID:           "nzb-abc123",
+		TrackedDownloadState: "importPending",
+	}
+
 	tests := []struct {
-		name        string
-		path        string
-		wantCmdName string
-		wantCmdPath string
-		errFunc     require.ErrorAssertionFunc
+		name                 string
+		path                 string
+		parseResp            *sonarrlib.ParseOutput
+		queueResp            *sonarrlib.Queue
+		queuePages           []*sonarrlib.Queue
+		queueHTTPStatus      int
+		wantCmdName          string
+		wantCmdPath          string
+		wantDownloadClientID string
+		errFunc              require.ErrorAssertionFunc
 	}{
 		{
-			name:        "sends DownloadedEpisodesScan with the given path",
+			name:                 "pending queue record found: downloadClientId included in command",
+			path:                 "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp:            episodeParseOutput,
+			queueResp:            &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{pendingRecord}},
+			wantCmdName:          "DownloadedEpisodesScan",
+			wantCmdPath:          "/tv/Breaking.Bad.S01E01.mkv",
+			wantDownloadClientID: "nzb-abc123",
+		},
+		{
+			name:        "episode unrecognized: command sent without downloadClientId",
 			path:        "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp:   &sonarrlib.ParseOutput{},
+			queueResp:   &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{pendingRecord}},
 			wantCmdName: "DownloadedEpisodesScan",
 			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
+		},
+		{
+			name:        "no matching queue record: command sent without downloadClientId",
+			path:        "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp:   episodeParseOutput,
+			queueResp:   &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}},
+			wantCmdName: "DownloadedEpisodesScan",
+			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
+		},
+		{
+			// Sonarr already imported the episode on its own before we scanned.
+			name:      "queue record already imported: command sent without downloadClientId",
+			path:      "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp: episodeParseOutput,
+			queueResp: &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{
+				{ID: 1, EpisodeID: 200, DownloadID: "nzb-abc123", TrackedDownloadState: "imported"},
+			}},
+			wantCmdName: "DownloadedEpisodesScan",
+			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
+		},
+		{
+			// Queue API unreachable: fall back gracefully rather than blocking the import.
+			name:            "queue API error: command sent without downloadClientId",
+			path:            "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp:       episodeParseOutput,
+			queueHTTPStatus: http.StatusInternalServerError,
+			wantCmdName:     "DownloadedEpisodesScan",
+			wantCmdPath:     "/tv/Breaking.Bad.S01E01.mkv",
+		},
+		{
+			// Match found on second page: verifies pagination terminates early on hit.
+			name:      "match on second queue page: downloadClientId from second page included",
+			path:      "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp: episodeParseOutput,
+			queuePages: []*sonarrlib.Queue{
+				{
+					TotalRecords: 2,
+					Records: []*sonarrlib.QueueRecord{
+						{ID: 99, EpisodeID: 999, DownloadID: "nzb-other", TrackedDownloadState: "importPending"},
+					},
+				},
+				{
+					TotalRecords: 2,
+					Records:      []*sonarrlib.QueueRecord{pendingRecord},
+				},
+			},
+			wantCmdName:          "DownloadedEpisodesScan",
+			wantCmdPath:          "/tv/Breaking.Bad.S01E01.mkv",
+			wantDownloadClientID: "nzb-abc123",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotCmd struct {
-				Name string `json:"name"`
-				Path string `json:"path"`
+				Name             string `json:"name"`
+				Path             string `json:"path"`
+				DownloadClientId string `json:"downloadClientId"`
 			}
 
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseResp:       tc.parseResp,
+				queueResp:       tc.queueResp,
+				queuePages:      tc.queuePages,
+				queueHTTPStatus: tc.queueHTTPStatus,
 				onCommand: func(t *testing.T, r *http.Request) {
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
 				},
@@ -122,6 +251,7 @@ func TestImportByFilePath(t *testing.T) {
 			if err == nil {
 				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
 				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
+				assert.Equal(t, tc.wantDownloadClientID, gotCmd.DownloadClientId)
 			}
 		})
 	}
