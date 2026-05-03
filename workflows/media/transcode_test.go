@@ -834,6 +834,65 @@ func TestRunTranscode_Heartbeat_InvokedOnProgressTicks(t *testing.T) {
 		"expected multiple heartbeat invocations across real progress ticks plus the final 100%% tick")
 }
 
+func TestRunTranscode_Heartbeat_FiresOnCopyRemuxPathWithoutProgressPackets(t *testing.T) {
+	withRecordingLogger(t)
+
+	var (
+		mu    sync.Mutex
+		ticks []ffmpeg.Progress
+	)
+
+	heartbeat := func(p ffmpeg.Progress) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		ticks = append(ticks, p)
+	}
+
+	// H.264 in MKV → CodecCopy: ffmpeg emits no progress packets.
+	// Heartbeats must still fire from the goroutine's ticker so that a
+	// healthy long-running copy does not silently exceed HeartbeatTimeout.
+	copyProbe := ProbeOutput{
+		IsValidMedia: true,
+		VideoCodec:   "h264",
+		Format:       "matroska,webm",
+		AudioStreams: []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+	}
+
+	// Small interval so the ticker is guaranteed to fire at least once
+	// during the copy. The Temporal SDK throttles heartbeats internally,
+	// so calling the callback frequently is harmless.
+	_, err := RunTranscode(t.Context(), copyTestVideo(t), copyProbe, nil, t.TempDir(), "", "", 0, time.Millisecond, heartbeat, nil)
+	require.NoError(t, err)
+
+	// The final 100% tick is dispatched by the goroutine on `done`, which
+	// runs after RunTranscode returns. Poll for it.
+	assert.Eventually(t,
+		func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if len(ticks) == 0 {
+				return false
+			}
+
+			return ticks[len(ticks)-1].PercentComplete >= 100
+		},
+		time.Second, time.Millisecond,
+		"expected a final 100%% heartbeat on the copy/remux path",
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Without the ticker-driven heartbeat, the only invocation on the
+	// copy/remux path would be the final synthetic 100% tick. Requiring
+	// more than one invocation proves the ticker also fires heartbeats
+	// while the copy is in flight.
+	assert.Greater(t, len(ticks), 1,
+		"expected the goroutine's ticker to record heartbeats even when ffmpeg emits no progress packets (copy/remux path)")
+}
+
 func TestRunTranscode_Heartbeat_NotInvokedWhenProgressDisabled(t *testing.T) {
 	withRecordingLogger(t)
 
