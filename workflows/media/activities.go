@@ -13,7 +13,6 @@ import (
 	"go.temporal.io/sdk/client"
 	contribtally "go.temporal.io/sdk/contrib/tally"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -53,16 +52,46 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 	}, nil
 }
 
-// Register attaches the workflow function and the six activities to the given
-// Temporal worker.
-func (a *Activities) Register(w worker.Worker) {
-	w.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
-	w.RegisterActivityWithOptions(a.Probe, activity.RegisterOptions{Name: ProbeActivityName})
-	w.RegisterActivityWithOptions(a.DetectCrop, activity.RegisterOptions{Name: DetectCropActivityName})
-	w.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
-	w.RegisterActivityWithOptions(a.Notify, activity.RegisterOptions{Name: NotifyActivityName})
-	w.RegisterActivityWithOptions(a.Cleanup, activity.RegisterOptions{Name: CleanupActivityName})
-	w.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
+// Registrar is the subset of registration methods that both worker.Worker and
+// *testsuite.TestWorkflowEnvironment expose. Accepting this interface lets the
+// production worker and the workflow test environment share one registration
+// list, so adding or renaming an activity only requires editing Register.
+type Registrar interface {
+	RegisterWorkflowWithOptions(w any, options workflow.RegisterOptions)
+	RegisterActivityWithOptions(a any, options activity.RegisterOptions)
+}
+
+// Register attaches the workflow function and the activities to the given
+// Temporal registrar (a worker.Worker in production, a TestWorkflowEnvironment
+// in tests). The slice literals below are the single source of truth for the
+// (name, function) pairs the worker and tests register.
+func (a *Activities) Register(r Registrar) {
+	workflows := []struct {
+		name string
+		fn   any
+	}{
+		{MediaWorkflowName, a.MediaWorkflow},
+	}
+
+	activities := []struct {
+		name string
+		fn   any
+	}{
+		{ProbeActivityName, a.Probe},
+		{DetectCropActivityName, a.DetectCrop},
+		{TranscodeActivityName, a.Transcode},
+		{NotifyActivityName, a.Notify},
+		{CleanupActivityName, a.Cleanup},
+		{NotifyFailureActivityName, a.NotifyFailure},
+	}
+
+	for _, wf := range workflows {
+		r.RegisterWorkflowWithOptions(wf.fn, workflow.RegisterOptions{Name: wf.name})
+	}
+
+	for _, act := range activities {
+		r.RegisterActivityWithOptions(act.fn, activity.RegisterOptions{Name: act.name})
+	}
 }
 
 // Probe is the Temporal activity that wraps RunProbe. Per-run metrics
