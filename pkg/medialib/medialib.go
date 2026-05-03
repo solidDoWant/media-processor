@@ -44,22 +44,27 @@ type MediaInfo interface {
 var _ MediaInfo = (*Movie)(nil)
 var _ MediaInfo = (*Episode)(nil)
 
-// Movie represents a movie entry in a movie library service.
+// Movie represents a movie entry in a movie library service. Construct with NewMovie.
 type Movie struct {
-	// ID is the internal database ID assigned by the backing movie library service.
-	ID    int64
-	Title string
-	Year  int
+	id    int64
+	title string
+	year  int
+}
+
+// NewMovie returns a Movie populated with the supplied metadata.
+// id is the internal database ID assigned by the backing movie library service.
+func NewMovie(id int64, title string, year int) *Movie {
+	return &Movie{id: id, title: title, year: year}
 }
 
 // GetID returns the movie's ID.
-func (m *Movie) GetID() int64 { return m.ID }
+func (m *Movie) GetID() int64 { return m.id }
 
 // GetTitle returns the movie's title.
-func (m *Movie) GetTitle() string { return m.Title }
+func (m *Movie) GetTitle() string { return m.title }
 
 // GetYear returns the movie's release year.
-func (m *Movie) GetYear() int { return m.Year }
+func (m *Movie) GetYear() int { return m.year }
 
 // GetSeriesTitle returns "" for movies.
 func (m *Movie) GetSeriesTitle() string { return "" }
@@ -70,48 +75,54 @@ func (m *Movie) GetSeasonNumber() int { return 0 }
 // GetEpisodeNumber returns 0 for movies.
 func (m *Movie) GetEpisodeNumber() int { return 0 }
 
-// Episode represents an episode entry in a TV library service.
+// Episode represents an episode entry in a TV library service. Construct with NewEpisode.
 type Episode struct {
-	// ID is the internal database ID assigned by the backing TV library service.
-	ID int64
-	// SeriesID is the internal database ID of the series this episode belongs to.
-	// Used internally by the Sonarr client for series-level refresh.
-	SeriesID int64
-	Title    string
-	// Year is the series premiere year, sourced from the library service's series metadata.
-	Year          int
-	SeriesTitle   string
-	SeasonNumber  int
-	EpisodeNumber int
+	id            int64
+	seriesID      int64
+	title         string
+	year          int
+	seriesTitle   string
+	seasonNumber  int
+	episodeNumber int
 }
+
+// NewEpisode returns an Episode populated with the supplied metadata.
+// id and seriesID are the internal database IDs assigned by the backing TV
+// library service. year is the series premiere year.
+func NewEpisode(id, seriesID int64, title, seriesTitle string, year, seasonNumber, episodeNumber int) *Episode {
+	return &Episode{
+		id:            id,
+		seriesID:      seriesID,
+		title:         title,
+		year:          year,
+		seriesTitle:   seriesTitle,
+		seasonNumber:  seasonNumber,
+		episodeNumber: episodeNumber,
+	}
+}
+
+// SeriesID returns the internal database ID of the series this episode belongs
+// to. Used by the Sonarr client for series-level lookups (e.g. fetching the
+// series poster).
+func (e *Episode) SeriesID() int64 { return e.seriesID }
 
 // GetID returns the episode's ID.
-func (e *Episode) GetID() int64 { return e.ID }
+func (e *Episode) GetID() int64 { return e.id }
 
 // GetTitle returns the episode's title.
-func (e *Episode) GetTitle() string { return e.Title }
+func (e *Episode) GetTitle() string { return e.title }
 
 // GetYear returns the series premiere year.
-func (e *Episode) GetYear() int { return e.Year }
+func (e *Episode) GetYear() int { return e.year }
 
 // GetSeriesTitle returns the episode's series title.
-func (e *Episode) GetSeriesTitle() string { return e.SeriesTitle }
+func (e *Episode) GetSeriesTitle() string { return e.seriesTitle }
 
 // GetSeasonNumber returns the episode's season number.
-func (e *Episode) GetSeasonNumber() int { return e.SeasonNumber }
+func (e *Episode) GetSeasonNumber() int { return e.seasonNumber }
 
 // GetEpisodeNumber returns the episode's episode number.
-func (e *Episode) GetEpisodeNumber() int { return e.EpisodeNumber }
-
-// MovieLibrary provides operations for movie media items.
-type MovieLibrary interface {
-	GetMovieByFilePath(ctx context.Context, path string) (Movie, error)
-}
-
-// EpisodeLibrary provides operations for episode media items.
-type EpisodeLibrary interface {
-	GetEpisodeByFilePath(ctx context.Context, path string) (Episode, error)
-}
+func (e *Episode) GetEpisodeNumber() int { return e.episodeNumber }
 
 // ArrLibrary is a unified interface for refreshing a media item in the backing
 // library service (Radarr for movies, Sonarr for shows). It abstracts the

@@ -91,7 +91,6 @@ func TestTranscode_QSVPerformanceMatchesFFmpegCLI(t *testing.T) {
 	ourStart := time.Now()
 	err = ffmpeg.NewTranscode(testVideoPath, ourOut).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		HardwareAccel(ffmpeg.HWAccelQSV).
 		Build().

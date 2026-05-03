@@ -78,71 +78,6 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 	return httptest.NewServer(mux)
 }
 
-func TestGetEpisodeByFilePath(t *testing.T) {
-	knownParseOutput := &sonarrlib.ParseOutput{
-		Title: "Breaking Bad",
-		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
-			SeriesTitle:    "Breaking Bad",
-			SeasonNumber:   1,
-			EpisodeNumbers: []int{1},
-		},
-		Episodes: []*sonarrlib.Episode{
-			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
-		},
-	}
-
-	tests := []struct {
-		name      string
-		path      string
-		parseResp *sonarrlib.ParseOutput
-		expected  medialib.Episode
-		errFunc   require.ErrorAssertionFunc
-	}{
-		{
-			name:      "known path returns episode",
-			path:      "/tv/Breaking.Bad.S01E01.mkv",
-			parseResp: knownParseOutput,
-			expected: medialib.Episode{
-				ID:            200,
-				SeriesID:      10,
-				SeriesTitle:   "Breaking Bad",
-				SeasonNumber:  1,
-				EpisodeNumber: 1,
-			},
-		},
-		{
-			name:      "unrecognized path returns ErrNotFound",
-			path:      "/tv/Unknown.S01E01.mkv",
-			parseResp: &sonarrlib.ParseOutput{},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newSonarrTestServer(t, tc.parseResp)
-			t.Cleanup(srv.Close)
-
-			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
-
-			episode, err := client.GetEpisodeByFilePath(t.Context(), tc.path)
-
-			errFunc := tc.errFunc
-			if errFunc == nil {
-				errFunc = require.NoError
-			}
-
-			errFunc(t, err)
-
-			if err == nil {
-				assert.Equal(t, tc.expected, episode)
-			}
-		})
-	}
-}
-
 func TestImportByFilePath(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -192,7 +127,7 @@ func TestImportByFilePath(t *testing.T) {
 	}
 }
 
-func TestGetEpisodeByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
+func TestGetInfo_UsesFileStemAsTitleParam(t *testing.T) {
 	var gotTitle, gotPath string
 
 	knownParseOutput := &sonarrlib.ParseOutput{
@@ -218,17 +153,17 @@ func TestGetEpisodeByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
 
 	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	_, err := client.GetEpisodeByFilePath(t.Context(), "/downloads/Colonel.Bleep.S01E01.1080p.WEB-DL.mp4")
+	_, err := client.GetInfo(t.Context(), "/downloads/Colonel.Bleep.S01E01.1080p.WEB-DL.mp4")
 	require.NoError(t, err)
 
 	assert.Equal(t, "Colonel.Bleep.S01E01.1080p.WEB-DL", gotTitle, "title param should be filename stem")
 	assert.Empty(t, gotPath, "path param must not be sent")
 }
 
-func TestGetEpisodeByFilePath_UnreachableURL(t *testing.T) {
+func TestGetInfo_UnreachableURL(t *testing.T) {
 	client := sonarr.New(sonarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	_, err := client.GetEpisodeByFilePath(t.Context(), "/any/path.mkv")
+	_, err := client.GetInfo(t.Context(), "/any/path.mkv")
 	require.Error(t, err)
 }
 
@@ -435,12 +370,12 @@ func TestGetPosterImage_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestGetEpisodeByFilePath_ErrNotFoundSentinel(t *testing.T) {
+func TestGetInfo_ErrNotFoundSentinel(t *testing.T) {
 	srv := newSonarrTestServer(t, &sonarrlib.ParseOutput{})
 	t.Cleanup(srv.Close)
 
 	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	_, err := client.GetEpisodeByFilePath(t.Context(), "/no/such/file.mkv")
+	_, err := client.GetInfo(t.Context(), "/no/such/file.mkv")
 	require.True(t, errors.Is(err, medialib.ErrNotFound), "expected ErrNotFound, got %v", err)
 }
