@@ -12,12 +12,12 @@ import (
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
-// TestRun_MissingTaskQueue verifies that the worker exits with a descriptive
-// error when TEMPORAL_TASK_QUEUE is not set.
-func TestRun_MissingTaskQueue(t *testing.T) {
+// TestLoadConfigMissingTaskQueue verifies that loadConfig surfaces a
+// descriptive error when TEMPORAL_TASK_QUEUE is unset.
+func TestLoadConfigMissingTaskQueue(t *testing.T) {
 	t.Setenv("TEMPORAL_TASK_QUEUE", "")
 
-	err := run(t.Context(), nil)
+	_, err := loadConfig()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TEMPORAL_TASK_QUEUE")
 }
