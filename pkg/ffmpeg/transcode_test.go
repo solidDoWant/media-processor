@@ -181,7 +181,7 @@ func TestTranscode_HWAccelAuto(t *testing.T) {
 // received on the provided channel.
 func TestTranscode_ProgressChannel(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
-	progressCh := make(chan ffmpeg.Progress, 256)
+	progressCh := make(chan ffmpeg.Progress, 4096)
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
@@ -203,6 +203,23 @@ func TestTranscode_ProgressChannel(t *testing.T) {
 		assert.GreaterOrEqual(t, p.FramesProcessed, int64(1))
 		assert.GreaterOrEqual(t, p.PercentComplete, float64(0))
 		assert.LessOrEqual(t, p.PercentComplete, float64(100))
+	}
+
+	// After progress has reached a substantial fraction of the file, no
+	// subsequent update should report 0% — that indicates the sender read
+	// pts from a packet whose data had already been consumed (e.g. by
+	// av_interleaved_write_frame, which takes ownership of the packet).
+	maxSeen := 0.0
+	for _, p := range updates {
+		if p.PercentComplete > maxSeen {
+			maxSeen = p.PercentComplete
+		}
+
+		if maxSeen >= 50 {
+			assert.NotEqual(t, float64(0), p.PercentComplete,
+				"progress dropped back to 0%% after reaching %.2f%% (frames=%d) — likely reading pts from a consumed packet",
+				maxSeen, p.FramesProcessed)
+		}
 	}
 }
 
