@@ -9,26 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
-	"go.temporal.io/sdk/workflow"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
-
-// registerWorkflow wires the workflow + six activities into the test
-// environment. Mirrors Activities.Register, which targets a real worker.Worker.
-func registerWorkflow(env *testsuite.TestWorkflowEnvironment, a *Activities) {
-	env.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
-	env.RegisterActivityWithOptions(a.Probe, activity.RegisterOptions{Name: ProbeActivityName})
-	env.RegisterActivityWithOptions(a.DetectCrop, activity.RegisterOptions{Name: DetectCropActivityName})
-	env.RegisterActivityWithOptions(a.Transcode, activity.RegisterOptions{Name: TranscodeActivityName})
-	env.RegisterActivityWithOptions(a.Notify, activity.RegisterOptions{Name: NotifyActivityName})
-	env.RegisterActivityWithOptions(a.Cleanup, activity.RegisterOptions{Name: CleanupActivityName})
-	env.RegisterActivityWithOptions(a.NotifyFailure, activity.RegisterOptions{Name: NotifyFailureActivityName})
-}
 
 func newWorkflowActivities(t *testing.T) *Activities {
 	t.Helper()
@@ -47,7 +33,7 @@ func newWorkflowActivities(t *testing.T) *Activities {
 func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	cropOut := DetectCropOutput{}
@@ -69,7 +55,7 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 		Return(ProbeOutput{IsValidMedia: false}, nil).Once()
@@ -89,7 +75,7 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 func TestMediaWorkflow_TranscodeFailureFiresFailureWebhook(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
@@ -117,7 +103,7 @@ func TestMediaWorkflow_TranscodeFailureFiresFailureWebhook(t *testing.T) {
 func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 		Return(ProbeOutput{}, errors.New("probe failed")).Once()
@@ -143,7 +129,7 @@ func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
@@ -188,7 +174,7 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 func TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
-	registerWorkflow(env, newWorkflowActivities(t))
+	newWorkflowActivities(t).Register(env)
 
 	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
@@ -264,7 +250,7 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			suite := &testsuite.WorkflowTestSuite{}
 			env := suite.NewTestWorkflowEnvironment()
-			registerWorkflow(env, newWorkflowActivities(t))
+			newWorkflowActivities(t).Register(env)
 
 			attempts := 0
 			test.setupMocks(env, &attempts)
