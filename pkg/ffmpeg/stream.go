@@ -66,13 +66,18 @@ func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) err
 func (css *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
 
 func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
-	if err := remuxPacket(packet, css.inStream, css.outStream, outputFmt); err != nil {
-		return err
-	}
+	packet.RescaleTs(css.inStream.TimeBase(), css.outStream.TimeBase())
+	packet.SetStreamIndex(css.outStream.Index())
 
 	css.frames++
+	// sendProgress must read packet.Pts() before WriteInterleavedFrame, which
+	// takes ownership of the packet and zeroes its fields.
 	if progressCh != nil {
 		sendProgress(progressCh, css.frames, packet, css.outStream, totalDuration)
+	}
+
+	if err := outputFmt.WriteInterleavedFrame(packet); err != nil {
+		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", css.outStream.Index(), err)
 	}
 
 	return nil
@@ -111,18 +116,6 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 
 		encPkt.Unref()
 	}
-}
-
-// remuxPacket copies a packet directly to the output without decoding/encoding.
-func remuxPacket(packet *astiav.Packet, inStream, outStream *astiav.Stream, outputFmt *astiav.FormatContext) error {
-	packet.RescaleTs(inStream.TimeBase(), outStream.TimeBase())
-	packet.SetStreamIndex(outStream.Index())
-
-	if err := outputFmt.WriteInterleavedFrame(packet); err != nil {
-		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", outStream.Index(), err)
-	}
-
-	return nil
 }
 
 // sendProgress emits a non-blocking progress update on ch.
