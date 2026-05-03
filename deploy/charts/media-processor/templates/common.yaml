@@ -360,8 +360,13 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   "address"   $temporalAddress
   "namespace" $temporalNamespace
 -}}
+{{/* The [tls] table is always emitted. When enabled is false we set disabled=true
+   explicitly, because the SDK auto-enables TLS when an API key is set and the TLS
+   config is absent (envconfig client_config.go: `else if c.APIKey != "" { TLS = &tls.Config{} }`).
+   Without the explicit disabled=true, `tls.enabled: false` + apiKey would silently
+   speak TLS to a plaintext frontend. */}}
+{{- $tls := dict -}}
 {{- if $temporalTLSEnabled -}}
-  {{- $tls := dict -}}
   {{- if .Values.config.temporal.tls.serverName -}}
     {{- $_ := set $tls "serverName" .Values.config.temporal.tls.serverName -}}
   {{- end -}}
@@ -377,8 +382,10 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- if hasKey $tlsResolvedPaths "caCert" -}}
     {{- $_ := set $tls "serverCaCertPath" (index $tlsResolvedPaths "caCert") -}}
   {{- end -}}
-  {{- $_ := set $temporalProfile "tls" $tls -}}
+{{- else -}}
+  {{- $_ := set $tls "disabled" true -}}
 {{- end -}}
+{{- $_ := set $temporalProfile "tls" $tls -}}
 
 {{- $snakedProfile := include "media-processor.snakeKeys" $temporalProfile | fromYaml -}}
 

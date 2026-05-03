@@ -33,12 +33,12 @@ config:
       secretKeyRef:
         name: ""
         key: ""
-    # tls configures transport security to the Temporal frontend. When enabled is false, the
-    # entire [tls] table is omitted from temporal.toml — the SDK falls back to plaintext gRPC.
-    # When enabled is true, server-side TLS is on; mTLS and a custom CA are optional. Cert
-    # references point at existing k8s Secrets (e.g. produced by cert-manager); the chart mounts
-    # them read-only and writes the resolved file paths into temporal.toml. References that
-    # share a Secret name share one volume mount.
+    # tls configures transport security to the Temporal frontend. enabled: false uses
+    # plaintext gRPC; this holds even when apiKey is set, so a dev frontend that accepts
+    # a token over plaintext keeps working. enabled: true turns on server-side TLS; mTLS
+    # and a custom CA are optional, configured via the cert references below. Each
+    # reference points at an existing k8s Secret (e.g. one produced by cert-manager).
+    # References that share a Secret name share one volume mount.
     tls:
       enabled: false
       # serverName overrides the SNI / cert-verification hostname (TEMPORAL_TLS_SERVER_NAME).
