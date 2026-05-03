@@ -187,7 +187,7 @@ func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
 	}{
 		{
 			name:  "success movie populates id/title/year and leaves episode keys empty",
-			stub:  &stubLibraryClient{infoResult: &medialib.Movie{ID: 1, Title: "Movie", Year: 2020}},
+			stub:  &stubLibraryClient{infoResult: medialib.NewMovie(1, "Movie", 2020)},
 			input: MediaInput{MediaType: medialib.MovieType, FilePath: "/x"},
 			assert: func(t *testing.T, tags map[string]string) {
 				assert.Equal(t, "1", tags["id"])

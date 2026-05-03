@@ -1,4 +1,4 @@
-// Package radarr provides a Radarr client implementing medialib.MovieLibrary.
+// Package radarr provides a Radarr client implementing medialib.ArrLibrary.
 package radarr
 
 import (
@@ -17,8 +17,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
-// Compile-time assertions that *Client implements medialib.MovieLibrary and medialib.ArrLibrary.
-var _ medialib.MovieLibrary = (*Client)(nil)
+// Compile-time assertion that *Client implements medialib.ArrLibrary.
 var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Radarr client.
@@ -27,7 +26,7 @@ type Config struct {
 	APIKey string
 }
 
-// Client is a Radarr client implementing medialib.MovieLibrary.
+// Client is a Radarr client implementing medialib.ArrLibrary.
 type Client struct {
 	cfg    Config
 	radarr *radarrlib.Radarr
@@ -39,24 +38,20 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, radarr: radarrlib.New(s)}
 }
 
-// GetMovieByFilePath returns the movie identified by parsing the file path.
+// getMovieByFilePath returns the movie identified by parsing the file path.
 // Uses Radarr's parse endpoint, so it works for pre-import files.
 // Returns medialib.ErrNotFound if no movie is identified.
-func (c *Client) GetMovieByFilePath(ctx context.Context, path string) (medialib.Movie, error) {
+func (c *Client) getMovieByFilePath(ctx context.Context, path string) (*medialib.Movie, error) {
 	movie, err := c.parseFilePath(ctx, path)
 	if err != nil {
-		return medialib.Movie{}, fmt.Errorf("parse file path: %w", err)
+		return nil, fmt.Errorf("parse file path: %w", err)
 	}
 
 	if movie == nil {
-		return medialib.Movie{}, medialib.ErrNotFound
+		return nil, medialib.ErrNotFound
 	}
 
-	return medialib.Movie{
-		ID:    movie.ID,
-		Title: movie.Title,
-		Year:  movie.Year,
-	}, nil
+	return medialib.NewMovie(movie.ID, movie.Title, movie.Year), nil
 }
 
 // parseFilePath calls Radarr's /api/v3/parse endpoint to identify a movie
@@ -89,12 +84,12 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 // path cannot be matched to a movie. Returns other errors if the library is
 // unreachable or a Radarr API call fails.
 func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
-	movie, err := c.GetMovieByFilePath(ctx, path)
+	movie, err := c.getMovieByFilePath(ctx, path)
 	if err != nil {
 		return nil, "", fmt.Errorf("get movie for poster: %w", err)
 	}
 
-	full, err := c.radarr.GetMovieByIDContext(ctx, movie.ID)
+	full, err := c.radarr.GetMovieByIDContext(ctx, movie.GetID())
 	if err != nil {
 		return nil, "", fmt.Errorf("get movie details for poster: %w", err)
 	}
@@ -105,12 +100,7 @@ func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, strin
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for
 // the movie at path.
 func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
-	movie, err := c.GetMovieByFilePath(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	return &movie, nil
+	return c.getMovieByFilePath(ctx, path)
 }
 
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedMoviesScan command

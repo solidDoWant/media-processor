@@ -21,41 +21,9 @@ type FailureEvent struct {
 	Err      error
 }
 
-// PayloadFunc builds the HTTP request body for a given failure event.
-// Implementations can return any JSON structure — for example, Discord's
-// {"content": "..."} format.
-type PayloadFunc func(event FailureEvent) ([]byte, error)
-
 // Client sends failure notifications to a webhook endpoint.
 type Client struct {
-	URL          string
-	Timeout      time.Duration // zero → defaultTimeout (10s)
-	BuildPayload PayloadFunc   // nil → DefaultPayload
-}
-
-// defaultPayload is the built-in payload shape described in the issue spec.
-type defaultPayloadShape struct {
-	Workflow string `json:"workflow"`
-	FilePath string `json:"file_path"`
-	Step     string `json:"step"`
-	Error    string `json:"error"`
-}
-
-// DefaultPayload marshals the event into the standard JSON shape:
-//
-//	{"workflow":"...","file_path":"...","step":"...","error":"..."}
-func DefaultPayload(e FailureEvent) ([]byte, error) {
-	errMsg := ""
-	if e.Err != nil {
-		errMsg = e.Err.Error()
-	}
-
-	return json.Marshal(defaultPayloadShape{
-		Workflow: e.Workflow,
-		FilePath: e.FilePath,
-		Step:     e.Step,
-		Error:    errMsg,
-	})
+	URL string
 }
 
 // NotifyFailure sends an HTTP POST to c.URL with the failure event payload.
@@ -67,12 +35,22 @@ func (c *Client) NotifyFailure(ctx context.Context, event FailureEvent) error {
 		return nil
 	}
 
-	buildPayload := c.BuildPayload
-	if buildPayload == nil {
-		buildPayload = DefaultPayload
+	errMsg := ""
+	if event.Err != nil {
+		errMsg = event.Err.Error()
 	}
 
-	body, err := buildPayload(event)
+	body, err := json.Marshal(struct {
+		Workflow string `json:"workflow"`
+		FilePath string `json:"file_path"`
+		Step     string `json:"step"`
+		Error    string `json:"error"`
+	}{
+		Workflow: event.Workflow,
+		FilePath: event.FilePath,
+		Step:     event.Step,
+		Error:    errMsg,
+	})
 	if err != nil {
 		return fmt.Errorf("webhook: build payload: %w", err)
 	}
@@ -84,12 +62,7 @@ func (c *Client) NotifyFailure(ctx context.Context, event FailureEvent) error {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	timeout := c.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-
-	httpClient := &http.Client{Timeout: timeout}
+	httpClient := &http.Client{Timeout: defaultTimeout}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

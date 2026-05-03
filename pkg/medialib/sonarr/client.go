@@ -1,4 +1,4 @@
-// Package sonarr provides a Sonarr client implementing medialib.EpisodeLibrary.
+// Package sonarr provides a Sonarr client implementing medialib.ArrLibrary.
 package sonarr
 
 import (
@@ -16,8 +16,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
-// Compile-time assertions that *Client implements medialib.EpisodeLibrary and medialib.ArrLibrary.
-var _ medialib.EpisodeLibrary = (*Client)(nil)
+// Compile-time assertion that *Client implements medialib.ArrLibrary.
 var _ medialib.ArrLibrary = (*Client)(nil)
 
 // Config holds the configuration for a Sonarr client.
@@ -26,7 +25,7 @@ type Config struct {
 	APIKey string
 }
 
-// Client is a Sonarr client implementing medialib.EpisodeLibrary.
+// Client is a Sonarr client implementing medialib.ArrLibrary.
 type Client struct {
 	cfg    Config
 	sonarr *sonarrlib.Sonarr
@@ -38,10 +37,10 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, sonarr: sonarrlib.New(s)}
 }
 
-// GetEpisodeByFilePath returns the episode identified by parsing the file path.
+// getEpisodeByFilePath returns the episode identified by parsing the file path.
 // Uses Sonarr's parse endpoint, so it works for pre-import files.
 // Returns medialib.ErrNotFound if no episode is identified.
-func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (medialib.Episode, error) {
+func (c *Client) getEpisodeByFilePath(ctx context.Context, path string) (*medialib.Episode, error) {
 	// Use the title parameter (filename stem) rather than path because Sonarr's
 	// parse endpoint matches path against library paths only, returning 204 No
 	// Content for download paths that haven't been imported yet.
@@ -49,11 +48,11 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 
 	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Title: strings.TrimSuffix(base, filepath.Ext(base))})
 	if err != nil {
-		return medialib.Episode{}, fmt.Errorf("parse file path: %w", err)
+		return nil, fmt.Errorf("parse file path: %w", err)
 	}
 
 	if parsed == nil || parsed.ParsedEpisodeInfo == nil || len(parsed.Episodes) == 0 {
-		return medialib.Episode{}, medialib.ErrNotFound
+		return nil, medialib.ErrNotFound
 	}
 
 	ep := parsed.Episodes[0]
@@ -63,15 +62,7 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 		year = parsed.ParsedEpisodeInfo.SeriesTitleInfo.Year
 	}
 
-	return medialib.Episode{
-		ID:            ep.ID,
-		SeriesID:      ep.SeriesID,
-		Title:         ep.Title,
-		Year:          year,
-		SeriesTitle:   parsed.Title,
-		SeasonNumber:  ep.SeasonNumber,
-		EpisodeNumber: ep.EpisodeNumber,
-	}, nil
+	return medialib.NewEpisode(ep.ID, ep.SeriesID, ep.Title, parsed.Title, year, ep.SeasonNumber, ep.EpisodeNumber), nil
 }
 
 // GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
@@ -80,12 +71,12 @@ func (c *Client) GetEpisodeByFilePath(ctx context.Context, path string) (mediali
 // Returns medialib.ErrNotFound if the path cannot be matched to an episode.
 // Returns other errors if the library is unreachable or a Sonarr API call fails.
 func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
-	episode, err := c.GetEpisodeByFilePath(ctx, path)
+	episode, err := c.getEpisodeByFilePath(ctx, path)
 	if err != nil {
 		return nil, "", fmt.Errorf("get episode for poster: %w", err)
 	}
 
-	series, err := c.sonarr.GetSeriesByIDContext(ctx, episode.SeriesID)
+	series, err := c.sonarr.GetSeriesByIDContext(ctx, episode.SeriesID())
 	if err != nil {
 		return nil, "", fmt.Errorf("get series details for poster: %w", err)
 	}
@@ -96,12 +87,7 @@ func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, strin
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for
 // the episode at path.
 func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
-	episode, err := c.GetEpisodeByFilePath(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	return &episode, nil
+	return c.getEpisodeByFilePath(ctx, path)
 }
 
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command

@@ -51,12 +51,6 @@ func (b *TranscodeBuilder) ToVideoCodec(c Codec) *TranscodeBuilder {
 	return b
 }
 
-// ToAudioCodec sets the output audio codec.
-func (b *TranscodeBuilder) ToAudioCodec(c Codec) *TranscodeBuilder {
-	b.audioCodec = c
-	return b
-}
-
 // ToContainer sets the output container format. If not called, the container
 // is inferred from the output file extension.
 func (b *TranscodeBuilder) ToContainer(c Container) *TranscodeBuilder {
@@ -83,15 +77,6 @@ func (b *TranscodeBuilder) WithHardwareDevice(path string) *TranscodeBuilder {
 // Updates are sent non-blocking; a full channel silently drops updates.
 func (b *TranscodeBuilder) WithProgressChan(ch chan<- Progress) *TranscodeBuilder {
 	b.progressCh = ch
-	return b
-}
-
-// WithStartHook sets a function that is called once the transcoder has
-// finished all setup and is about to enter the main packet read loop.
-// Intended for testing (e.g. triggering context cancellation at a
-// deterministic point) and light instrumentation.
-func (b *TranscodeBuilder) WithStartHook(fn func()) *TranscodeBuilder {
-	b.startHook = fn
 	return b
 }
 
@@ -426,7 +411,7 @@ func (t *Transcoder) buildDownmixState(inputFmt *astiav.FormatContext, sourceIdx
 		state := &audioStreamState{
 			copyStreamState: copyStreamState{inStream: inStream},
 			encoder: audioEncoderState{
-				codecID:             CodecAC3,
+				codecID:             astiav.CodecIDAc3,
 				targetChannelLayout: &layout2Point1,
 			},
 		}

@@ -103,7 +103,6 @@ func BenchmarkTranscode_H265_MKV(b *testing.B) {
 
 		err := ffmpeg.NewTranscode(benchVideoPath, output).
 			ToVideoCodec(ffmpeg.CodecH265).
-			ToAudioCodec(ffmpeg.CodecCopy).
 			ToContainer(ffmpeg.ContainerMKV).
 			HardwareAccel(hw).
 			Build().

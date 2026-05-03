@@ -84,63 +84,6 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 	return httptest.NewServer(mux)
 }
 
-func TestGetMovieByFilePath(t *testing.T) {
-	knownMovie := &radarrlib.Movie{
-		ID:    42,
-		Title: "The Matrix",
-		Year:  1999,
-	}
-
-	tests := []struct {
-		name      string
-		path      string
-		parseResp *parseResponse
-		expected  medialib.Movie
-		errFunc   require.ErrorAssertionFunc
-	}{
-		{
-			name:      "known path returns movie",
-			path:      "/movies/The.Matrix.1999.mkv",
-			parseResp: &parseResponse{Movie: knownMovie},
-			expected: medialib.Movie{
-				ID:    42,
-				Title: "The Matrix",
-				Year:  1999,
-			},
-		},
-		{
-			name:      "unknown path returns ErrNotFound",
-			path:      "/movies/Unknown.mkv",
-			parseResp: &parseResponse{Movie: nil},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.ErrorIs(t, err, medialib.ErrNotFound, msgAndArgs...)
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newTestServer(t, tc.parseResp)
-			t.Cleanup(srv.Close)
-
-			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
-
-			movie, err := client.GetMovieByFilePath(t.Context(), tc.path)
-
-			errFunc := tc.errFunc
-			if errFunc == nil {
-				errFunc = require.NoError
-			}
-
-			errFunc(t, err)
-
-			if err == nil {
-				assert.Equal(t, tc.expected, movie)
-			}
-		})
-	}
-}
-
 func TestImportByFilePath(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -190,7 +133,7 @@ func TestImportByFilePath(t *testing.T) {
 	}
 }
 
-func TestGetMovieByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
+func TestGetInfo_UsesFileStemAsTitleParam(t *testing.T) {
 	var gotTitle, gotPath string
 
 	knownMovie := &radarrlib.Movie{ID: 1, Title: "Big Buck Bunny", Year: 2008}
@@ -206,17 +149,17 @@ func TestGetMovieByFilePath_UsesFileStemAsTitleParam(t *testing.T) {
 
 	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	_, err := client.GetMovieByFilePath(t.Context(), "/downloads/Big.Buck.Bunny.2008.1080p.WEB-DL.mp4")
+	_, err := client.GetInfo(t.Context(), "/downloads/Big.Buck.Bunny.2008.1080p.WEB-DL.mp4")
 	require.NoError(t, err)
 
 	assert.Equal(t, "Big.Buck.Bunny.2008.1080p.WEB-DL", gotTitle, "title param should be filename stem")
 	assert.Empty(t, gotPath, "path param must not be sent")
 }
 
-func TestGetMovieByFilePath_UnreachableURL(t *testing.T) {
+func TestGetInfo_UnreachableURL(t *testing.T) {
 	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	_, err := client.GetMovieByFilePath(t.Context(), "/any/path.mkv")
+	_, err := client.GetInfo(t.Context(), "/any/path.mkv")
 	require.Error(t, err)
 }
 
@@ -392,12 +335,12 @@ func TestGetPosterImage_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestGetMovieByFilePath_ErrNotFoundSentinel(t *testing.T) {
+func TestGetInfo_ErrNotFoundSentinel(t *testing.T) {
 	srv := newTestServer(t, &parseResponse{Movie: nil})
 	t.Cleanup(srv.Close)
 
 	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
-	_, err := client.GetMovieByFilePath(t.Context(), "/no/such/file.mkv")
+	_, err := client.GetInfo(t.Context(), "/no/such/file.mkv")
 	require.True(t, errors.Is(err, medialib.ErrNotFound), "expected ErrNotFound, got %v", err)
 }

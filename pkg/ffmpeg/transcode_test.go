@@ -50,7 +50,6 @@ func TestTranscode_H265_MKV(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().
 		Run(t.Context())
@@ -84,7 +83,6 @@ func TestWithHardwareDevice_EmptyString(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		WithHardwareDevice("").
 		Build().
@@ -157,7 +155,6 @@ func TestTranscode_HWAccelAuto(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		HardwareAccel(ffmpeg.HWAccelAuto).
 		Build().
@@ -188,7 +185,6 @@ func TestTranscode_ProgressChannel(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		WithProgressChan(progressCh).
 		Build().
@@ -219,7 +215,6 @@ func TestTranscode_CancelledContext(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().
 		Run(ctx)
@@ -240,7 +235,6 @@ func TestTranscode_CancelDuringRun(t *testing.T) {
 	go func() {
 		done <- ffmpeg.NewTranscode(testVideoPath, output).
 			ToVideoCodec(ffmpeg.CodecH265).
-			ToAudioCodec(ffmpeg.CodecCopy).
 			ToContainer(ffmpeg.ContainerMKV).
 			WithStartHook(cancel).
 			Build().
@@ -691,7 +685,6 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 
 	err := ffmpeg.NewTranscode(testVideoPath, output).
 		ToVideoCodec(ffmpeg.CodecH265).
-		ToAudioCodec(ffmpeg.CodecCopy).
 		ToContainer(ffmpeg.ContainerMKV).
 		Build().
 		Run(t.Context())
@@ -793,20 +786,20 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 	}
 }
 
-// TestDetectHardwareEncoders_ValidResult verifies that DetectHardwareEncoders
-// returns only valid HWAccel constants for each supported codec. The test is
-// self-adapting: it passes whether or not hardware is present.
-func TestDetectHardwareEncoders_ValidResult(t *testing.T) {
+// TestGetHardwareEncoder_ValidResult verifies that GetHardwareEncoder returns
+// only valid HWAccel constants for each supported codec. The test is
+// self-adapting: it passes whether or not hardware is present (HWAccelNone is
+// also a valid result).
+func TestGetHardwareEncoder_ValidResult(t *testing.T) {
 	validValues := []ffmpeg.HWAccel{
+		ffmpeg.HWAccelNone,
 		ffmpeg.HWAccelNVENC,
 		ffmpeg.HWAccelVAAPI,
 		ffmpeg.HWAccelQSV,
 	}
 
-	for _, codec := range []ffmpeg.Codec{ffmpeg.CodecH264, ffmpeg.CodecH265} {
-		accs := ffmpeg.DetectHardwareEncoders(codec)
-		for _, hw := range accs {
-			assert.Contains(t, validValues, hw, "DetectHardwareEncoders(%v) returned invalid HWAccel %v", codec, hw)
-		}
+	for _, codec := range []ffmpeg.Codec{astiav.CodecIDH264, ffmpeg.CodecH265} {
+		hw := ffmpeg.GetHardwareEncoder(codec, ffmpeg.HWAccelAuto)
+		assert.Contains(t, validValues, hw, "GetHardwareEncoder(%v, HWAccelAuto) returned invalid HWAccel %v", codec, hw)
 	}
 }
