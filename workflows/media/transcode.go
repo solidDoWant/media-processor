@@ -170,12 +170,18 @@ func codecName(c ffmpeg.Codec) string {
 // outside 1–51 are silently ignored and the encoder default is used.
 // progressLogInterval controls how often a progress log line is emitted during
 // transcoding. Zero disables progress logging.
+// heartbeat, when non-nil, is invoked from the progress-consumer goroutine on
+// every FFmpeg progress tick. The activity wrapper supplies a callback that
+// forwards to activity.RecordHeartbeat so a stalled worker is detected via the
+// configured Temporal HeartbeatTimeout. Tests pass nil. heartbeat is only
+// invoked when progressLogInterval &gt; 0, since the progress goroutine that
+// drives it is gated on that interval.
 // library is the arr library used to fetch poster artwork. When nil, no fetch
 // is attempted and transcoding proceeds without an embedded attachment, and
 // ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
 // embeddable image, transcoding proceeds without an embedded attachment and
 // ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, progressLogInterval time.Duration, library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, progressLogInterval time.Duration, heartbeat func(ffmpeg.Progress), library medialib.ArrLibrary) (TranscodeOutput, error) {
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)
@@ -396,6 +402,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 
 					latest = p
 					hasUpdate = true
+
+					if heartbeat != nil {
+						heartbeat(p)
+					}
 				case <-ticker.C:
 					if hasUpdate {
 						logProgress()
@@ -405,6 +415,10 @@ func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropP
 						latest.PercentComplete = 100
 
 						logProgress()
+
+						if heartbeat != nil {
+							heartbeat(latest)
+						}
 					}
 
 					return
