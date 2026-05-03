@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -113,6 +115,80 @@ func TestWorkerStopTimeoutFallsBackToTranscodeTimeout(t *testing.T) {
 	got, err = parseTimeout("WORKER_STOP_TIMEOUT", overriddenTranscodeTimeout)
 	require.NoError(t, err)
 	assert.Equal(t, overriddenTranscodeTimeout, got)
+}
+
+func TestValidateHardwareDevicePath(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupPath     func(t *testing.T) string
+		errSubstrings []string
+		errFunc       require.ErrorAssertionFunc
+	}{
+		{
+			name:      "empty path skips check",
+			setupPath: func(*testing.T) string { return "" },
+		},
+		{
+			name:      "cuda ordinal zero is accepted without stat",
+			setupPath: func(*testing.T) string { return "0" },
+		},
+		{
+			name:      "cuda ordinal nonzero is accepted without stat",
+			setupPath: func(*testing.T) string { return "1" },
+		},
+		{
+			name: "missing path errors and names the path",
+			setupPath: func(t *testing.T) string {
+				return filepath.Join(t.TempDir(), "renderD128")
+			},
+			errSubstrings: []string{"MEDIA_HARDWARE_DEVICE_PATH", "renderD128"},
+			errFunc:       require.Error,
+		},
+		{
+			name: "regular file errors with not a character device",
+			setupPath: func(t *testing.T) string {
+				p := filepath.Join(t.TempDir(), "regular")
+				f, err := os.Create(p)
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+
+				return p
+			},
+			errSubstrings: []string{"MEDIA_HARDWARE_DEVICE_PATH", "not a character device"},
+			errFunc:       require.Error,
+		},
+		{
+			name: "valid character device is accepted",
+			setupPath: func(t *testing.T) string {
+				const devNull = "/dev/null"
+
+				info, err := os.Stat(devNull)
+				if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+					t.Skipf("requires /dev/null as a character device on the test host (stat err=%v); rerun on a Unix host where /dev/null is a char device", err)
+				}
+
+				return devNull
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			err := validateHardwareDevicePath(test.setupPath(t))
+			errFunc(t, err)
+
+			if err != nil {
+				for _, errSubstring := range test.errSubstrings {
+					assert.Contains(t, err.Error(), errSubstring)
+				}
+			}
+		})
+	}
 }
 
 func TestParseTimeout(t *testing.T) {
