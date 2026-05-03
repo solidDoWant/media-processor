@@ -1,7 +1,7 @@
 ## Things to remember
 - If you hit a wall that can reasonably easily be solved by a human, stop and inform them.
 - If you're unsure about a decision, or need more information, stop and ask.
-- **When skipping a verification step** (e.g. tests that can't run in this environment): always post a specific, actionable explanation — name the exact constraint (e.g. "Docker daemon can't start: iptables unavailable in nested container") and what the human needs to do to unblock it. Never silently skip without explaining why.
+- **When skipping a verification step**: always post a specific, actionable explanation — name the exact constraint and what the human needs to do to unblock it. Never silently skip without explaining why. Example of a good explanation: "Skipping browser tests — no display server available in this environment; run `npm test` on a machine with a GUI to verify."
 - Don't use `<` or `>` symbols for placeholders in markdown documents, or anything posted to GitHub (bodies, comments), as these render as tags. If you need a literal `<` or `>` symbol otherwise, use `&gt;` or `&lt;` instead, or wrap them in backticks.
 - Don't put line breaks within individual paragraph in markdown documents, or anything posted to GitHub (bodies, comments). These don't render well in some markdown renderes, such as GitHub issues.
 
