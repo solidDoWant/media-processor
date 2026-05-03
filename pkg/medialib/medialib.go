@@ -21,11 +21,24 @@ const (
 	ShowType MediaType = "show"
 )
 
+// AllMediaTypes returns the canonical list of valid MediaType values. It is the
+// single source of truth shared by runtime validation and JSON Schema generation.
+func AllMediaTypes() []MediaType {
+	return []MediaType{MovieType, ShowType}
+}
+
 // JSONSchema returns a JSON Schema for MediaType restricting values to the valid types.
 func (MediaType) JSONSchema() *jsonschema.Schema {
+	all := AllMediaTypes()
+
+	enum := make([]any, len(all))
+	for i, mt := range all {
+		enum[i] = string(mt)
+	}
+
 	return &jsonschema.Schema{
 		Type:        "string",
-		Enum:        []any{string(MovieType), string(ShowType)},
+		Enum:        enum,
 		Description: "Whether the watched directory contains movies (\"movie\") or TV show episodes (\"show\").",
 	}
 }
