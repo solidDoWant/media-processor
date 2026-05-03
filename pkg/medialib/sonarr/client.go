@@ -100,23 +100,32 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, path string) string 
 		return ""
 	}
 
-	queue, err := c.sonarr.GetQueueContext(ctx, 0, 100)
-	if err != nil {
-		return ""
-	}
+	const pageSize = 100
 
-	for _, record := range queue.Records {
-		if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
-			continue
+	for page, fetched := 1, 0; ; page++ {
+		curr, err := c.sonarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
+		if err != nil {
+			return ""
 		}
-		// Skip records already marked imported — Sonarr completed this on its own.
-		if strings.EqualFold(record.TrackedDownloadState, "imported") {
-			continue
+
+		for _, record := range curr.Records {
+			if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
+				continue
+			}
+			// Skip records already marked imported — Sonarr completed this on its own.
+			if strings.EqualFold(record.TrackedDownloadState, "imported") {
+				continue
+			}
+			if record.DownloadID == "" {
+				continue
+			}
+			return record.DownloadID
 		}
-		if record.DownloadID == "" {
-			continue
+
+		fetched += len(curr.Records)
+		if fetched >= curr.TotalRecords || len(curr.Records) == 0 {
+			break
 		}
-		return record.DownloadID
 	}
 
 	return ""

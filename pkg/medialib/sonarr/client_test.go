@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,9 +24,10 @@ const unreachableURL = "http://127.0.0.1:1"
 // sonarrTestServerConfig holds configuration for test HTTP servers.
 type sonarrTestServerConfig struct {
 	parseResp       *sonarrlib.ParseOutput
-	seriesByID      *sonarrlib.Series // response for /api/v3/series/{id}
-	queueResp       *sonarrlib.Queue  // response for /api/v3/queue; nil returns empty queue
-	queueHTTPStatus int               // override HTTP status for /api/v3/queue; 0 means 200
+	seriesByID      *sonarrlib.Series  // response for /api/v3/series/{id}
+	queueResp       *sonarrlib.Queue   // single-page queue response; nil returns empty queue
+	queuePages      []*sonarrlib.Queue // multi-page queue responses; index 0 = page 1; takes priority over queueResp
+	queueHTTPStatus int                // override HTTP status for /api/v3/queue; 0 means 200
 	imageBody       []byte
 	imageType       string
 	// onCommand is called with the raw command request when /api/v3/command is hit.
@@ -62,14 +64,31 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 
-		if status == http.StatusOK {
-			q := cfg.queueResp
+		if status != http.StatusOK {
+			return
+		}
+
+		var q *sonarrlib.Queue
+
+		if cfg.queuePages != nil {
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page < 1 {
+				page = 1
+			}
+
+			if page-1 < len(cfg.queuePages) {
+				q = cfg.queuePages[page-1]
+			} else {
+				q = &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}}
+			}
+		} else {
+			q = cfg.queueResp
 			if q == nil {
 				q = &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}}
 			}
-
-			require.NoError(t, json.NewEncoder(w).Encode(q))
 		}
+
+		require.NoError(t, json.NewEncoder(w).Encode(q))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +143,7 @@ func TestImportByFilePath(t *testing.T) {
 		path                 string
 		parseResp            *sonarrlib.ParseOutput
 		queueResp            *sonarrlib.Queue
+		queuePages           []*sonarrlib.Queue
 		queueHTTPStatus      int
 		wantCmdName          string
 		wantCmdPath          string
@@ -175,6 +195,27 @@ func TestImportByFilePath(t *testing.T) {
 			wantCmdName:     "DownloadedEpisodesScan",
 			wantCmdPath:     "/tv/Breaking.Bad.S01E01.mkv",
 		},
+		{
+			// Match found on second page: verifies pagination terminates early on hit.
+			name:      "match on second queue page: downloadClientId from second page included",
+			path:      "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp: episodeParseOutput,
+			queuePages: []*sonarrlib.Queue{
+				{
+					TotalRecords: 2,
+					Records: []*sonarrlib.QueueRecord{
+						{ID: 99, EpisodeID: 999, DownloadID: "nzb-other", TrackedDownloadState: "importPending"},
+					},
+				},
+				{
+					TotalRecords: 2,
+					Records:      []*sonarrlib.QueueRecord{pendingRecord},
+				},
+			},
+			wantCmdName:          "DownloadedEpisodesScan",
+			wantCmdPath:          "/tv/Breaking.Bad.S01E01.mkv",
+			wantDownloadClientID: "nzb-abc123",
+		},
 	}
 
 	for _, tc := range tests {
@@ -188,6 +229,7 @@ func TestImportByFilePath(t *testing.T) {
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
 				parseResp:       tc.parseResp,
 				queueResp:       tc.queueResp,
+				queuePages:      tc.queuePages,
 				queueHTTPStatus: tc.queueHTTPStatus,
 				onCommand: func(t *testing.T, r *http.Request) {
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
