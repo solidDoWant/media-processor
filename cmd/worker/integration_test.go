@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"net"
 	"os"
 	"testing"
@@ -46,18 +45,16 @@ func TestWorkerConnectsToTemporal(t *testing.T) {
 	t.Setenv("SONARR_API_KEY", "test-key")
 	t.Setenv("HEALTH_ADDR", freeAddr(t))
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
+	interrupt := make(chan interface{}, 1)
 	done := make(chan error, 1)
 
 	go func() {
-		done <- run(ctx)
+		done <- run(t.Context(), interrupt)
 	}()
 
 	// If the worker fails to connect, run() returns quickly with an error.
-	// If it connects successfully, it blocks until the context is cancelled.
-	// Wait long enough to distinguish the two cases.
+	// If it connects successfully, it blocks until the interrupt channel
+	// receives. Wait long enough to distinguish the two cases.
 	const connectionWindow = 10 * time.Second
 
 	timer := time.NewTimer(connectionWindow)
@@ -65,11 +62,12 @@ func TestWorkerConnectsToTemporal(t *testing.T) {
 
 	select {
 	case err := <-done:
-		require.NoError(t, err, "worker exited before context was cancelled — connection likely failed")
+		require.NoError(t, err, "worker exited before interrupt was sent — connection likely failed")
 	case <-timer.C:
 		// Worker is still running after the window — connection succeeded.
 	}
 
-	cancel()
+	interrupt <- struct{}{}
+
 	require.NoError(t, <-done, "worker should shut down cleanly")
 }

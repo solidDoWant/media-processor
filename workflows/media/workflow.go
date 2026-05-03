@@ -2,10 +2,23 @@ package media
 
 import (
 	"errors"
+	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
+
+// defaultActivityOptions builds the StartToCloseTimeout/RetryPolicy pair used
+// by every activity in the workflow. The two parameters cover every variation
+// in use today: only the timeout and MaximumAttempts differ across call sites.
+// The transcode activity additionally sets HeartbeatTimeout on the returned
+// struct.
+func defaultActivityOptions(timeout time.Duration, attempts int32) workflow.ActivityOptions {
+	return workflow.ActivityOptions{
+		StartToCloseTimeout: timeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: attempts},
+	}
+}
 
 // MediaWorkflow processes one media file end-to-end. The body is straight-line
 // Go: probe, branch on validity, run the per-path activities. A defer block
@@ -44,10 +57,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		disconnected, cancel := workflow.NewDisconnectedContext(ctx)
 		defer cancel()
 
-		failureCtx := workflow.WithActivityOptions(disconnected, workflow.ActivityOptions{
-			StartToCloseTimeout: defaultFinalizeTimeout,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-		})
+		failureCtx := workflow.WithActivityOptions(disconnected, defaultActivityOptions(defaultFinalizeTimeout, defaultMaxAttempts))
 
 		notifyErr := workflow.ExecuteActivity(failureCtx, NotifyFailureActivityName, input, step, message).Get(failureCtx, nil)
 		if notifyErr != nil {
@@ -55,10 +65,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		}
 	}()
 
-	probeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultProbeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
+	probeCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultProbeTimeout, defaultMaxAttempts))
 
 	var probe ProbeOutput
 	if err := workflow.ExecuteActivity(probeCtx, ProbeActivityName, input).Get(probeCtx, &probe); err != nil {
@@ -70,10 +77,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		// the invalid-files counter; Cleanup here is a near-no-op for the file
 		// (RunCleanup tolerates ErrNotExist) but still writes the .done
 		// sentinel when PreserveSource is set.
-		invalidCleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: defaultFinalizeTimeout,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
-		})
+		invalidCleanupCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
 
 		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input).Get(invalidCleanupCtx, nil); err != nil {
 			return err
@@ -82,40 +86,29 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		return nil
 	}
 
-	cropCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: a.cfg.DetectCropTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
+	cropCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(a.cfg.DetectCropTimeout, defaultMaxAttempts))
 
 	var crop DetectCropOutput
 	if err := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); err != nil {
 		return err
 	}
 
-	transcodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: a.cfg.TranscodeTimeout,
-		HeartbeatTimeout:    transcodeHeartbeatTimeout(a.cfg.ProgressLogInterval),
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
-	})
+	transcodeOpts := defaultActivityOptions(a.cfg.TranscodeTimeout, defaultMaxAttempts)
+	transcodeOpts.HeartbeatTimeout = transcodeHeartbeatTimeout(a.cfg.ProgressLogInterval)
+	transcodeCtx := workflow.WithActivityOptions(ctx, transcodeOpts)
 
 	var transcode TranscodeOutput
 	if err := workflow.ExecuteActivity(transcodeCtx, TranscodeActivityName, input, probe, crop).Get(transcodeCtx, &transcode); err != nil {
 		return err
 	}
 
-	notifyCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
-	})
+	notifyCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
 
 	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
 		return err
 	}
 
-	cleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultFinalizeTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: retryableMaxAttempts},
-	})
+	cleanupCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
 
 	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input).Get(cleanupCtx, nil); err != nil {
 		return err
