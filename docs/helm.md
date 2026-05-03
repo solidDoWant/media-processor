@@ -307,8 +307,6 @@ These values are intentionally not configurable in `values.yaml`:
 | Liveness probe path   | `/healthz`                  |
 | Readiness probe path  | `/readyz`                   |
 
-The chart matches the binary's defaults for the health ports. Operators who set `HEALTH_ADDR` to a non-default port via the `resources` passthrough must also override the corresponding probe `httpGet.port` to match.
-
 ## Using Secrets for credentials
 
 Instead of putting API keys directly in `values.yaml`, reference a pre-existing Secret:
