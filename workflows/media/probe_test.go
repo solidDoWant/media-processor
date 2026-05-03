@@ -195,7 +195,7 @@ func TestRunProbe_StillImageIsDeletedAndMarkedInvalid(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "PNG file should be deleted by the probe step")
 }
 
-func TestIsStillImageFormat(t *testing.T) {
+func TestIsNonVideoFormat(t *testing.T) {
 	tests := []struct {
 		format   string
 		expected bool
@@ -210,6 +210,8 @@ func TestIsStillImageFormat(t *testing.T) {
 		{"exr_pipe", true},
 		// Generic image demuxer.
 		{"image2", true},
+		// ANSI/VT100 text demuxer — matches scene release .nfo files.
+		{"tty", true},
 		// Real video container formats — must not be rejected.
 		{"matroska,webm", false},
 		{"mov,mp4,m4a,3gp,3g2,mj2", false},
@@ -220,7 +222,7 @@ func TestIsStillImageFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.format, func(t *testing.T) {
-			assert.Equal(t, tt.expected, isStillImageFormat(tt.format))
+			assert.Equal(t, tt.expected, isNonVideoFormat(tt.format))
 		})
 	}
 }

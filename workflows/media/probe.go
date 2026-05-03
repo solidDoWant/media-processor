@@ -120,7 +120,7 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 	}
 
 	for _, s := range info.Streams {
-		if s.CodecType == ffprobe.CodecTypeVideo && !isStillImageFormat(info.Format) {
+		if s.CodecType == ffprobe.CodecTypeVideo && !isNonVideoFormat(info.Format) {
 			return ProbeOutput{
 				IsValidMedia:    true,
 				VideoCodec:      s.CodecName,
@@ -146,11 +146,21 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 	return ProbeOutput{IsValidMedia: false}, nil
 }
 
-// isStillImageFormat reports whether the FFmpeg format name identifies a
-// still-image demuxer. These demuxers expose a codec_type=video stream but the
-// file is not a motion-picture video container. All image-pipe demuxers carry a
-// "_pipe" suffix (e.g. "png_pipe", "jpeg_pipe"); "image2" is the generic
-// image-file/sequence demuxer.
-func isStillImageFormat(format string) bool {
-	return strings.HasSuffix(format, "_pipe") || format == "image2"
+// isNonVideoFormat reports whether the FFmpeg format name identifies a demuxer
+// that exposes a codec_type=video stream for input that is not actually a
+// motion-picture video container. Image-pipe demuxers carry a "_pipe" suffix
+// (e.g. "png_pipe", "jpeg_pipe") and "image2" is the generic image-file
+// demuxer. The "tty" demuxer renders ANSI/VT100 text files (such as scene
+// release ".nfo" files) as a synthetic video stream.
+func isNonVideoFormat(format string) bool {
+	if strings.HasSuffix(format, "_pipe") {
+		return true
+	}
+
+	switch format {
+	case "image2", "tty":
+		return true
+	}
+
+	return false
 }
