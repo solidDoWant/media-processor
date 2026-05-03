@@ -91,3 +91,21 @@ type MediaWorkflowConfig struct {
 // MediaInput is an alias for the shared input type so existing callers within
 // this package do not need to be updated.
 type MediaInput = mediatypes.MediaInput
+
+// transcodeHeartbeatTimeout returns the Temporal HeartbeatTimeout to apply to
+// the transcode activity given the configured progress-log interval. The
+// heartbeat goroutine emits a heartbeat on every FFmpeg progress tick, so the
+// timeout is set to twice the log interval to absorb the natural jitter
+// between ticks (a single missed tick must not fail the activity).
+//
+// When the progress interval is zero (operator disabled progress logging),
+// this returns zero, which Temporal treats as "no heartbeat enforcement". An
+// operator who opts out of progress signalling also opts out of heartbeat-
+// based stall detection.
+func transcodeHeartbeatTimeout(progressLogInterval time.Duration) time.Duration {
+	if progressLogInterval <= 0 {
+		return 0
+	}
+
+	return 2 * progressLogInterval
+}

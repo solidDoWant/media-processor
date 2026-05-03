@@ -273,6 +273,91 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 	}
 }
 
+// TestTranscodeHeartbeatTimeout covers the helper that derives the
+// HeartbeatTimeout for the transcode activity from the configured
+// progress-log interval.
+func TestTranscodeHeartbeatTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		expected time.Duration
+	}{
+		{
+			name:     "zero interval disables heartbeat enforcement",
+			interval: 0,
+			expected: 0,
+		},
+		{
+			name:     "negative interval disables heartbeat enforcement",
+			interval: -5 * time.Second,
+			expected: 0,
+		},
+		{
+			name:     "default 30s progress interval yields 60s heartbeat timeout",
+			interval: 30 * time.Second,
+			expected: 60 * time.Second,
+		},
+		{
+			name:     "5m progress interval yields 10m heartbeat timeout",
+			interval: 5 * time.Minute,
+			expected: 10 * time.Minute,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, transcodeHeartbeatTimeout(test.interval))
+		})
+	}
+}
+
+// TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig verifies that the
+// workflow's transcode ActivityOptions propagate a HeartbeatTimeout derived
+// from the configured progress interval, so a stalled worker can be detected
+// within minutes instead of waiting for StartToCloseTimeout to elapse.
+func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+
+	progressInterval := 45 * time.Second
+
+	a, err := NewActivities(
+		MediaWorkflowConfig{
+			DetectCropTimeout:   30 * time.Minute,
+			TranscodeTimeout:    4 * time.Hour,
+			ProgressLogInterval: progressInterval,
+		},
+		&stubLibraryClient{},
+		&stubLibraryClient{},
+		&webhook.Client{},
+	)
+	require.NoError(t, err)
+
+	registerWorkflow(env, a)
+
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(DetectCropOutput{}, nil).Once()
+
+	var capturedHeartbeatTimeout time.Duration
+
+	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(ctx context.Context, _ MediaInput, _ ProbeOutput, _ DetectCropOutput) (TranscodeOutput, error) {
+			capturedHeartbeatTimeout = activity.GetInfo(ctx).HeartbeatTimeout
+			return TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil
+		}).Once()
+
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+
+	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, transcodeHeartbeatTimeout(progressInterval), capturedHeartbeatTimeout,
+		"transcode activity should observe the HeartbeatTimeout derived from the configured progress interval")
+}
+
 // stubLibraryClient lives in testhelpers_test.go and satisfies medialib.ArrLibrary
 // for tests that do not exercise the live library calls.
 var _ medialib.ArrLibrary = (*stubLibraryClient)(nil)

@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/medialib"
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
@@ -186,7 +187,11 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe Prob
 		return TranscodeOutput{}, emptyErr
 	}
 
-	out, err := RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, library)
+	heartbeat := func(p ffmpeg.Progress) {
+		activity.RecordHeartbeat(ctx, p)
+	}
+
+	out, err := RunTranscode(ctx, input.FilePath, probe, cropOut.Crop, outputPath, input.WatchRoot, a.cfg.HardwareDevicePath, a.cfg.H265CRF, a.cfg.ProgressLogInterval, heartbeat, library)
 	logStepResult(ctx, "transcode", input.FilePath, start, err)
 
 	if err != nil {

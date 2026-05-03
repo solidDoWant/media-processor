@@ -94,6 +94,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	transcodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: a.cfg.TranscodeTimeout,
+		HeartbeatTimeout:    transcodeHeartbeatTimeout(a.cfg.ProgressLogInterval),
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: defaultMaxAttempts},
 	})
 
