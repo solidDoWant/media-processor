@@ -66,14 +66,14 @@ type Registrar interface {
 // in tests). The slice literals below are the single source of truth for the
 // (name, function) pairs the worker and tests register.
 func (a *Activities) Register(r Registrar) {
-	workflows := []struct {
+	workflowEntries := []struct {
 		name string
 		fn   any
 	}{
 		{MediaWorkflowName, a.MediaWorkflow},
 	}
 
-	activities := []struct {
+	activityEntries := []struct {
 		name string
 		fn   any
 	}{
@@ -85,12 +85,12 @@ func (a *Activities) Register(r Registrar) {
 		{NotifyFailureActivityName, a.NotifyFailure},
 	}
 
-	for _, wf := range workflows {
-		r.RegisterWorkflowWithOptions(wf.fn, workflow.RegisterOptions{Name: wf.name})
+	for _, workflowEntry := range workflowEntries {
+		r.RegisterWorkflowWithOptions(workflowEntry.fn, workflow.RegisterOptions{Name: workflowEntry.name})
 	}
 
-	for _, act := range activities {
-		r.RegisterActivityWithOptions(act.fn, activity.RegisterOptions{Name: act.name})
+	for _, activityEntry := range activityEntries {
+		r.RegisterActivityWithOptions(activityEntry.fn, activity.RegisterOptions{Name: activityEntry.name})
 	}
 }
 
