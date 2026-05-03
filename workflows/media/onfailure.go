@@ -2,35 +2,20 @@ package media
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
-	"strings"
 
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
 
-// NotifyWorkflowFailure sends an aggregated failure notification to webhookClient.
-// stepErrors is the map returned by ctx.StepRunErrors() in an OnFailure handler.
+// NotifyWorkflowFailure sends a single-step failure notification to webhookClient.
+// step is the failing activity name; errMsg is the underlying error message.
 // workflowName is included in the webhook payload; filePath is the file being processed.
-// Returns nil (no-op) when stepErrors is empty.
-func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, workflowName, filePath string, webhookClient *webhook.Client) error {
-	if len(stepErrors) == 0 {
-		slog.InfoContext(ctx, "no step errors, skipping failure notification", slog.String("file", filePath))
+// Returns nil (no-op) when step is empty.
+func NotifyWorkflowFailure(ctx context.Context, step, errMsg, workflowName, filePath string, webhookClient *webhook.Client) error {
+	if step == "" {
+		slog.InfoContext(ctx, "no step error, skipping failure notification", slog.String("file", filePath))
 		return nil
-	}
-
-	steps := make([]string, 0, len(stepErrors))
-	for stepName := range stepErrors {
-		steps = append(steps, stepName)
-	}
-
-	sort.Strings(steps)
-
-	errs := make([]error, 0, len(stepErrors))
-	for _, stepName := range steps {
-		errs = append(errs, fmt.Errorf("%s: %s", stepName, stepErrors[stepName]))
 	}
 
 	if webhookClient.URL == "" {
@@ -41,8 +26,8 @@ func NotifyWorkflowFailure(ctx context.Context, stepErrors map[string]string, wo
 	if err := webhookClient.NotifyFailure(ctx, webhook.FailureEvent{
 		Workflow: workflowName,
 		FilePath: filePath,
-		Step:     strings.Join(steps, ", "),
-		Err:      errors.Join(errs...),
+		Step:     step,
+		Err:      fmt.Errorf("%s: %s", step, errMsg),
 	}); err != nil {
 		return fmt.Errorf("notify failure: %w", err)
 	}

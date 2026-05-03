@@ -109,7 +109,7 @@ func TestMediaWorkflow_TranscodeFailureFiresFailureWebhook(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError(), "workflow should propagate the activity failure")
-	assert.Equal(t, "transcode", seenStep)
+	assert.Equal(t, TranscodeActivityName, seenStep)
 	assert.Contains(t, seenMessage, "ffmpeg blew up")
 	env.AssertExpectations(t)
 }
@@ -134,7 +134,7 @@ func TestMediaWorkflow_ProbeFailureFiresFailureWebhook(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	assert.Equal(t, "probe", seenStep)
+	assert.Equal(t, ProbeActivityName, seenStep)
 }
 
 // TestMediaWorkflow_NotifyAndCleanupRetry verifies that the notify and cleanup
@@ -221,7 +221,7 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 	}{
 		{
 			name:        "probe is invoked exactly once on failure (no retries)",
-			failingStep: "probe",
+			failingStep: ProbeActivityName,
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(func(_ context.Context, _ MediaInput) (ProbeOutput, error) {
@@ -232,7 +232,7 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 		},
 		{
 			name:        "detectcrop is invoked exactly once on failure (no retries)",
-			failingStep: "detectcrop",
+			failingStep: DetectCropActivityName,
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()
@@ -245,7 +245,7 @@ func TestMediaWorkflow_NonRetryableActivitiesFailOnFirstError(t *testing.T) {
 		},
 		{
 			name:        "transcode is invoked exactly once on failure (no retries)",
-			failingStep: "transcode",
+			failingStep: TranscodeActivityName,
 			setupMocks: func(env *testsuite.TestWorkflowEnvironment, attempts *int) {
 				env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 					Return(ProbeOutput{IsValidMedia: true, VideoWidth: 1920, VideoHeight: 1080}, nil).Once()

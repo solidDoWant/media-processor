@@ -7,20 +7,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// stepError wraps an activity error with the step name where it originated.
-// The workflow's failure-webhook defer extracts the step + underlying error
-// via errors.As, removing the need for a mutable shared variable straddling
-// the workflow body and the defer. The wrapped form ("step: message") also
-// surfaces directly in the Temporal Web UI's workflow-failure pane.
-type stepError struct {
-	step string
-	err  error
-}
-
-func (e *stepError) Error() string { return e.step + ": " + e.err.Error() }
-
-func (e *stepError) Unwrap() error { return e.err }
-
 // MediaWorkflow processes one media file end-to-end. The body is straight-line
 // Go: probe, branch on validity, run the per-path activities. A defer block
 // invokes the failure-webhook activity when the workflow returns an error.
@@ -47,9 +33,9 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 		step, message := "unknown", err.Error()
 
-		var sErr *stepError
-		if errors.As(err, &sErr) {
-			step, message = sErr.step, sErr.err.Error()
+		var actErr *temporal.ActivityError
+		if errors.As(err, &actErr) {
+			step = actErr.ActivityType().Name
 		}
 
 		// The workflow's context is cancelled when the workflow returns an
@@ -76,7 +62,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	var probe ProbeOutput
 	if err := workflow.ExecuteActivity(probeCtx, ProbeActivityName, input).Get(probeCtx, &probe); err != nil {
-		return &stepError{step: "probe", err: err}
+		return err
 	}
 
 	if !probe.IsValidMedia {
@@ -90,7 +76,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		})
 
 		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input).Get(invalidCleanupCtx, nil); err != nil {
-			return &stepError{step: "cleanup", err: err}
+			return err
 		}
 
 		return nil
@@ -103,7 +89,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	var crop DetectCropOutput
 	if err := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); err != nil {
-		return &stepError{step: "detectcrop", err: err}
+		return err
 	}
 
 	transcodeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -113,7 +99,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	var transcode TranscodeOutput
 	if err := workflow.ExecuteActivity(transcodeCtx, TranscodeActivityName, input, probe, crop).Get(transcodeCtx, &transcode); err != nil {
-		return &stepError{step: "transcode", err: err}
+		return err
 	}
 
 	notifyCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -122,7 +108,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 	})
 
 	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
-		return &stepError{step: "notify", err: err}
+		return err
 	}
 
 	cleanupCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -131,7 +117,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 	})
 
 	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input).Get(cleanupCtx, nil); err != nil {
-		return &stepError{step: "cleanup", err: err}
+		return err
 	}
 
 	return nil
