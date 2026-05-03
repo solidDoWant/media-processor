@@ -48,6 +48,25 @@ func TestTranscode_CropWithQSV(t *testing.T) {
 	assert.Equal(t, crop.H, videoStream.HeightPixels, "output height must match crop height")
 }
 
+// TestTranscode_SourceWithAttachedPic_QSV verifies that a source mp4 carrying
+// an embedded mjpeg cover-art stream (disposition:attached_pic) does not crash
+// the QSV encoder. Before the embedded-cover-art exclusion was widened to fire
+// even without fresh cover art, the still image was fed into hevc_qsv, whose
+// init returned MFX_ERR_UNSUPPORTED — surfaced by libavcodec as
+// "Function not implemented" — and aborted the whole transcode.
+// Requires QSV hardware (qsvtest build tag).
+func TestTranscode_SourceWithAttachedPic_QSV(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testAttachedPicSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		HardwareAccel(ffmpeg.HWAccelQSV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err, "QSV transcode of a source with attached_pic must succeed; pre-fix this returned %q", "Function not implemented")
+}
+
 // TestTranscode_QSVPerformanceMatchesFFmpegCLI verifies that our QSV transcode
 // implementation performs within 1.25× of the ffmpeg CLI with identical QSV
 // parameters. This guards against accidentally falling back to software

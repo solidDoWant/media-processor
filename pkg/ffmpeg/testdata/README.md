@@ -27,6 +27,37 @@ ffmpeg -f lavfi -i "color=c=blue:size=320x180:rate=24:duration=0.5" -vf "pad=iw:
 
 Expected `cropdetect` output: `crop=320:176:0:22` (round=16 reduces 180 → 176; y=22 centers the window).
 
+## cover.jpg
+
+A 100x100 solid-green JPEG used as a cover-art payload in transcode tests that
+need to verify the bytes that end up in the output MKV's attachment stream.
+
+Generation command:
+
+```
+ffmpeg -y -f lavfi -i color=c=green:s=100x100:d=1 -frames:v 1 -q:v 5 \
+       pkg/ffmpeg/testdata/cover.jpg
+```
+
+## video_with_attached_pic.mp4
+
+A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a
+200x300 mjpeg cover-art image carrying `disposition:attached_pic`. Used to
+regression-test the embedded-cover-art exclusion in `Transcoder` (a missing
+exclusion fed the still image into the HEVC encoder; on QSV this returned
+"Function not implemented").
+
+Generation command:
+
+```
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.25 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p main.mp4
+ffmpeg -y -f lavfi -i color=c=red:s=200x300:d=1 -frames:v 1 -q:v 8 poster.jpg
+ffmpeg -y -i main.mp4 -i poster.jpg \
+       -map 0:v -map 1 -c copy -disposition:v:1 attached_pic \
+       pkg/ffmpeg/testdata/video_with_attached_pic.mp4
+```
+
 ## video_all_black.mp4
 
 A synthetic 12-frame (0.5 s at 24 fps) lossless H.264 clip used to verify that `DetectCrop` returns an error when no visible content is present. The video is 320x180 solid black (CRF 0, so decoded pixels are exactly zero).

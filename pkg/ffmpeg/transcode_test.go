@@ -624,6 +624,96 @@ func TestTranscode_WithCoverArt_NilBytesIsNoop(t *testing.T) {
 	assert.Empty(t, probeAttachments(t, output), "no attachment expected when cover art bytes are nil")
 }
 
+// testAttachedPicSourcePath is a synthetic mp4 with two video streams: a
+// 160x120 H.264 main video (stream 0) and a 200x300 mjpeg cover image with
+// disposition:attached_pic (stream 1). It mirrors the embedded-cover-art
+// layout that mp4 files carry in the wild.
+const testAttachedPicSourcePath = "testdata/video_with_attached_pic.mp4"
+
+// testCoverJPEGPath is a small solid-colour JPEG used as a cover-art payload.
+const testCoverJPEGPath = "testdata/cover.jpg"
+
+// countVideoStreams returns the number of streams in path whose codec type is
+// video, by reading stream metadata via go-astiav directly. The matroska
+// demuxer surfaces MKV attachment elements as video streams with
+// AV_DISPOSITION_ATTACHED_PIC; those are excluded from the count so this helper
+// reflects only encoded video tracks.
+func countVideoStreams(t *testing.T, path string) int {
+	t.Helper()
+
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
+
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	count := 0
+
+	for _, s := range fmtCtx.Streams() {
+		if s.CodecParameters().MediaType() != astiav.MediaTypeVideo {
+			continue
+		}
+
+		if s.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
+			continue
+		}
+
+		count++
+	}
+
+	return count
+}
+
+// TestTranscode_SourceWithAttachedPic_NoCoverArt verifies that a source mp4
+// carrying an embedded mjpeg cover-art stream (disposition:attached_pic) does
+// not have that still image re-encoded into the output as a second HEVC video
+// stream. The output must contain exactly one video track — the main video —
+// regardless of whether WithCoverArt is supplied.
+func TestTranscode_SourceWithAttachedPic_NoCoverArt(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testAttachedPicSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, countVideoStreams(t, output),
+		"output must contain exactly one video track; an extra track means the source's attached_pic stream was re-encoded as HEVC")
+}
+
+// TestTranscode_SourceWithAttachedPic_WithCoverArt verifies that supplying
+// fresh cover art via WithCoverArt also drops the source's existing
+// attached_pic stream. The output must contain exactly one video track plus
+// one attachment carrying the supplied artwork.
+func TestTranscode_SourceWithAttachedPic_WithCoverArt(t *testing.T) {
+	coverBytes, err := os.ReadFile(testCoverJPEGPath)
+	require.NoError(t, err)
+
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err = ffmpeg.NewTranscode(testAttachedPicSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithCoverArt(coverBytes, "image/jpeg").
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, countVideoStreams(t, output),
+		"output must contain exactly one video track; the source's attached_pic stream must be excluded")
+
+	attachments := probeAttachments(t, output)
+	require.Len(t, attachments, 1, "output must contain exactly one attachment (the supplied cover art)")
+	assert.Equal(t, coverBytes, attachments[0].data)
+}
+
 // testBlackBarsVideoPath is a 320x220 H.264 video with 22-pixel black bars on the
 // top and bottom, producing a 320x176 active picture area (crop=320:176:0:22).
 const testBlackBarsVideoPath = "testdata/video_black_bars.mp4"
