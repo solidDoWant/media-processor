@@ -102,6 +102,19 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{- end -}}
 
 {{/* ============================================================ */}}
+{{/* Health-port resolution (single source of truth for binary    */}}
+{{/* listen address and probe httpGet.port)                       */}}
+{{/* ============================================================ */}}
+{{- $watcherHealthPort := .Values.config.watcher.healthPort | default 0 | int -}}
+{{- if or (lt $watcherHealthPort 1) (gt $watcherHealthPort 65535) -}}
+  {{- fail (printf "config.watcher.healthPort must be a TCP port between 1 and 65535 (got %v)" .Values.config.watcher.healthPort) -}}
+{{- end -}}
+{{- $workerHealthPort := .Values.config.worker.healthPort | default 0 | int -}}
+{{- if or (lt $workerHealthPort 1) (gt $workerHealthPort 65535) -}}
+  {{- fail (printf "config.worker.healthPort must be a TCP port between 1 and 65535 (got %v)" .Values.config.worker.healthPort) -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
 {{/* Watcher env vars                                             */}}
 {{/* ============================================================ */}}
 {{- $watcherEnv := dict -}}
@@ -115,6 +128,11 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $watcherEnv "LOG_LEVEL" .Values.config.watcher.logLevel -}}
+
+{{/* HEALTH_ADDR
+   Always set so the chart-supplied port and the binary listen address stay in
+   lockstep regardless of the binary's compiled-in default. */}}
+{{- $_ := set $watcherEnv "HEALTH_ADDR" (printf ":%d" $watcherHealthPort) -}}
 
 {{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
 {{- if .Values.config.watcher.metrics.scrapeWaitTimeout -}}
@@ -133,6 +151,9 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 
 {{/* LOG_LEVEL */}}
 {{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
+
+{{/* HEALTH_ADDR — see watcher block above. */}}
+{{- $_ := set $workerEnv "HEALTH_ADDR" (printf ":%d" $workerHealthPort) -}}
 
 {{/* MEDIA_WEBHOOK_URL */}}
 {{- if .Values.config.worker.media.webhookUrl -}}
@@ -427,12 +448,28 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{- end -}}
 
 {{/* ============================================================ */}}
+{{/* Probe port additions                                          */}}
+{{/* The httpGet.port for liveness/readiness is injected here from */}}
+{{/* config.{watcher,worker}.healthPort so binary listen address  */}}
+{{/* and probe target stay in lockstep. mustMergeOverwrite below  */}}
+{{/* lets user values still override per-probe.                   */}}
+{{/* ============================================================ */}}
+{{- $watcherProbes := dict
+  "liveness"  (dict "spec" (dict "httpGet" (dict "port" $watcherHealthPort)))
+  "readiness" (dict "spec" (dict "httpGet" (dict "port" $watcherHealthPort)))
+-}}
+{{- $workerProbes := dict
+  "liveness"  (dict "spec" (dict "httpGet" (dict "port" $workerHealthPort)))
+  "readiness" (dict "spec" (dict "httpGet" (dict "port" $workerHealthPort)))
+-}}
+
+{{/* ============================================================ */}}
 {{/* Build computed additions (env + persistence only)            */}}
 {{/* ============================================================ */}}
 {{- $computedAdditions := dict
   "controllers" (dict
-    "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv)))
-    "worker"  (dict "containers" (dict "worker"  (dict "env" $workerEnv)))
+    "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv "probes" $watcherProbes)))
+    "worker"  (dict "containers" (dict "worker"  (dict "env" $workerEnv  "probes" $workerProbes)))
   )
   "persistence" $computedPersistence
 -}}

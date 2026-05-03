@@ -96,6 +96,12 @@ config:
     #     server: nas.example.com
     #     path: /volume1/media
     logLevel: info
+    # healthPort is the TCP port the watcher's health server listens on. Sets
+    # HEALTH_ADDR=":<port>" on the watcher container and is also used as the
+    # liveness/readiness probe port, so the binary and the probes always agree.
+    # Override at the chart level rather than via the HEALTH_ADDR env var so
+    # both halves stay in lockstep.
+    healthPort: 8081
     # The watcher always exposes /metrics on port 9091 regardless of this value.
     # The toggle controls whether cluster-side scraping infrastructure (the
     # watcher-metrics Service and its ServiceMonitor) is created. Leave false
@@ -112,6 +118,12 @@ config:
 
   worker:
     logLevel: info
+    # healthPort is the TCP port the worker's health server listens on. Sets
+    # HEALTH_ADDR=":<port>" on the worker container and is also used as the
+    # liveness/readiness probe port, so the binary and the probes always agree.
+    # Override at the chart level rather than via the HEALTH_ADDR env var so
+    # both halves stay in lockstep.
+    healthPort: 8080
     # stopTimeout bounds the SIGTERM-triggered drain of in-flight Temporal activities, as a
     # Go duration string (e.g. "30m", "2h"). Sets WORKER_STOP_TIMEOUT on the worker. The
     # chart default of 30s pairs with METRICS_SCRAPE_WAIT_TIMEOUT (60s) and a 30s buffer
@@ -181,6 +193,9 @@ resources:
           args:
             - --config
             - /etc/media-processor/watcher.yaml
+          # probes.{liveness,readiness}.spec.httpGet.port is injected by the
+          # chart from config.watcher.healthPort. Override here only if you
+          # need a probe port that differs from the binary's listen address.
           probes:
             liveness:
               enabled: true
@@ -188,7 +203,6 @@ resources:
               spec:
                 httpGet:
                   path: /healthz
-                  port: 8081
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3
@@ -198,7 +212,6 @@ resources:
               spec:
                 httpGet:
                   path: /readyz
-                  port: 8081
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3
@@ -231,6 +244,9 @@ resources:
             - name: metrics
               containerPort: 9090
               protocol: TCP
+          # probes.{liveness,readiness}.spec.httpGet.port is injected by the
+          # chart from config.worker.healthPort. Override here only if you
+          # need a probe port that differs from the binary's listen address.
           probes:
             liveness:
               enabled: true
@@ -238,7 +254,6 @@ resources:
               spec:
                 httpGet:
                   path: /healthz
-                  port: 8080
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3
@@ -248,7 +263,6 @@ resources:
               spec:
                 httpGet:
                   path: /readyz
-                  port: 8080
                 initialDelaySeconds: 0
                 periodSeconds: 10
                 failureThreshold: 3

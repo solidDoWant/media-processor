@@ -12,6 +12,7 @@ import (
 
 	"go.temporal.io/sdk/worker"
 
+	"github.com/solidDoWant/media-processor/internal/envvar"
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
@@ -35,9 +36,9 @@ func main() {
 func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
-	if taskQueue == "" {
-		return fmt.Errorf("TEMPORAL_TASK_QUEUE is not set")
+	taskQueue, err := envvar.RequireEnv("TEMPORAL_TASK_QUEUE")
+	if err != nil {
+		return err
 	}
 
 	const defaultHealthAddr = ":8080"
@@ -63,24 +64,24 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	}
 	defer shutdown()
 
-	radarrURL := os.Getenv("RADARR_URL")
-	if radarrURL == "" {
-		return fmt.Errorf("RADARR_URL is not set")
+	radarrURL, err := envvar.RequireEnv("RADARR_URL")
+	if err != nil {
+		return err
 	}
 
-	radarrAPIKey := os.Getenv("RADARR_API_KEY")
-	if radarrAPIKey == "" {
-		return fmt.Errorf("RADARR_API_KEY is not set")
+	radarrAPIKey, err := envvar.RequireEnv("RADARR_API_KEY")
+	if err != nil {
+		return err
 	}
 
-	sonarrURL := os.Getenv("SONARR_URL")
-	if sonarrURL == "" {
-		return fmt.Errorf("SONARR_URL is not set")
+	sonarrURL, err := envvar.RequireEnv("SONARR_URL")
+	if err != nil {
+		return err
 	}
 
-	sonarrAPIKey := os.Getenv("SONARR_API_KEY")
-	if sonarrAPIKey == "" {
-		return fmt.Errorf("SONARR_API_KEY is not set")
+	sonarrAPIKey, err := envvar.RequireEnv("SONARR_API_KEY")
+	if err != nil {
+		return err
 	}
 
 	radarrClient := radarr.New(radarr.Config{
@@ -135,9 +136,14 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 		return err
 	}
 
+	highCardinalityLabels, err := envvar.ParseBool("METRICS_HIGH_CARDINALITY_LABELS", false)
+	if err != nil {
+		return err
+	}
+
 	activities, err := media.NewActivities(media.MediaWorkflowConfig{
 		HardwareDevicePath:    os.Getenv("MEDIA_HARDWARE_DEVICE_PATH"),
-		HighCardinalityLabels: os.Getenv("METRICS_HIGH_CARDINALITY_LABELS") == "true",
+		HighCardinalityLabels: highCardinalityLabels,
 		MinCropX:              minCropX,
 		MinCropY:              minCropY,
 		DetectCropTimeout:     detectCropTimeout,
