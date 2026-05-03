@@ -210,15 +210,15 @@ func TestTranscode_ProgressChannel(t *testing.T) {
 	// pts from a packet whose data had already been consumed (e.g. by
 	// av_interleaved_write_frame, which takes ownership of the packet).
 	maxSeen := 0.0
-	for _, p := range updates {
-		if p.PercentComplete > maxSeen {
-			maxSeen = p.PercentComplete
+	for _, update := range updates {
+		if update.PercentComplete > maxSeen {
+			maxSeen = update.PercentComplete
 		}
 
 		if maxSeen >= 50 {
-			assert.NotEqual(t, float64(0), p.PercentComplete,
+			assert.NotEqual(t, float64(0), update.PercentComplete,
 				"progress dropped back to 0%% after reaching %.2f%% (frames=%d) — likely reading pts from a consumed packet",
-				maxSeen, p.FramesProcessed)
+				maxSeen, update.FramesProcessed)
 		}
 	}
 }
