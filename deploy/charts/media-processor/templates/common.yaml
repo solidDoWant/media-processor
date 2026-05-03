@@ -182,6 +182,11 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $workerEnv "MEDIA_TRANSCODE_TIMEOUT" .Values.config.worker.media.transcode.timeout -}}
 {{- end -}}
 
+{{/* MEDIA_PROGRESS_LOG_INTERVAL */}}
+{{- if .Values.config.worker.media.transcode.progressLogInterval -}}
+  {{- $_ := set $workerEnv "MEDIA_PROGRESS_LOG_INTERVAL" .Values.config.worker.media.transcode.progressLogInterval -}}
+{{- end -}}
+
 {{/* WORKER_STOP_TIMEOUT */}}
 {{- if .Values.config.worker.stopTimeout -}}
   {{- $_ := set $workerEnv "WORKER_STOP_TIMEOUT" .Values.config.worker.stopTimeout -}}

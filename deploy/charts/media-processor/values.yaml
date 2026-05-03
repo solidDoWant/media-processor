@@ -152,6 +152,14 @@ config:
       transcode:
         timeout: "4h"
         videoQuality: ""
+        # progressLogInterval sets MEDIA_PROGRESS_LOG_INTERVAL on the worker as a Go
+        # duration string (e.g. "1m", "5m"). Controls how often a transcode progress
+        # log line is emitted, and also drives the transcode activity's Temporal
+        # HeartbeatTimeout (set to 2x this value), so a stuck encode is detected and
+        # failed within roughly twice this interval rather than waiting for the full
+        # MEDIA_TRANSCODE_TIMEOUT. Set to "0s" to disable both progress logging and
+        # heartbeat-based stall detection. When empty, the binary default of 30s applies.
+        progressLogInterval: ""
     radarr:
       url: ""
       apiKey:
