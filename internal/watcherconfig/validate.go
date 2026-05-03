@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-playground/validator/v10"
 
@@ -114,6 +115,10 @@ func parseMinLength(tag string) (int, bool) {
 			panic(fmt.Sprintf("registerSchemaConstraints: invalid jsonschema minLength %q: %v", raw, err))
 		}
 
+		if n < 0 {
+			panic(fmt.Sprintf("registerSchemaConstraints: invalid jsonschema minLength %q: must be >= 0", raw))
+		}
+
 		return n, true
 	}
 
@@ -121,15 +126,18 @@ func parseMinLength(tag string) (int, bool) {
 }
 
 // makeMinLengthStructValidator returns a struct-level validator that reports an
-// error for each rule whose corresponding string field is shorter than the
-// configured minimum. The reported tag is "min" so downstream error messages
-// match what go-playground/validator would emit for `validate:"min=N"`.
+// error for each rule whose corresponding string field has fewer characters
+// (Unicode code points) than the configured minimum. JSON Schema's minLength
+// counts characters per RFC 8259, not bytes, so multibyte strings must be
+// measured by rune count to keep runtime validation aligned with the schema.
+// The reported tag is "min" so downstream error messages match what
+// go-playground/validator would emit for `validate:"min=N"`.
 func makeMinLengthStructValidator(rules []minLengthRule) validator.StructLevelFunc {
 	return func(sl validator.StructLevel) {
 		current := sl.Current()
 		for _, rule := range rules {
 			value := current.Field(rule.fieldIndex)
-			if value.Len() < rule.min {
+			if utf8.RuneCountInString(value.String()) < rule.min {
 				sl.ReportError(value.Interface(), rule.fieldName, rule.fieldName, "min", strconv.Itoa(rule.min))
 			}
 		}

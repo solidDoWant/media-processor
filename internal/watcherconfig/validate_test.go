@@ -118,6 +118,34 @@ func TestParseMinLength_PanicsOnMalformed(t *testing.T) {
 	})
 }
 
+// TestParseMinLength_PanicsOnNegative verifies that a negative minLength value
+// panics; otherwise the rule would silently never fire (value.Len() < -1 is
+// always false), defeating the source-of-truth contract.
+func TestParseMinLength_PanicsOnNegative(t *testing.T) {
+	t.Parallel()
+
+	assert.Panics(t, func() {
+		parseMinLength("minLength=-1")
+	})
+}
+
+// TestRegisterSchemaConstraints_CountsRunesNotBytes verifies that minLength is
+// measured by Unicode code point count (matching JSON Schema semantics) rather
+// than byte count, so multibyte strings are not accepted as longer than they are.
+func TestRegisterSchemaConstraints_CountsRunesNotBytes(t *testing.T) {
+	t.Parallel()
+
+	type sample struct {
+		Field string `jsonschema:"minLength=3"`
+	}
+
+	v := validator.New(validator.WithRequiredStructEnabled())
+	registerSchemaConstraints(v, sample{})
+
+	assert.Error(t, v.Struct(sample{Field: "éé"}), "two-rune string should fail minLength=3 even though it is 4 bytes")
+	assert.NoError(t, v.Struct(sample{Field: "ééé"}), "three-rune string should pass minLength=3")
+}
+
 // TestParseMinLength_NoMinLengthOption verifies that a tag without a minLength
 // option returns ok=false rather than producing a rule.
 func TestParseMinLength_NoMinLengthOption(t *testing.T) {
