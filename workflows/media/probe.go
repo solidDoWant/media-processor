@@ -60,11 +60,12 @@ type ProbeOutput struct {
 }
 
 // RunProbe reads codec and container info for filePath. If the file is not a
-// recognised media file or has no video stream, it deletes the file and returns
-// IsValidMedia=false (without error), causing all downstream steps to be skipped.
-// When retainEmptyDirs is false and a deletion occurs, empty parent directories up
-// to watchRoot are also removed via pruneEmptyParents.
-func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs bool) (ProbeOutput, error) {
+// recognised media file or has no video stream, it returns IsValidMedia=false
+// (without error), causing all downstream steps to be skipped. Unless
+// preserveSource is true, the file is also deleted; when retainEmptyDirs is
+// false and a deletion occurs, empty parent directories up to watchRoot are
+// also removed via pruneEmptyParents.
+func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs, preserveSource bool) (ProbeOutput, error) {
 	info, err := ffprobe.Probe(ctx, filePath)
 	if err != nil {
 		// Context errors are operational — propagate them so the step fails and
@@ -73,12 +74,14 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 			return ProbeOutput{}, err
 		}
 
-		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return ProbeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
-		}
+		if !preserveSource {
+			if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return ProbeOutput{}, fmt.Errorf("remove unrecognised file: %w", removeErr)
+			}
 
-		if !retainEmptyDirs {
-			pruneEmptyParents(filePath, watchRoot)
+			if !retainEmptyDirs {
+				pruneEmptyParents(filePath, watchRoot)
+			}
 		}
 
 		slog.WarnContext(ctx, "failed to probe file", "file", filePath, "error", err)
@@ -135,12 +138,14 @@ func RunProbe(ctx context.Context, filePath, watchRoot string, retainEmptyDirs b
 	}
 
 	// No video stream found.
-	if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return ProbeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
-	}
+	if !preserveSource {
+		if removeErr := os.Remove(filePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return ProbeOutput{}, fmt.Errorf("remove file with no video streams: %w", removeErr)
+		}
 
-	if !retainEmptyDirs {
-		pruneEmptyParents(filePath, watchRoot)
+		if !retainEmptyDirs {
+			pruneEmptyParents(filePath, watchRoot)
+		}
 	}
 
 	return ProbeOutput{IsValidMedia: false}, nil

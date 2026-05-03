@@ -16,11 +16,12 @@ import (
 
 func TestRunProbe(t *testing.T) {
 	tests := []struct {
-		name        string
-		setupPath   func(t *testing.T) string
-		expected    ProbeOutput
-		errFunc     require.ErrorAssertionFunc
-		fileDeleted bool
+		name           string
+		setupPath      func(t *testing.T) string
+		preserveSource bool
+		expected       ProbeOutput
+		errFunc        require.ErrorAssertionFunc
+		fileDeleted    bool
 	}{
 		{
 			name: "non-media text file returns invalid and deletes file",
@@ -41,7 +42,20 @@ func TestRunProbe(t *testing.T) {
 			},
 			expected:    ProbeOutput{IsValidMedia: false},
 			errFunc:     require.NoError,
-			fileDeleted: false, // nothing to delete
+			fileDeleted: false,
+		},
+		{
+			name: "preserve source retains non-media file",
+			setupPath: func(t *testing.T) string {
+				p := filepath.Join(t.TempDir(), "notavideo.txt")
+				require.NoError(t, os.WriteFile(p, []byte("hello"), 0o600))
+
+				return p
+			},
+			preserveSource: true,
+			expected:       ProbeOutput{IsValidMedia: false},
+			errFunc:        require.NoError,
+			fileDeleted:    false,
 		},
 	}
 
@@ -49,7 +63,7 @@ func TestRunProbe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := tt.setupPath(t)
 
-			got, err := RunProbe(t.Context(), path, "", false)
+			got, err := RunProbe(t.Context(), path, "", false, tt.preserveSource)
 
 			tt.errFunc(t, err)
 			assert.Equal(t, tt.expected, got)
@@ -57,6 +71,9 @@ func TestRunProbe(t *testing.T) {
 			if tt.fileDeleted {
 				_, statErr := os.Stat(path)
 				assert.True(t, os.IsNotExist(statErr), "expected file to be deleted")
+			} else if tt.preserveSource {
+				_, statErr := os.Stat(path)
+				assert.NoError(t, statErr, "file must not be deleted when preserve_source is true")
 			}
 		})
 	}
@@ -65,7 +82,7 @@ func TestRunProbe(t *testing.T) {
 func TestRunProbe_ValidMediaFile(t *testing.T) {
 	path := copyTestVideo(t)
 
-	got, err := RunProbe(t.Context(), path, "", false)
+	got, err := RunProbe(t.Context(), path, "", false, false)
 
 	require.NoError(t, err)
 	// Check all non-float fields via struct equality (DurationSeconds zeroed out).
@@ -94,7 +111,7 @@ func TestRunProbe_CancelledContextPropagatesError(t *testing.T) {
 
 	path := copyTestVideo(t)
 
-	_, err := RunProbe(ctx, path, "", false)
+	_, err := RunProbe(ctx, path, "", false, false)
 	require.ErrorIs(t, err, context.Canceled, "cancelled context should propagate as error, not delete the file")
 
 	_, statErr := os.Stat(path)
@@ -113,7 +130,7 @@ func TestRunProbe_PrunesEmptyParentsOnInvalidFile(t *testing.T) {
 	filePath := filepath.Join(subdir, "notavideo.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
 
-	got, err := RunProbe(t.Context(), filePath, watchRoot, false)
+	got, err := RunProbe(t.Context(), filePath, watchRoot, false, false)
 	require.NoError(t, err)
 	assert.False(t, got.IsValidMedia)
 
@@ -142,7 +159,7 @@ func TestRunProbe_StopsAtNonEmptyParentOnInvalidFile(t *testing.T) {
 	sibling := filepath.Join(subdir, "other.mkv")
 	require.NoError(t, os.WriteFile(sibling, []byte("data"), 0o600))
 
-	got, err := RunProbe(t.Context(), filePath, watchRoot, false)
+	got, err := RunProbe(t.Context(), filePath, watchRoot, false, false)
 	require.NoError(t, err)
 	assert.False(t, got.IsValidMedia)
 
@@ -162,7 +179,7 @@ func TestRunProbe_RetainEmptyDirsSkipsPruning(t *testing.T) {
 	filePath := filepath.Join(subdir, "notavideo.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
 
-	got, err := RunProbe(t.Context(), filePath, watchRoot, true)
+	got, err := RunProbe(t.Context(), filePath, watchRoot, true, false)
 	require.NoError(t, err)
 	assert.False(t, got.IsValidMedia)
 
@@ -171,6 +188,30 @@ func TestRunProbe_RetainEmptyDirsSkipsPruning(t *testing.T) {
 
 	_, statErr = os.Stat(subdir)
 	assert.NoError(t, statErr, "empty parent should be kept when retainEmptyDirs is true")
+}
+
+// TestRunProbe_PreserveSourceRetainsFileAndDirectories verifies that when
+// preserveSource is true, a non-media file is not deleted and its parent
+// directories are not pruned even when they would otherwise be empty.
+func TestRunProbe_PreserveSourceRetainsFileAndDirectories(t *testing.T) {
+	t.Parallel()
+
+	watchRoot := t.TempDir()
+	subdir := filepath.Join(watchRoot, "Some.Release.Name")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	filePath := filepath.Join(subdir, "notavideo.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o600))
+
+	got, err := RunProbe(t.Context(), filePath, watchRoot, false, true)
+	require.NoError(t, err)
+	assert.False(t, got.IsValidMedia)
+
+	_, statErr := os.Stat(filePath)
+	assert.NoError(t, statErr, "file must not be deleted when preserve_source is true")
+
+	_, statErr = os.Stat(subdir)
+	assert.NoError(t, statErr, "parent directory must not be pruned when preserve_source is true")
 }
 
 // TestRunProbe_StillImageIsDeletedAndMarkedInvalid verifies that still image
@@ -187,7 +228,7 @@ func TestRunProbe_StillImageIsDeletedAndMarkedInvalid(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "artwork.png")
 	require.NoError(t, os.WriteFile(filePath, buf.Bytes(), 0o600))
 
-	got, err := RunProbe(t.Context(), filePath, "", false)
+	got, err := RunProbe(t.Context(), filePath, "", false, false)
 	require.NoError(t, err)
 	assert.False(t, got.IsValidMedia, "PNG file must not be treated as valid media")
 

@@ -102,7 +102,7 @@ func (a *Activities) Register(r Registrar) {
 func (a *Activities) Probe(ctx context.Context, input MediaInput) (ProbeOutput, error) {
 	start := time.Now()
 
-	out, err := RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+	out, err := RunProbe(ctx, input.FilePath, input.WatchRoot, input.RetainEmptyDirectories, input.PreserveSource)
 	logStepResult(ctx, "probe", input.FilePath, start, err)
 
 	if err != nil {
