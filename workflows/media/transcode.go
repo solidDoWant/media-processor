@@ -148,42 +148,71 @@ func codecName(c ffmpeg.Codec) string {
 	}
 }
 
-// RunTranscode transcodes filePath into outputDir, writing to a temp file named
+// TranscodeRequest is the input to RunTranscode.
+type TranscodeRequest struct {
+	// FilePath is the absolute path of the source media file to transcode.
+	FilePath string
+	// Probe is the output of RunProbe for FilePath.
+	Probe ProbeOutput
+	// CropParams is the crop region to apply, or nil for no cropping.
+	// When non-nil and the selected video codec would be CodecCopy, the codec
+	// is promoted to CodecH265 so the crop filter can be applied.
+	CropParams *ffmpeg.CropParams
+	// OutputDir is the directory the final .mkv is written into.
+	OutputDir string
+	// WatcherRoot is the root directory that the watcher monitors. When non-empty,
+	// the subdirectory of FilePath relative to WatcherRoot is mirrored under OutputDir,
+	// preserving the download client's directory structure. When empty, the output is
+	// written flat into OutputDir.
+	WatcherRoot string
+	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
+	// an empty string uses the libav default (auto-select).
+	HardwareDevicePath string
+	// H265CRF is the constant-quality value for H.265 encoders. 0 means use the
+	// encoder's built-in default; valid explicit values are 1–51 (lower = higher
+	// quality). For libx265 this is the CRF; for hevc_nvenc it is the CQ value;
+	// for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value. Values
+	// outside 1–51 are silently ignored and the encoder default is used.
+	H265CRF int
+	// ProgressLogInterval controls how often a progress log line is emitted during
+	// transcoding. Zero disables progress logging.
+	ProgressLogInterval time.Duration
+	// Heartbeat, when non-nil, is invoked from the progress-consumer goroutine on
+	// every FFmpeg progress tick AND on every ProgressLogInterval ticker tick (so
+	// the copy/remux path, which produces no FFmpeg progress packets, still
+	// signals liveness within HeartbeatTimeout). The activity wrapper supplies a
+	// callback that forwards to activity.RecordHeartbeat so a stalled worker is
+	// detected via the configured Temporal HeartbeatTimeout. Tests pass nil.
+	// Heartbeat is only invoked when ProgressLogInterval > 0, since the progress
+	// goroutine that drives it is gated on that interval.
+	Heartbeat func(ffmpeg.Progress)
+	// Library is the arr library used to fetch poster artwork. When nil, no fetch
+	// is attempted and transcoding proceeds without an embedded attachment, and
+	// ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
+	// embeddable image, transcoding proceeds without an embedded attachment and
+	// ArtworkFetchSkipped is set to true.
+	Library medialib.ArrLibrary
+}
+
+// RunTranscode transcodes req.FilePath into req.OutputDir, writing to a temp file named
 // "._<stem>.mkv.tmp" and atomically renaming it to "<stem>.mkv" on success.
 // The output always carries a .mkv extension to match the forced MKV container.
 // Writing directly to the output directory avoids a cross-filesystem copy and
 // guarantees the rename is atomic on Linux (same directory).
-// probe is the output of RunProbe for filePath.
-// cropParams is the crop region to apply, or nil for no cropping.
-// When cropParams is non-nil and videoCodec would be CodecCopy, the codec is
-// promoted to CodecH265 so the crop filter can be applied.
-// watcherRoot is the root directory that the watcher monitors. When non-empty,
-// the subdirectory of filePath relative to watcherRoot is mirrored under outputDir,
-// preserving the download client's directory structure. When empty, the output is
-// written flat into outputDir (no subdirectory).
-// hardwareDevicePath is the device path passed to CreateHardwareDeviceContext;
-// an empty string uses the libav default (auto-select).
-// h265CRF is the constant-quality value for H.265 encoders. 0 means use the
-// encoder's built-in default; valid explicit values are 1–51 (lower = higher
-// quality). For libx265 this is the CRF; for hevc_nvenc it is the CQ value;
-// for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value. Values
-// outside 1–51 are silently ignored and the encoder default is used.
-// progressLogInterval controls how often a progress log line is emitted during
-// transcoding. Zero disables progress logging.
-// heartbeat, when non-nil, is invoked from the progress-consumer goroutine on
-// every FFmpeg progress tick AND on every progressLogInterval ticker tick (so
-// the copy/remux path, which produces no FFmpeg progress packets, still
-// signals liveness within HeartbeatTimeout). The activity wrapper supplies a
-// callback that forwards to activity.RecordHeartbeat so a stalled worker is
-// detected via the configured Temporal HeartbeatTimeout. Tests pass nil.
-// heartbeat is only invoked when progressLogInterval &gt; 0, since the progress
-// goroutine that drives it is gated on that interval.
-// library is the arr library used to fetch poster artwork. When nil, no fetch
-// is attempted and transcoding proceeds without an embedded attachment, and
-// ArtworkFetchSkipped is not set. When non-nil and the fetch yields no
-// embeddable image, transcoding proceeds without an embedded attachment and
-// ArtworkFetchSkipped is set to true.
-func RunTranscode(ctx context.Context, filePath string, probe ProbeOutput, cropParams *ffmpeg.CropParams, outputDir string, watcherRoot string, hardwareDevicePath string, h265CRF int, progressLogInterval time.Duration, heartbeat func(ffmpeg.Progress), library medialib.ArrLibrary) (TranscodeOutput, error) {
+func RunTranscode(ctx context.Context, req TranscodeRequest) (TranscodeOutput, error) {
+	var (
+		filePath            = req.FilePath
+		probe               = req.Probe
+		cropParams          = req.CropParams
+		outputDir           = req.OutputDir
+		watcherRoot         = req.WatcherRoot
+		hardwareDevicePath  = req.HardwareDevicePath
+		h265CRF             = req.H265CRF
+		progressLogInterval = req.ProgressLogInterval
+		heartbeat           = req.Heartbeat
+		library             = req.Library
+	)
+
 	transcodeStart := time.Now()
 
 	srcInfo, err := os.Stat(filePath)

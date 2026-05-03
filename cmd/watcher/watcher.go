@@ -18,7 +18,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
-	"github.com/solidDoWant/media-processor/pkg/medialib"
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
@@ -28,11 +27,8 @@ import (
 // loop counts it as neither a dispatch nor a dispatch error.
 var errWorkflowAlreadyStarted = errors.New("workflow already started")
 
-// dispatchFunc submits a workflow run for the given absolute file path, media type, mapping name,
-// whether to preserve the source file after processing, the watch root directory, whether to
-// retain empty parent directories after source-file deletion, the absolute output directory path,
-// and the arr-side remote output path prefix (empty means no translation).
-type dispatchFunc func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error
+// dispatchFunc submits a workflow run for the given media input.
+type dispatchFunc func(ctx context.Context, input mediatypes.MediaInput) error
 
 // scanInstruments holds all Prometheus collectors used during scan. Collectors
 // are registered once at startup and reused across every scan invocation.
@@ -147,24 +143,13 @@ func workflowID(absFilePath string) string {
 // conflict fires, the dispatch returns errWorkflowAlreadyStarted so the scan loop
 // can suppress both the dispatch and dispatch-error counters for that file.
 func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
-	return func(ctx context.Context, filePath string, mediaType medialib.MediaType, mappingName string, preserveSource bool, watchRoot string, retainEmptyDirs bool, outputPath string, outputRemotePath string) error {
+	return func(ctx context.Context, input mediatypes.MediaInput) error {
 		options := client.StartWorkflowOptions{
-			ID:                                       workflowID(filePath),
+			ID:                                       workflowID(input.FilePath),
 			TaskQueue:                                taskQueue,
 			WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 			WorkflowIDConflictPolicy:                 enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 			WorkflowExecutionErrorWhenAlreadyStarted: true,
-		}
-
-		input := mediatypes.MediaInput{
-			FilePath:               filePath,
-			MediaType:              mediaType,
-			MappingName:            mappingName,
-			PreserveSource:         preserveSource,
-			WatchRoot:              watchRoot,
-			RetainEmptyDirectories: retainEmptyDirs,
-			OutputPath:             outputPath,
-			OutputRemotePath:       outputRemotePath,
 		}
 
 		if _, err := c.ExecuteWorkflow(ctx, options, mediatypes.MediaWorkflowName, input); err != nil {
@@ -323,7 +308,16 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 			filesDiscovered++
 
-			dispatchErr := dispatch(ctx, path, w.MediaType, w.Name, w.PreserveSource, absWatchRoot, w.RetainEmptyDirectories, absOutputPath, outputRemotePath)
+			dispatchErr := dispatch(ctx, mediatypes.MediaInput{
+				FilePath:               path,
+				MediaType:              w.MediaType,
+				MappingName:            w.Name,
+				PreserveSource:         w.PreserveSource,
+				WatchRoot:              absWatchRoot,
+				RetainEmptyDirectories: w.RetainEmptyDirectories,
+				OutputPath:             absOutputPath,
+				OutputRemotePath:       outputRemotePath,
+			})
 
 			switch {
 			case dispatchErr == nil:

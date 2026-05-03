@@ -15,6 +15,7 @@ import (
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
 // noopInstruments returns a scanInstruments registered against a private throwaway registry.
@@ -187,8 +188,8 @@ func TestScan_FileInWatchedDir(t *testing.T) {
 
 	var calls []call
 
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, mn string, _ bool, _ string, _ bool, _ string, _ string) error {
-		calls = append(calls, call{fp, mt, mn})
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		calls = append(calls, call{input.FilePath, input.MediaType, input.MappingName})
 		return nil
 	}
 
@@ -218,8 +219,8 @@ func TestScan_SubdirectoryFilesUseParentMapping(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -245,7 +246,7 @@ func TestScan_DispatchErrorsAreAggregated(t *testing.T) {
 
 	var count int
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	dispatch := func(_ context.Context, _ mediatypes.MediaInput) error {
 		count++
 		return errors.New("simulated dispatch failure")
 	}
@@ -272,7 +273,7 @@ func TestScan_ContextCancellationStopsWalk(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately before scan starts
 
-	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	err := scan(ctx, cfg, noopInstruments(t), func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	})
 	assert.ErrorIs(t, err, context.Canceled)
@@ -296,8 +297,8 @@ func TestScan_MultipleWatchEntries(t *testing.T) {
 	}
 
 	dispatched := make(map[string]medialib.MediaType) // path → media type
-	dispatch := func(_ context.Context, fp string, mt medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched[fp] = mt
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched[input.FilePath] = input.MediaType
 		return nil
 	}
 
@@ -323,7 +324,7 @@ func TestScan_MetricsPresenceAfterScan(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -351,7 +352,7 @@ func TestScan_SuccessCounterIncrements(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -378,7 +379,7 @@ func TestScan_ErrorCounterIncrements(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return errors.New("simulated dispatch failure")
 	})
 
@@ -406,7 +407,7 @@ func TestScan_DurationObservedPerMapping(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -444,7 +445,7 @@ func TestScan_LastSuccessfulScanSetOnSuccess(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -471,7 +472,7 @@ func TestScan_FilesDiscoveredCounter(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -501,7 +502,7 @@ func TestScan_DispatchesTotalCounter(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return nil
 	}))
 
@@ -533,8 +534,8 @@ func TestScan_IgnorePatternSkipsMatchingFile(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -562,8 +563,8 @@ func TestScan_IgnorePatternPrunesMatchingDirectory(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -589,8 +590,8 @@ func TestScan_NonMatchingFileDispatchedWithIgnorePatterns(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -614,7 +615,7 @@ func TestScan_DispatchErrorsCounter(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	_ = scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return errors.New("temporal unavailable")
 	})
 
@@ -646,7 +647,7 @@ func TestScan_AlreadyStartedNotCountedAsDispatchOrError(t *testing.T) {
 	}
 
 	instruments, reg := newTestInstruments(t)
-	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
+	require.NoError(t, scan(t.Context(), cfg, instruments, func(_ context.Context, _ mediatypes.MediaInput) error {
 		return errWorkflowAlreadyStarted
 	}))
 
@@ -709,8 +710,8 @@ func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
 
 			var dispatched bool
 
-			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, ps bool, _ string, _ bool, _ string, _ string) error {
-				gotPreserveSource = ps
+			dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+				gotPreserveSource = input.PreserveSource
 				dispatched = true
 
 				return nil
@@ -741,8 +742,8 @@ func TestScan_WatchRootForwardedToDispatch(t *testing.T) {
 
 	var dispatched bool
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, wr string, _ bool, _ string, _ string) error {
-		gotWatchRoot = wr
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		gotWatchRoot = input.WatchRoot
 		dispatched = true
 
 		return nil
@@ -783,8 +784,8 @@ func TestScan_RetainEmptyDirsForwardedToDispatch(t *testing.T) {
 
 			var dispatched bool
 
-			dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, red bool, _ string, _ string) error {
-				gotRetainEmptyDirs = red
+			dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+				gotRetainEmptyDirs = input.RetainEmptyDirectories
 				dispatched = true
 
 				return nil
@@ -814,8 +815,8 @@ func TestScan_SkipsSentinelledFile(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -839,8 +840,8 @@ func TestScan_SkipsSentinelFileItself(t *testing.T) {
 
 	var dispatched []string
 
-	dispatch := func(_ context.Context, fp string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, _ string) error {
-		dispatched = append(dispatched, fp)
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		dispatched = append(dispatched, input.FilePath)
 		return nil
 	}
 
@@ -867,8 +868,8 @@ func TestScan_OutputPathForwardedToDispatch(t *testing.T) {
 
 	var dispatched bool
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, op string, _ string) error {
-		gotOutputPath = op
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		gotOutputPath = input.OutputPath
 		dispatched = true
 
 		return nil
@@ -900,8 +901,8 @@ func TestScan_OutputRemotePathForwardedToDispatch(t *testing.T) {
 
 	var dispatched bool
 
-	dispatch := func(_ context.Context, _ string, _ medialib.MediaType, _ string, _ bool, _ string, _ bool, _ string, orp string) error {
-		gotOutputRemotePath = orp
+	dispatch := func(_ context.Context, input mediatypes.MediaInput) error {
+		gotOutputRemotePath = input.OutputRemotePath
 		dispatched = true
 
 		return nil

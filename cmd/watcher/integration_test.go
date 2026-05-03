@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
 // TestWatcher_ConnectsToTemporal verifies that the watcher successfully connects to a
@@ -86,12 +87,20 @@ func TestMultiWatcherDedup_OnlyOneWorkflowPerFile(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "movie.mkv")
 	require.NoError(t, os.WriteFile(filePath, []byte{}, 0o600))
 
+	input := mediatypes.MediaInput{
+		FilePath:    filePath,
+		MediaType:   medialib.MovieType,
+		MappingName: "movies",
+		WatchRoot:   "/watch",
+		OutputPath:  "/out",
+	}
+
 	require.NoError(t,
-		dispatch(t.Context(), filePath, medialib.MovieType, "movies", false, "/watch", false, "/out", ""),
+		dispatch(t.Context(), input),
 		"first dispatch should succeed",
 	)
 
-	err = dispatch(t.Context(), filePath, medialib.MovieType, "movies", false, "/watch", false, "/out", "")
+	err = dispatch(t.Context(), input)
 	require.ErrorIs(t, err, errWorkflowAlreadyStarted, "second dispatch should be deduplicated")
 
 	wfID := workflowID(filePath)
