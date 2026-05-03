@@ -90,15 +90,54 @@ func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, 
 	return c.getEpisodeByFilePath(ctx, path)
 }
 
+// findTrackedDownloadID returns the download client's native ID for the pending
+// tracked download that corresponds to the episode at path, or "" if none is
+// found. API errors are treated as "no match" so callers always get a safe
+// fallback.
+func (c *Client) findTrackedDownloadID(ctx context.Context, path string) string {
+	episode, err := c.getEpisodeByFilePath(ctx, path)
+	if err != nil {
+		return ""
+	}
+
+	queue, err := c.sonarr.GetQueueContext(ctx, 0, 100)
+	if err != nil {
+		return ""
+	}
+
+	for _, record := range queue.Records {
+		if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
+			continue
+		}
+		// Skip records already marked imported — Sonarr completed this on its own.
+		if strings.EqualFold(record.TrackedDownloadState, "imported") {
+			continue
+		}
+		if record.DownloadID == "" {
+			continue
+		}
+		return record.DownloadID
+	}
+
+	return ""
+}
+
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command
 // for path, causing Sonarr to import the file at path into the library.
+// When a pending tracked download for the episode is found in the queue, its
+// download client ID is included so Sonarr calls VerifyImport and removes the
+// item from the downloads queue.
 func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
+	downloadClientID := c.findTrackedDownloadID(ctx, path)
+
 	requestPayload := struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Name             string `json:"name"`
+		Path             string `json:"path"`
+		DownloadClientId string `json:"downloadClientId,omitempty"`
 	}{
-		Name: "DownloadedEpisodesScan",
-		Path: path,
+		Name:             "DownloadedEpisodesScan",
+		Path:             path,
+		DownloadClientId: downloadClientID,
 	}
 
 	var body bytes.Buffer
