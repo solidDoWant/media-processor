@@ -443,18 +443,25 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 		mediaType := inStream.CodecParameters().MediaType()
 
-		// When cover art is being embedded into a Matroska output, drop all
-		// existing attachment streams so the output contains only the freshly
-		// fetched poster. MKV attachments are written as MediaTypeAttachment but
-		// read back by the matroska demuxer as video streams with
-		// DispositionFlagAttachedPic, so we must check both.
-		if len(t.coverArtBytes) > 0 && t.effectiveContainerIsMKV() {
-			if mediaType == astiav.MediaTypeAttachment {
+		// MKV output: drop the source's embedded cover art. The matroska demuxer
+		// can surface previously-embedded cover art in two forms:
+		//   - MediaTypeVideo with DispositionFlagAttachedPic (the mp4 form, also
+		//     how matroska re-reads attachments written by addCoverArtStream).
+		//   - MediaTypeAttachment (other MKV attachments, including subtitle
+		//     fonts and arbitrary payload).
+		// The video form is dropped unconditionally: a still cover image fed
+		// into the video encoder either wastes an extra HEVC stream or, on QSV,
+		// fails encoder init with "Function not implemented". Generic
+		// attachments are dropped only when fresh cover art is being embedded,
+		// so that subtitle fonts and other non-cover-art payload survive when
+		// the caller is not replacing the cover art.
+		if t.effectiveContainerIsMKV() {
+			if mediaType == astiav.MediaTypeVideo &&
+				inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
 				continue
 			}
 
-			if mediaType == astiav.MediaTypeVideo &&
-				inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
+			if len(t.coverArtBytes) > 0 && mediaType == astiav.MediaTypeAttachment {
 				continue
 			}
 		}
