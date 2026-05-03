@@ -1,0 +1,239 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/solidDoWant/media-processor/internal/envvar"
+	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
+	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
+	"github.com/solidDoWant/media-processor/workflows/media"
+)
+
+// workerConfig bundles the per-subsystem configuration consumed by run().
+// Concentrating env-var reads here keeps main.go to wiring only and gives
+// operators a single file to grep when answering "what does this binary read?".
+type workerConfig struct {
+	LogLevel          string
+	TaskQueue         string
+	HealthAddr        string
+	WebhookURL        string
+	WorkerStopTimeout time.Duration
+	Radarr            radarr.Config
+	Sonarr            sonarr.Config
+	Workflow          media.MediaWorkflowConfig
+}
+
+// defaultHealthAddr is the fallback HTTP listen address for the health server
+// when HEALTH_ADDR is unset.
+const defaultHealthAddr = ":8080"
+
+// loadConfig reads worker configuration from environment variables and returns
+// a bundle of sub-structs ready to be handed to existing constructors.
+//
+// METRICS_ADDR is intentionally not read here — metrics.NewFromEnv owns it.
+func loadConfig() (workerConfig, error) {
+	cfg := workerConfig{
+		LogLevel:   os.Getenv("LOG_LEVEL"),
+		HealthAddr: os.Getenv("HEALTH_ADDR"),
+		WebhookURL: os.Getenv("MEDIA_WEBHOOK_URL"),
+	}
+
+	if cfg.HealthAddr == "" {
+		cfg.HealthAddr = defaultHealthAddr
+	}
+
+	taskQueue, err := envvar.RequireEnv("TEMPORAL_TASK_QUEUE")
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.TaskQueue = taskQueue
+
+	radarrURL, err := envvar.RequireEnv("RADARR_URL")
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	radarrAPIKey, err := envvar.RequireEnv("RADARR_API_KEY")
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.Radarr = radarr.Config{URL: radarrURL, APIKey: radarrAPIKey}
+
+	sonarrURL, err := envvar.RequireEnv("SONARR_URL")
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	sonarrAPIKey, err := envvar.RequireEnv("SONARR_API_KEY")
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.Sonarr = sonarr.Config{URL: sonarrURL, APIKey: sonarrAPIKey}
+
+	workflow, err := loadWorkflowConfig()
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.Workflow = workflow
+
+	// Default WORKER_STOP_TIMEOUT to the effective transcodeTimeout (not
+	// media.DefaultTranscodeTimeout) so an operator who raises
+	// MEDIA_TRANSCODE_TIMEOUT does not also have to set WORKER_STOP_TIMEOUT to
+	// keep the drain ceiling above the longest activity.
+	workerStopTimeout, err := parseTimeout("WORKER_STOP_TIMEOUT", workflow.TranscodeTimeout)
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.WorkerStopTimeout = workerStopTimeout
+
+	return cfg, nil
+}
+
+// loadWorkflowConfig reads the media-workflow tuning env vars and returns a
+// ready-to-use MediaWorkflowConfig. Split from loadConfig to keep the dense
+// crop/timeout/CRF block testable in isolation. Validates
+// MEDIA_HARDWARE_DEVICE_PATH so a typo surfaces at startup rather than on the
+// first transcode.
+func loadWorkflowConfig() (media.MediaWorkflowConfig, error) {
+	hardwareDevicePath := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
+	if err := validateHardwareDevicePath(hardwareDevicePath); err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	minCropX, err := parseCropThreshold("MEDIA_MIN_CROP_X", 10)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	minCropY, err := parseCropThreshold("MEDIA_MIN_CROP_Y", 10)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	detectCropTimeout, err := parseTimeout("MEDIA_DETECT_CROP_TIMEOUT", media.DefaultDetectCropTimeout)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	transcodeTimeout, err := parseTimeout("MEDIA_TRANSCODE_TIMEOUT", media.DefaultTranscodeTimeout)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	h265CRF, err := parseH265CRF("MEDIA_H265_CRF")
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	progressLogInterval, err := parseTimeout("MEDIA_PROGRESS_LOG_INTERVAL", 30*time.Second)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	highCardinalityLabels, err := envvar.ParseBool("METRICS_HIGH_CARDINALITY_LABELS", false)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	return media.MediaWorkflowConfig{
+		HardwareDevicePath:    hardwareDevicePath,
+		HighCardinalityLabels: highCardinalityLabels,
+		MinCropX:              minCropX,
+		MinCropY:              minCropY,
+		DetectCropTimeout:     detectCropTimeout,
+		TranscodeTimeout:      transcodeTimeout,
+		H265CRF:               h265CRF,
+		ProgressLogInterval:   progressLogInterval,
+	}, nil
+}
+
+// parseCropThreshold reads an integer from the named environment variable.
+// If the variable is unset or empty, defaultVal is returned. A value of -1 is
+// accepted (disables the threshold). Any other non-integer value is a fatal error.
+func parseCropThreshold(envVar string, defaultVal int) (int, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer (got %q): %w", envVar, raw, err)
+	}
+
+	return v, nil
+}
+
+// parseH265CRF reads the H.265 constant-quality value from the named environment
+// variable. If the variable is unset or empty, 0 is returned (encoder default).
+// Valid values are 1–51; any other non-integer or out-of-range value is a fatal error.
+func parseH265CRF(envVar string) (int, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return 0, nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 1 || v > 51 {
+		return 0, fmt.Errorf("%s must be an integer between 1 and 51 (got %q)", envVar, raw)
+	}
+
+	return v, nil
+}
+
+// parseTimeout reads a Go duration string from the named environment variable.
+// If the variable is unset or empty, defaultVal is returned. Any non-duration
+// value is a fatal error.
+func parseTimeout(envVar string, defaultVal time.Duration) (time.Duration, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration (got %q): %w", envVar, raw, err)
+	}
+
+	return d, nil
+}
+
+// validateHardwareDevicePath rejects paths that exist but are not character
+// devices and paths that do not exist at all, surfacing typos like
+// "/dev/dri/render128" (missing D) before any workflow is dispatched.
+//
+// MEDIA_HARDWARE_DEVICE_PATH is overloaded: QSV/VAAPI take a filesystem path,
+// but NVENC takes a CUDA ordinal string like "0" or "1" (see
+// docs/hardware-acceleration.md). The backend is auto-selected at activity
+// time from the encoders FFmpeg exposes, so we cannot tell at startup which
+// interpretation will apply — a value that parses as a non-negative decimal
+// integer is treated as the ordinal form and skipped rather than rejected as
+// a missing file.
+func validateHardwareDevicePath(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	if _, err := strconv.ParseUint(path, 10, 32); err == nil {
+		return nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("MEDIA_HARDWARE_DEVICE_PATH %q: %w", path, err)
+	}
+
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("MEDIA_HARDWARE_DEVICE_PATH %q is not a character device", path)
+	}
+
+	return nil
+}
