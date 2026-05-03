@@ -190,10 +190,11 @@ config:
 
 ### `config.worker.media.transcode`
 
-| Field                                        | Type   | Default | Description                                                                                        |
-| -------------------------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------- |
-| `config.worker.media.transcode.timeout`      | string | `4h`    | Sets `MEDIA_TRANSCODE_TIMEOUT`                                                                     |
-| `config.worker.media.transcode.videoQuality` | string | `""`    | H.265 CRF value (1–51, lower = better quality / larger file). Sets `MEDIA_H265_CRF` when non-empty |
+| Field                                                | Type   | Default | Description                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.worker.media.transcode.timeout`              | string | `4h`    | Sets `MEDIA_TRANSCODE_TIMEOUT`                                                                                                                                                                                                                                                                                                                       |
+| `config.worker.media.transcode.videoQuality`         | string | `""`    | H.265 CRF value (1–51, lower = better quality / larger file). Sets `MEDIA_H265_CRF` when non-empty                                                                                                                                                                                                                                                   |
+| `config.worker.media.transcode.progressLogInterval`  | string | `""`    | Sets `MEDIA_PROGRESS_LOG_INTERVAL` when non-empty. Controls transcode progress log cadence and also drives the activity's Temporal `HeartbeatTimeout` (set to `2x` this value), so a stuck encode is detected within roughly twice this interval. Set to `"0s"` to disable both. When empty, the binary default of `30s` applies                     |
 
 ### `config.worker.media.webhookUrl`
 
