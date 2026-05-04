@@ -202,13 +202,11 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 		{
 			name:            "transitions queued then started then completed",
 			commandStatuses: []string{"queued", "started", "completed"},
-			errFunc:         require.NoError,
 		},
 		{
 			name:            "completed with successful result is treated as success",
 			commandStatuses: []string{"completed"},
 			commandResult:   "successful",
-			errFunc:         require.NoError,
 		},
 		{
 			name:            "completed with unsuccessful result surfaces as error",
@@ -241,6 +239,10 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.errFunc == nil {
+				test.errFunc = require.NoError
+			}
+
 			srv := newTestServerWithConfig(t, testServerConfig{
 				commandStatuses:         test.commandStatuses,
 				commandResult:           test.commandResult,

@@ -27,8 +27,6 @@ func TestWait(t *testing.T) {
 	}{
 		{
 			name:      "zero id short-circuits without polling",
-			statuses:  nil,
-			errFunc:   require.NoError,
 			wantCalls: 0,
 		},
 		{
@@ -36,7 +34,6 @@ func TestWait(t *testing.T) {
 			statuses: []arrcommand.Status{
 				{Status: "completed"},
 			},
-			errFunc:   require.NoError,
 			wantCalls: 1,
 		},
 		{
@@ -46,7 +43,6 @@ func TestWait(t *testing.T) {
 				{Status: "started"},
 				{Status: "completed"},
 			},
-			errFunc:   require.NoError,
 			wantCalls: 3,
 		},
 		{
@@ -54,7 +50,6 @@ func TestWait(t *testing.T) {
 			statuses: []arrcommand.Status{
 				{Status: "completed", Result: "successful"},
 			},
-			errFunc:   require.NoError,
 			wantCalls: 1,
 		},
 		{
@@ -97,7 +92,6 @@ func TestWait(t *testing.T) {
 			statuses: []arrcommand.Status{
 				{Status: "COMPLETED"},
 			},
-			errFunc:   require.NoError,
 			wantCalls: 1,
 		},
 	}
@@ -105,6 +99,10 @@ func TestWait(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+
+			if test.errFunc == nil {
+				test.errFunc = require.NoError
+			}
 
 			id := int64(1)
 			if test.name == "zero id short-circuits without polling" {
