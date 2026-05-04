@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -665,19 +668,126 @@ func TestScan_AlreadyStartedNotCountedAsDispatchOrError(t *testing.T) {
 	assert.EqualValues(t, 1, m.GetCounter().GetValue())
 }
 
-// TestWorkflowID_DeterministicAndPathSensitive verifies that workflowID is stable for
-// the same path across calls and produces a different ID for a different path.
+// TestWorkflowID_DeterministicAndPathSensitive verifies that workflowID is
+// stable for the same input across calls and produces a different ID for two
+// paths whose basenames are identical but whose absolute paths differ.
 func TestWorkflowID_DeterministicAndPathSensitive(t *testing.T) {
 	t.Parallel()
 
-	a := workflowID("/watch/movies/movie.mkv")
-	b := workflowID("/watch/movies/movie.mkv")
-	c := workflowID("/watch/movies/other.mkv")
+	a := workflowID(mediatypes.MediaInput{FilePath: "/watch/movies/movie.mkv", MappingName: "movies"})
+	b := workflowID(mediatypes.MediaInput{FilePath: "/watch/movies/movie.mkv", MappingName: "movies"})
+	sameBasename := workflowID(mediatypes.MediaInput{FilePath: "/watch/other/movie.mkv", MappingName: "movies"})
 
-	assert.Equal(t, a, b, "same path should produce the same WorkflowID")
-	assert.NotEqual(t, a, c, "different paths should produce different WorkflowIDs")
-	assert.True(t, len(a) > 0 && len(a) < 1000, "WorkflowID should be non-empty and within Temporal's length limits")
-	assert.Contains(t, a, "media-", "WorkflowID should carry the media- prefix for UI readability")
+	assert.Equal(t, a, b, "same input should produce the same WorkflowID")
+	assert.NotEqual(t, a, sameBasename, "different absolute paths should produce different WorkflowIDs even when basenames match")
+}
+
+// TestWorkflowID_Format verifies that the WorkflowID has the structure
+// "{mappingName}-{basename}-{shortHash}" with a 12-hex-character hash derived
+// from the absolute path.
+func TestWorkflowID_Format(t *testing.T) {
+	t.Parallel()
+
+	path := "/watch/movies/movie.mkv"
+	id := workflowID(mediatypes.MediaInput{FilePath: path, MappingName: "movies"})
+
+	sum := sha256.Sum256([]byte(path))
+	expectedHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+
+	assert.Equal(t, "movies-movie.mkv-"+expectedHash, id)
+	assert.LessOrEqual(t, len(id), workflowIDMaxLen)
+}
+
+// TestWorkflowID_BasenameSanitization verifies that characters outside
+// [A-Za-z0-9._-] in the basename are replaced with underscores, adjacent
+// underscores are collapsed, and leading dots are stripped.
+func TestWorkflowID_BasenameSanitization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		path             string
+		expectedBasename string
+	}{
+		{name: "spaces and brackets", path: "/watch/show/Show Title (S01E01) [1080p].mkv", expectedBasename: "Show_Title_S01E01_1080p_.mkv"},
+		{name: "unicode runes replaced", path: "/watch/show/résumé.mkv", expectedBasename: "r_sum_.mkv"},
+		{name: "leading dots stripped", path: "/watch/show/.hidden.mkv", expectedBasename: "hidden.mkv"},
+		{name: "adjacent specials collapse", path: "/watch/show/a   b.mkv", expectedBasename: "a_b.mkv"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := workflowID(mediatypes.MediaInput{FilePath: test.path, MappingName: "show"})
+
+			sum := sha256.Sum256([]byte(test.path))
+			expectedHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+			assert.Equal(t, "show-"+test.expectedBasename+"-"+expectedHash, id)
+		})
+	}
+}
+
+// TestWorkflowID_MappingNameSanitization verifies that characters outside
+// [A-Za-z0-9._-] in the mapping name are replaced with underscores and
+// adjacent underscores are collapsed.
+func TestWorkflowID_MappingNameSanitization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		mappingName     string
+		expectedMapping string
+	}{
+		{name: "space replaced", mappingName: "my movies", expectedMapping: "my_movies"},
+		{name: "punctuation collapsed", mappingName: "my!@#movies", expectedMapping: "my_movies"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := workflowID(mediatypes.MediaInput{FilePath: "/watch/x/movie.mkv", MappingName: test.mappingName})
+			assert.True(t, strings.HasPrefix(id, test.expectedMapping+"-"), "expected sanitized mapping segment %q at start of %q", test.expectedMapping, id)
+		})
+	}
+}
+
+// TestWorkflowID_LengthCapPreservesHash verifies that when the assembled ID
+// would exceed Temporal's 1000-character WorkflowID limit, the basename
+// segment is truncated while the trailing -{shortHash} suffix is preserved
+// unchanged.
+func TestWorkflowID_LengthCapPreservesHash(t *testing.T) {
+	t.Parallel()
+
+	longBasename := strings.Repeat("a", 2000) + ".mkv"
+	path := "/watch/movies/" + longBasename
+	id := workflowID(mediatypes.MediaInput{FilePath: path, MappingName: "movies"})
+
+	sum := sha256.Sum256([]byte(path))
+	expectedHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+
+	assert.Equal(t, workflowIDMaxLen, len(id), "ID should be truncated to exactly the cap")
+	assert.True(t, strings.HasPrefix(id, "movies-"), "mapping prefix must be preserved")
+	assert.True(t, strings.HasSuffix(id, "-"+expectedHash), "short hash suffix must be preserved unchanged")
+}
+
+// TestWorkflowID_LengthCapTrimsMappingWhenItAloneOverflows verifies that when
+// the mapping name alone is already long enough to overflow the 1000-char
+// cap, mapping is also trimmed (after basename is fully consumed) so the
+// resulting ID still fits and the trailing -{shortHash} suffix survives.
+func TestWorkflowID_LengthCapTrimsMappingWhenItAloneOverflows(t *testing.T) {
+	t.Parallel()
+
+	longMapping := strings.Repeat("m", 2000)
+	path := "/watch/x/movie.mkv"
+	id := workflowID(mediatypes.MediaInput{FilePath: path, MappingName: longMapping})
+
+	sum := sha256.Sum256([]byte(path))
+	expectedHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+
+	assert.LessOrEqual(t, len(id), workflowIDMaxLen, "ID must respect the 1000-char cap even when mapping alone overflows")
+	assert.True(t, strings.HasSuffix(id, "-"+expectedHash), "short hash suffix must be preserved unchanged")
 }
 
 // TestScan_PreserveSourceForwardedToDispatch verifies that the preserveSource value from a

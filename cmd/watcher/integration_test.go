@@ -103,7 +103,7 @@ func TestMultiWatcherDedup_OnlyOneWorkflowPerFile(t *testing.T) {
 	err = dispatch(t.Context(), input)
 	require.ErrorIs(t, err, errWorkflowAlreadyStarted, "second dispatch should be deduplicated")
 
-	wfID := workflowID(filePath)
+	wfID := workflowID(input)
 
 	t.Cleanup(func() {
 		_ = c.TerminateWorkflow(context.Background(), wfID, "", "test cleanup")
