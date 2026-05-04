@@ -162,14 +162,13 @@ func (sc *subtitleConverter) convert(data []byte, pts, duration int64) ([]byte, 
 	}
 }
 
-// growEncodeBuffer doubles the encode buffer, capped at
-// subtitleEncodeBufferMax. Returns an error if the cap has already been hit
-// (so a malformed source can't drive unbounded allocation) or if av_malloc
-// fails.
+// growEncodeBuffer reallocates the encode buffer to nextEncodeBufferSize's
+// chosen size. Returns an error if the cap has already been hit (so a
+// malformed source can't drive unbounded allocation) or if av_malloc fails.
 func (sc *subtitleConverter) growEncodeBuffer() error {
-	newSize := int(sc.encBufSize) * 2
-	if newSize > subtitleEncodeBufferMax {
-		return fmt.Errorf("subtitle encode buffer would exceed maximum %d bytes", subtitleEncodeBufferMax)
+	newSize, err := nextEncodeBufferSize(int(sc.encBufSize))
+	if err != nil {
+		return err
 	}
 
 	newBuf := C.av_malloc(C.size_t(newSize))
@@ -182,6 +181,24 @@ func (sc *subtitleConverter) growEncodeBuffer() error {
 	sc.encBufSize = C.int(newSize)
 
 	return nil
+}
+
+// nextEncodeBufferSize returns the size to grow the encode buffer to from
+// currentSize, doubling but clamping to subtitleEncodeBufferMax so a
+// non-power-of-two starting size still gets to use the full cap before the
+// converter gives up. Returns an error only when the buffer is already at
+// the cap.
+func nextEncodeBufferSize(currentSize int) (int, error) {
+	if currentSize >= subtitleEncodeBufferMax {
+		return 0, fmt.Errorf("subtitle encode buffer is at maximum %d bytes", subtitleEncodeBufferMax)
+	}
+
+	newSize := currentSize * 2
+	if newSize > subtitleEncodeBufferMax {
+		newSize = subtitleEncodeBufferMax
+	}
+
+	return newSize, nil
 }
 
 func (sc *subtitleConverter) free() {

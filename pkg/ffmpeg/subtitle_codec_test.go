@@ -167,6 +167,59 @@ func TestSubtitleConverter_GrowsEncodeBufferOnOverflow(t *testing.T) {
 		"convert must have grown the encode buffer beyond the initial size to fit the payload")
 }
 
+// TestNextEncodeBufferSize pins the doubling-with-clamp policy used by
+// growEncodeBuffer. The default initial buffer (64 KiB) happens to double
+// cleanly onto the 4 MiB cap, but a non-power-of-two starting size would
+// previously reject payloads that still fit under the cap because doubling
+// crossed it without clamping. This test covers the clamp and the
+// once-already-at-cap error so future changes to the doubling strategy
+// can't silently regress either case.
+func TestNextEncodeBufferSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		current     int
+		wantSize    int
+		wantErrFunc require.ErrorAssertionFunc
+	}{
+		{
+			name:     "doubling stays well under cap",
+			current:  64 * 1024,
+			wantSize: 128 * 1024,
+		},
+		{
+			name:     "doubling lands exactly on cap",
+			current:  subtitleEncodeBufferMax / 2,
+			wantSize: subtitleEncodeBufferMax,
+		},
+		{
+			name:     "doubling exceeds cap and clamps to cap",
+			current:  3 * 1024 * 1024,
+			wantSize: subtitleEncodeBufferMax,
+		},
+		{
+			name:        "already at cap returns error",
+			current:     subtitleEncodeBufferMax,
+			wantErrFunc: require.Error,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			errFunc := test.wantErrFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := nextEncodeBufferSize(test.current)
+			errFunc(t, err)
+
+			if test.wantErrFunc == nil {
+				assert.Equal(t, test.wantSize, got)
+			}
+		})
+	}
+}
+
 // TestIsTextSubtitleCodec pins the codec-descriptor flag the policy uses to
 // decide whether an unsupported subtitle codec is transcodable to ASS. Text
 // codecs (mov_text, subrip, ass) yield true; bitmap codecs and non-subtitle
