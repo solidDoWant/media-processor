@@ -112,13 +112,88 @@ func newScanInstruments(reg prometheus.Registerer) (*scanInstruments, error) {
 	}, nil
 }
 
-// workflowID derives the deterministic Temporal WorkflowID for a media file from its
-// absolute path. The full SHA-256 hex digest (64 chars + "media-" prefix = 70 chars
-// total) is well within Temporal's 1000-char WorkflowID limit and removes any
-// realistic risk of two different paths colliding into the same ID.
-func workflowID(absFilePath string) string {
-	sum := sha256.Sum256([]byte(absFilePath))
-	return "media-" + hex.EncodeToString(sum[:])
+// workflowIDMaxLen is Temporal's hard cap on WorkflowID length. workflowID()
+// truncates the basename segment to keep the overall ID within this bound.
+const workflowIDMaxLen = 1000
+
+// workflowIDShortHashLen is the number of hex characters (48 bits) taken from
+// the head of sha256(absFilePath) for the trailing hash segment. Enough
+// collision resistance for a per-host watcher while keeping the ID short and
+// scannable in the Temporal Web UI.
+const workflowIDShortHashLen = 12
+
+// workflowID derives a human-readable, deterministic Temporal WorkflowID for a
+// media file. The format is "{mappingName}-{basename}-{shortHash}" where
+// mappingName and basename are sanitized so only [A-Za-z0-9._-] survive
+// (anything else replaced by "_", adjacent underscores collapsed; the basename
+// also has leading dots stripped so a sanitized hidden file does not look like
+// a sentinel) and shortHash is the first 12 hex characters of
+// sha256(absFilePath). Determinism and collision resistance are anchored on
+// the full absolute path, so two paths with the same basename still produce
+// distinct IDs. If the assembled ID would exceed Temporal's 1000-char limit,
+// the basename segment is right-truncated by exactly the overflow amount so
+// the trailing "-{shortHash}" segment is preserved unchanged.
+func workflowID(input mediatypes.MediaInput) string {
+	sum := sha256.Sum256([]byte(input.FilePath))
+	shortHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+
+	mapping := sanitizeWorkflowIDSegment(input.MappingName, false)
+	basename := sanitizeWorkflowIDSegment(filepath.Base(input.FilePath), true)
+
+	suffix := "-" + shortHash
+
+	id := mapping + "-" + basename + suffix
+	if overflow := len(id) - workflowIDMaxLen; overflow > 0 {
+		if overflow >= len(basename) {
+			basename = ""
+		} else {
+			basename = basename[:len(basename)-overflow]
+		}
+
+		id = mapping + "-" + basename + suffix
+	}
+
+	return id
+}
+
+// sanitizeWorkflowIDSegment restricts s to [A-Za-z0-9._-], replacing any other
+// rune with "_" and collapsing adjacent underscores. When stripLeadingDots is
+// true, leading dots are also removed so a sanitized hidden filename does not
+// produce an ID that resembles a sentinel file.
+func sanitizeWorkflowIDSegment(s string, stripLeadingDots bool) string {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	var prevUnderscore bool
+
+	for _, r := range s {
+		allowed := (r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-'
+		if !allowed {
+			r = '_'
+		}
+
+		if r == '_' {
+			if prevUnderscore {
+				continue
+			}
+
+			prevUnderscore = true
+		} else {
+			prevUnderscore = false
+		}
+
+		b.WriteRune(r)
+	}
+
+	out := b.String()
+	if stripLeadingDots {
+		out = strings.TrimLeft(out, ".")
+	}
+
+	return out
 }
 
 // newTemporalDispatch returns a dispatchFunc that calls ExecuteWorkflow on the given
@@ -145,7 +220,7 @@ func workflowID(absFilePath string) string {
 func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
 	return func(ctx context.Context, input mediatypes.MediaInput) error {
 		options := client.StartWorkflowOptions{
-			ID:                                       workflowID(input.FilePath),
+			ID:                                       workflowID(input),
 			TaskQueue:                                taskQueue,
 			WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 			WorkflowIDConflictPolicy:                 enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
