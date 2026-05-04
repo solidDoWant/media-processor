@@ -147,7 +147,9 @@ config:
       webhookUrl: ""
       hardware:
         # devicePath is the host path to the hardware encoding device (e.g. /dev/dri/renderD128).
-        # When non-empty, MEDIA_HARDWARE_DEVICE_PATH is set on the worker.
+        # When non-empty, MEDIA_HARDWARE_DEVICE_PATH is set on the worker, which uses it
+        # verbatim and skips auto-detection. When empty (the default), transcode-enabled
+        # workers auto-detect an Intel i915 render node under /sys/class/drm/.
         devicePath: ""
         # mountHostDevice, when true and devicePath is set, creates a hostPath volume mounting
         # the device inside the container at the same path. Set to false when using a device

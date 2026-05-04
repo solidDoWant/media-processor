@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 
 	"go.temporal.io/sdk/client"
@@ -59,7 +60,20 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	sonarrClient := sonarr.New(cfg.Sonarr)
 	webhookClient := &webhook.Client{URL: cfg.WebhookURL}
 
-	activities, err := media.NewActivities(cfg.Workflow, radarrClient, sonarrClient, webhookClient)
+	// Auto-detection only runs on workers that actually transcode; on workers
+	// that don't, the logged result would be misleading and the path is unused.
+	var hardwareDevicePath string
+	if slices.Contains(cfg.EnabledTokens, media.TranscodeActivityToken) {
+		hardwareDevicePath = resolveHardwareDevicePath(ctx, cfg.HardwareDevicePathOverride, defaultDRMRoot)
+	}
+
+	activities, err := media.NewActivities(
+		cfg.Workflow,
+		radarrClient,
+		sonarrClient,
+		webhookClient,
+		media.WithHardwareDevicePath(hardwareDevicePath),
+	)
 	if err != nil {
 		return fmt.Errorf("init activities: %w", err)
 	}
