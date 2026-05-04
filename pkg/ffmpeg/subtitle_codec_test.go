@@ -200,6 +200,39 @@ func TestSubtitleConverter_FreeIsIdempotent(t *testing.T) {
 	assert.NotPanics(t, conv.free, "free must be safe to call more than once")
 }
 
+// TestIsStillImageCodec pins the codec-descriptor flag we use to spot
+// still-image "video" streams (cover art / thumbnail / preview frame) so
+// they can be dropped from the output instead of re-encoded as a useless
+// single-frame video track. Runs against the libavcodec descriptor table:
+// if FFmpeg ever changes a codec's declared MIME types, this test will
+// fail and we'll know to revisit the policy.
+func TestIsStillImageCodec(t *testing.T) {
+	tests := []struct {
+		name    string
+		codecID astiav.CodecID
+		want    bool
+	}{
+		{"mjpeg has image/jpeg mime type", astiav.CodecIDMjpeg, true},
+		{"png has image/png mime type", astiav.CodecIDPng, true},
+		{"bmp has image/* mime type", astiav.CodecIDBmp, true},
+		{"gif has image/gif mime type", astiav.CodecIDGif, true},
+		{"tiff has image/tiff mime type", astiav.CodecIDTiff, true},
+		{"webp has image/webp mime type", astiav.CodecIDWebp, true},
+		{"h264 is not a still-image codec", astiav.CodecIDH264, false},
+		{"hevc is not a still-image codec", astiav.CodecIDH265, false},
+		{"av1 is not a still-image codec", astiav.CodecIDAv1, false},
+		{"vp9 is not a still-image codec", astiav.CodecIDVp9, false},
+		{"aac is not a still-image codec", astiav.CodecIDAac, false},
+		{"unknown codec ID has no descriptor", astiav.CodecIDNone, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isStillImageCodec(test.codecID))
+		})
+	}
+}
+
 // TestNextEncodeBufferSize pins the doubling-with-clamp policy used by
 // growEncodeBuffer. The default initial buffer (64 KiB) happens to double
 // cleanly onto the 4 MiB cap, but a non-power-of-two starting size would

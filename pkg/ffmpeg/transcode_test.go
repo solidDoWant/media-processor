@@ -645,6 +645,14 @@ const testMovTextSubtitleSourcePath = "testdata/video_with_movtext_subtitle.mp4"
 // libavcodec subtitle pipeline that mov_text uses.
 const testSubripSubtitleSourcePath = "testdata/video_with_subrip_subtitle.mkv"
 
+// testImageVideoStreamSourcePath is a synthetic mp4 carrying a real H.264
+// video plus a still-image mjpeg "video" stream that lacks the
+// disposition:attached_pic flag — the same shape iTunes/Plex-derived mp4
+// files commonly use for a preview thumbnail. The transcoder must drop
+// the still-image stream alongside any matroska output instead of
+// re-encoding it as a useless single-frame HEVC track.
+const testImageVideoStreamSourcePath = "testdata/video_with_image_stream.mp4"
+
 // testDataStreamSourcePath is a synthetic mp4 carrying a QuickTime timecode
 // (tmcd) track that ffmpeg surfaces as a data stream. matroska's track muxer
 // rejects anything other than audio/video/subtitle, so any source whose data
@@ -887,6 +895,79 @@ func TestTranscode_SourceWithSubripSubtitle_IsCopied(t *testing.T) {
 	require.Len(t, packets, 1, "exactly one subtitle event expected")
 	assert.Contains(t, string(packets[0].data), "Hello world",
 		"subrip text must round-trip unchanged on the copy path")
+}
+
+// TestTranscode_SourceWithImageVideoStream verifies that a still-image
+// "video" stream alongside a real video stream — common in iTunes / Plex
+// mp4 files where a preview thumbnail is muxed as a second video track
+// without the disposition:attached_pic flag — is dropped from the output
+// instead of being re-encoded as a single-frame HEVC track. Without the
+// drop the output mkv ends up with two hevc tracks (the real movie plus a
+// nonsense one-frame still), which players can pick wrong as the default
+// video and which silently bloats the output.
+func TestTranscode_SourceWithImageVideoStream(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testImageVideoStreamSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, countVideoStreams(t, output),
+		"output must contain exactly one video stream; the source's still-image mjpeg track must be dropped, not re-encoded as a second hevc track")
+}
+
+// TestTranscode_StillImageDropRespectsExcludeStreams guards against the
+// pre-scan ignoring the caller's ExcludeStreams set. If the only "real"
+// video stream in the source is excluded by the caller, the still-image
+// codecs that remain are by elimination the only video the caller wants
+// kept — they must NOT be dropped by the still-image guard. Without
+// honouring ExcludeStreams in the pre-scan, the source's only output
+// video would silently disappear.
+func TestTranscode_StillImageDropRespectsExcludeStreams(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	// The fixture has stream 0 = H.264 160x120 (real video) and stream 1 =
+	// mjpeg 200x300 (still-image, no attached_pic). Excluding stream 0
+	// leaves only the still-image stream — which the transcoder must keep,
+	// not drop, since it is now the only video the caller wants in the
+	// output.
+	const realVideoStreamIdx = 0
+
+	err := ffmpeg.NewTranscode(testImageVideoStreamSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		ExcludeStreams(realVideoStreamIdx).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var videoStreams []ffprobe.StreamInfo
+
+	for _, stream := range info.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
+			videoStreams = append(videoStreams, stream)
+		}
+	}
+
+	require.Len(t, videoStreams, 1, "output must contain exactly one video stream")
+
+	// Identify which source stream the surviving HEVC came from by its
+	// dimensions: source stream 0 is 160x120, source stream 1 is 200x300.
+	// A dimension-based check rather than a count-based one prevents the
+	// test from silently passing if ExcludeStreams ever stops dropping
+	// stream 0 (in which case the mjpeg would be the one dropped, and the
+	// test would still see "one video stream" without exercising the
+	// pre-scan fix at all).
+	assert.Equal(t, 200, videoStreams[0].WidthPixels,
+		"surviving video stream must derive from the source's mjpeg (200x300), not the excluded H.264 (160x120)")
+	assert.Equal(t, 300, videoStreams[0].HeightPixels,
+		"surviving video stream must derive from the source's mjpeg (200x300), not the excluded H.264 (160x120)")
 }
 
 // TestTranscode_SourceWithDataStream verifies that data-typed streams in the

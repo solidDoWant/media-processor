@@ -194,3 +194,18 @@ int mpsub_is_text_subtitle(int codec_id) {
 
     return (desc->props & AV_CODEC_PROP_TEXT_SUB) ? 1 : 0;
 }
+
+int mpsub_codec_has_image_mime_type(int codec_id) {
+    const AVCodecDescriptor* desc = avcodec_descriptor_get((enum AVCodecID)codec_id);
+    if (!desc || !desc->mime_types) {
+        return 0;
+    }
+
+    for (int i = 0; desc->mime_types[i]; i++) {
+        if (strncmp(desc->mime_types[i], "image/", 6) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}

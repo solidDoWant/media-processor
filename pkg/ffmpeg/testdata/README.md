@@ -85,6 +85,21 @@ ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
        pkg/ffmpeg/testdata/video_with_data_stream.mp4
 ```
 
+## video_with_image_stream.mp4
+
+A synthetic mp4 carrying a 0.5 s 160x120 H.264 main video plus a bare mjpeg "video" stream (a 200x300 cover image, *no* `disposition:attached_pic`). This mirrors how iTunes/Plex-derived mp4 files commonly carry a preview thumbnail as a second video stream rather than as `attached_pic`. Without specifically dropping these the transcoder re-encodes the still as a single-frame HEVC stream, so the output `.mkv` ends up with two video streams: the real movie plus a useless thumbnail.
+
+Generation command:
+
+```bash
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p main.mp4
+ffmpeg -y -f lavfi -i color=c=red:s=200x300:d=1 -frames:v 1 -q:v 8 thumb.jpg
+ffmpeg -y -i main.mp4 -i thumb.jpg \
+       -map 0:v -map 1 -c copy \
+       pkg/ffmpeg/testdata/video_with_image_stream.mp4
+```
+
 ## video_with_attached_pic.mp4
 
 A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a 200x300 mjpeg cover-art image carrying `disposition:attached_pic`. Used to regression-test the embedded-cover-art exclusion in `Transcoder` (a missing exclusion fed the still image into the HEVC encoder; on QSV this returned "Function not implemented").

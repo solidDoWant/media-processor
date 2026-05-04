@@ -76,4 +76,12 @@ int mpsub_matroska_supports(int codec_id);
 // when the muxer doesn't accept them.
 int mpsub_is_text_subtitle(int codec_id);
 
+// mpsub_codec_has_image_mime_type reports whether the codec descriptor's
+// declared mime_types include any "image/*" entry — the FFmpeg-internal
+// signal for "this codec produces still images" (mjpeg, png, bmp, gif, tiff,
+// jpeg2000, jpegls, webp, …). Used to identify mjpeg/png "video" streams
+// that mp4 sources sometimes carry as cover-art-or-thumbnail-as-a-track,
+// even when they don't carry the disposition:attached_pic flag.
+int mpsub_codec_has_image_mime_type(int codec_id);
+
 #endif // MEDIA_PROCESSOR_SUBTITLE_CODEC_H
