@@ -1088,16 +1088,16 @@ func TestBuildWorkflowMemo(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			memo := buildWorkflowMemo(tt.input)
+			memo := buildWorkflowMemo(test.input)
 
-			assert.Equal(t, tt.expected, memo)
+			assert.Equal(t, test.expected, memo)
 
-			for _, v := range memo {
-				assert.NotEqual(t, tt.input.OutputRemotePath, v, "memo must not contain the output remote path")
+			for _, memoValue := range memo {
+				assert.NotEqual(t, test.input.OutputRemotePath, memoValue, "memo must not contain the output remote path")
 			}
 		})
 	}
@@ -1229,11 +1229,11 @@ func TestIsMissingSearchAttributeError(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, isMissingSearchAttributeError(tt.err))
+			assert.Equal(t, test.want, isMissingSearchAttributeError(test.err))
 		})
 	}
 }
