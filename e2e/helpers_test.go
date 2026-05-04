@@ -207,8 +207,8 @@ func fetchAllWorkerMetrics(t *testing.T) metricSeries {
 
 	merged := metricSeries{}
 
-	for _, addr := range workerMetricsAddrs {
-		series := fetchMetrics(t, addr)
+	for _, pool := range workerPools {
+		series := fetchMetrics(t, pool.metricsAddr)
 
 		for name, family := range series {
 			existing, ok := merged[name]

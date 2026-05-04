@@ -63,22 +63,22 @@ const (
 	temporalNamespace = "default"
 )
 
-//nolint:gochecknoglobals // immutable side-by-side metadata for the worker pools.
-var (
-	// workerServiceNames lists the docker-compose service names for the three
-	// worker pools. Used to bring them up, stream their logs, and route compose
-	// commands.
-	workerServiceNames = []string{"worker-workflow", "worker-transcode", "worker-rest"}
+// workerPool bundles the docker-compose service name, /readyz base URL, and
+// /metrics endpoint for a single worker container. Storing the three pieces
+// together (rather than as parallel slices) keeps them from drifting out of
+// sync and removes the need for index-keyed correlation in the helpers.
+type workerPool struct {
+	serviceName string
+	healthBase  string
+	metricsAddr string
+}
 
-	// workerHealthBases lists every worker pool's /readyz base URL. Used by
-	// the health monitor to confirm all three pools are ready before tests
-	// proceed.
-	workerHealthBases = []string{workerWorkflowHealthBase, workerTranscodeHealthBase, workerRestHealthBase}
-
-	// workerMetricsAddrs lists every worker pool's Prometheus endpoint. Tests
-	// fetch metrics from each and merge — see fetchAllWorkerMetrics.
-	workerMetricsAddrs = []string{workerWorkflowMetricsAddr, workerTranscodeMetricsAddr, workerRestMetricsAddr}
-)
+//nolint:gochecknoglobals // immutable metadata describing the worker pools.
+var workerPools = []workerPool{
+	{"worker-workflow", workerWorkflowHealthBase, workerWorkflowMetricsAddr},
+	{"worker-transcode", workerTranscodeHealthBase, workerTranscodeMetricsAddr},
+	{"worker-rest", workerRestHealthBase, workerRestMetricsAddr},
+}
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
 // messages are distinguishable from subprocess output in interleaved logs.

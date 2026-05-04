@@ -22,18 +22,18 @@ const allToken = "all"
 // Errors:
 //   - any token (with or without the "!" prefix) that is not in known
 //   - a final empty set
-func resolveActivities(tokens, known []string) ([]string, error) {
+func resolveActivities(tokens, knownTokens []string) ([]string, error) {
 	set := map[string]struct{}{}
 
-	for _, raw := range tokens {
-		token := strings.TrimSpace(raw)
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
 		if token == "" {
 			continue
 		}
 
 		if token == allToken {
-			for _, k := range known {
-				set[k] = struct{}{}
+			for _, knownToken := range knownTokens {
+				set[knownToken] = struct{}{}
 			}
 
 			continue
@@ -47,8 +47,8 @@ func resolveActivities(tokens, known []string) ([]string, error) {
 			name = strings.TrimSpace(name[1:])
 		}
 
-		if !slices.Contains(known, name) {
-			return nil, fmt.Errorf("unknown WORKER_ACTIVITIES token %q; known: %v", token, known)
+		if !slices.Contains(knownTokens, name) {
+			return nil, fmt.Errorf("unknown WORKER_ACTIVITIES token %q; known: %v", token, knownTokens)
 		}
 
 		if negate {
@@ -64,9 +64,9 @@ func resolveActivities(tokens, known []string) ([]string, error) {
 
 	resolved := make([]string, 0, len(set))
 
-	for _, k := range known {
-		if _, ok := set[k]; ok {
-			resolved = append(resolved, k)
+	for _, knownToken := range knownTokens {
+		if _, ok := set[knownToken]; ok {
+			resolved = append(resolved, knownToken)
 		}
 	}
 
@@ -85,9 +85,9 @@ func parseWorkerActivities(raw string) []string {
 	parts := strings.Split(raw, ",")
 	tokens := make([]string, 0, len(parts))
 
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			tokens = append(tokens, t)
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			tokens = append(tokens, trimmed)
 		}
 	}
 

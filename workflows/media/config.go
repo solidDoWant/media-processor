@@ -3,6 +3,7 @@
 package media
 
 import (
+	"fmt"
 	"time"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
@@ -85,9 +86,16 @@ func ActivityTaskQueue(prefix, token string) string {
 
 // ActivityTaskQueueByName is a convenience for workflow code that already has
 // the Temporal activity name (e.g. DetectCropActivityName) and wants the task
-// queue to route to.
+// queue to route to. Panics if activityName is not registered in
+// ActivityTokensByName — that would silently route to "{prefix}-" and strand
+// activity tasks, so a programming error here must fail loud at the call site.
 func ActivityTaskQueueByName(prefix, activityName string) string {
-	return ActivityTaskQueue(prefix, ActivityTokensByName[activityName])
+	token, ok := ActivityTokensByName[activityName]
+	if !ok {
+		panic(fmt.Sprintf("ActivityTaskQueueByName: unknown activity name %q", activityName))
+	}
+
+	return ActivityTaskQueue(prefix, token)
 }
 
 const (

@@ -107,18 +107,18 @@ func TestResolveActivities(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			errFunc := tc.errFunc
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
 
-			got, err := resolveActivities(tc.tokens, known)
+			got, err := resolveActivities(test.tokens, known)
 			errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.expected, got)
+				assert.Equal(t, test.expected, got)
 			}
 		})
 	}
@@ -138,9 +138,9 @@ func TestParseWorkerActivities(t *testing.T) {
 		{name: "drops empty entries", raw: "all,,!transcode,", expected: []string{"all", "!transcode"}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, parseWorkerActivities(tc.raw))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, parseWorkerActivities(test.raw))
 		})
 	}
 }

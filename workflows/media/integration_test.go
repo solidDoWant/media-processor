@@ -286,7 +286,7 @@ func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.
 // queue, one polling the workflow queue and every other activity queue. The
 // pools register distinct *Activities instances backed by separate stubs, so
 // after the run we can assert which pool's Activities serviced which
-// activity. Covers AC-11 from issue #201.
+// activity.
 func TestMediaWorkflow_SplitWorkers_TranscodeOnDedicatedPool(t *testing.T) {
 	if os.Getenv("TEMPORAL_ADDRESS") == "" {
 		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")

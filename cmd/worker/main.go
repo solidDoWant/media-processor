@@ -75,11 +75,18 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 		return err
 	}
 
-	defer stopWorkers(ctx, started)
+	// Closure (not direct call) so the deferred stop reads `started` at
+	// invocation time, not at defer-statement time. Setting started = nil
+	// after the explicit shutdown below makes this defer a safe no-op when
+	// run() exits cleanly, while still draining workers if we return early
+	// from a later step.
+	defer func() {
+		stopWorkers(ctx, started)
+	}()
 
 	queues := make([]string, len(started))
-	for i, sw := range started {
-		queues[i] = sw.label
+	for index, startedWorker := range started {
+		queues[index] = startedWorker.label
 	}
 
 	slog.InfoContext(ctx, "connected to Temporal, starting workers", slog.Any("queues", queues))
@@ -164,8 +171,8 @@ func startWorkers(c client.Client, activities *media.Activities, cfg workerConfi
 // call blocks for at most WorkerStopTimeout while the SDK drains in-flight
 // activities, so calling sequentially keeps shutdown ordering predictable.
 func stopWorkers(ctx context.Context, started []startedWorker) {
-	for i := len(started) - 1; i >= 0; i-- {
-		slog.InfoContext(ctx, "stopping worker", slog.String("queue", started[i].label))
-		started[i].w.Stop()
+	for index := len(started) - 1; index >= 0; index-- {
+		slog.InfoContext(ctx, "stopping worker", slog.String("queue", started[index].label))
+		started[index].w.Stop()
 	}
 }

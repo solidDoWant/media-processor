@@ -104,7 +104,11 @@ func composeUpWatcherWorker(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	services := append([]string{"watcher"}, workerServiceNames...)
+	services := []string{"watcher"}
+	for _, pool := range workerPools {
+		services = append(services, pool.serviceName)
+	}
+
 	args := composeArgs(append([]string{"--profile", "app", "up", "-d"}, services...)...)
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
@@ -143,7 +147,11 @@ func composeDown() {
 // name by Docker Compose (e.g. "worker-transcode-1  | ...").
 func streamAppLogs(ctx context.Context) {
 	go func() {
-		services := append([]string{"watcher"}, workerServiceNames...)
+		services := []string{"watcher"}
+		for _, pool := range workerPools {
+			services = append(services, pool.serviceName)
+		}
+
 		args := composeArgs(append([]string{"logs", "--follow"}, services...)...)
 
 		cmd := exec.CommandContext(ctx, "docker", args...)
@@ -174,12 +182,12 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
 
-			workerErrs := make(map[string]error, len(workerServiceNames))
+			workerErrs := make(map[string]error, len(workerPools))
 			anyWorkerErr := false
 
-			for i, base := range workerHealthBases {
-				if err := checkHTTP(base + "/readyz"); err != nil {
-					workerErrs[workerServiceNames[i]] = err
+			for _, pool := range workerPools {
+				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
+					workerErrs[pool.serviceName] = err
 					anyWorkerErr = true
 				}
 			}
@@ -204,9 +212,9 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				msgs = append(msgs, "watcher: "+watcherErr.Error())
 			}
 
-			for _, name := range workerServiceNames {
-				if err, ok := workerErrs[name]; ok {
-					msgs = append(msgs, name+": "+err.Error())
+			for _, pool := range workerPools {
+				if err, ok := workerErrs[pool.serviceName]; ok {
+					msgs = append(msgs, pool.serviceName+": "+err.Error())
 				}
 			}
 
