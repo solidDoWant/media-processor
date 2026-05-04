@@ -929,10 +929,11 @@ func TestTranscode_SourceWithImageVideoStream(t *testing.T) {
 func TestTranscode_StillImageDropRespectsExcludeStreams(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "out.mkv")
 
-	// The fixture has stream 0 = H.264 (real video) and stream 1 = mjpeg
-	// (still-image, no attached_pic). Excluding stream 0 leaves only the
-	// still-image stream — which the transcoder must keep, not drop, since
-	// it is now the only video the caller wants in the output.
+	// The fixture has stream 0 = H.264 160x120 (real video) and stream 1 =
+	// mjpeg 200x300 (still-image, no attached_pic). Excluding stream 0
+	// leaves only the still-image stream — which the transcoder must keep,
+	// not drop, since it is now the only video the caller wants in the
+	// output.
 	const realVideoStreamIdx = 0
 
 	err := ffmpeg.NewTranscode(testImageVideoStreamSourcePath, output).
@@ -943,8 +944,30 @@ func TestTranscode_StillImageDropRespectsExcludeStreams(t *testing.T) {
 		Run(t.Context())
 	require.NoError(t, err)
 
-	assert.GreaterOrEqual(t, countVideoStreams(t, output), 1,
-		"output must retain at least one video stream after the main video is excluded; the still-image guard must not drop the source's only remaining video stream")
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var videoStreams []ffprobe.StreamInfo
+
+	for _, stream := range info.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
+			videoStreams = append(videoStreams, stream)
+		}
+	}
+
+	require.Len(t, videoStreams, 1, "output must contain exactly one video stream")
+
+	// Identify which source stream the surviving HEVC came from by its
+	// dimensions: source stream 0 is 160x120, source stream 1 is 200x300.
+	// A dimension-based check rather than a count-based one prevents the
+	// test from silently passing if ExcludeStreams ever stops dropping
+	// stream 0 (in which case the mjpeg would be the one dropped, and the
+	// test would still see "one video stream" without exercising the
+	// pre-scan fix at all).
+	assert.Equal(t, 200, videoStreams[0].WidthPixels,
+		"surviving video stream must derive from the source's mjpeg (200x300), not the excluded H.264 (160x120)")
+	assert.Equal(t, 300, videoStreams[0].HeightPixels,
+		"surviving video stream must derive from the source's mjpeg (200x300), not the excluded H.264 (160x120)")
 }
 
 // TestTranscode_SourceWithDataStream verifies that data-typed streams in the
