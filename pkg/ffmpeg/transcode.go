@@ -231,6 +231,25 @@ func (b *TranscodeBuilder) WithDownmix(idx *int) *TranscodeBuilder {
 	return b
 }
 
+// matroskaAcceptsTrackMediaType reports whether matroska's track muxer can
+// write a stream of the given media type as a track. Video, audio, and
+// subtitle map to matroska's three track types (mkv_write_track switches on
+// these and rejects everything else with "Only audio, video, and subtitles
+// are supported for Matroska"). Attachments are accepted because the muxer
+// stores them under a separate Attachments element rather than as tracks
+// — keeping them here means buildStreamStates lets them flow through to
+// setupOutputContext, where matroska writes them via its attachment path.
+// Anything else (data, unknown) must be dropped before WriteHeader.
+func matroskaAcceptsTrackMediaType(mt astiav.MediaType) bool {
+	switch mt {
+	case astiav.MediaTypeVideo, astiav.MediaTypeAudio,
+		astiav.MediaTypeSubtitle, astiav.MediaTypeAttachment:
+		return true
+	default:
+		return false
+	}
+}
+
 // effectiveContainerIsMKV reports whether the output container is Matroska,
 // either because it was explicitly set via ToContainer or because the output
 // filename's extension identifies a member of the Matroska family — .mkv
@@ -538,6 +557,17 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 			s = audioState
 		default:
+			// matroska's track muxer only writes audio/video/subtitle tracks
+			// (attachments are written separately via the Attachments element).
+			// Anything else — most commonly bin_data carrying QuickTime
+			// timecode, chapter, or metadata tracks from an mp4 source — is
+			// rejected at WriteHeader with "Only audio, video, and subtitles
+			// are supported for Matroska". Drop those streams here so the
+			// muxer never sees them.
+			if t.effectiveContainerIsMKV() && !matroskaAcceptsTrackMediaType(mediaType) {
+				continue
+			}
+
 			inCodecID := inStream.CodecParameters().CodecID()
 
 			// Subtitle streams whose codec the matroska muxer cannot write

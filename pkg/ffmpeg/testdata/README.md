@@ -70,6 +70,21 @@ ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s srt \
        pkg/ffmpeg/testdata/video_with_subrip_subtitle.mkv
 ```
 
+## video_with_data_stream.mp4
+
+A synthetic mp4 with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and a QuickTime timecode (`tmcd`) track that ffmpeg surfaces as a data stream (`codec_type=data`). matroska's track muxer rejects anything other than audio/video/subtitle ("Only audio, video, and subtitles are supported for Matroska"), so this fixture regression-tests that the transcoder drops matroska-incompatible streams instead of letting them reach WriteHeader. The same data-stream class shows up in many real-world mp4 sources as `bin_data` from QuickTime metadata, chapter, or index tracks.
+
+Generation command:
+
+```bash
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
+       -f lavfi -i sine=frequency=440:duration=0.5 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
+       -c:a aac -b:a 64k \
+       -timecode 01:00:00:00 \
+       pkg/ffmpeg/testdata/video_with_data_stream.mp4
+```
+
 ## video_with_attached_pic.mp4
 
 A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a 200x300 mjpeg cover-art image carrying `disposition:attached_pic`. Used to regression-test the embedded-cover-art exclusion in `Transcoder` (a missing exclusion fed the still image into the HEVC encoder; on QSV this returned "Function not implemented").

@@ -645,6 +645,15 @@ const testMovTextSubtitleSourcePath = "testdata/video_with_movtext_subtitle.mp4"
 // libavcodec subtitle pipeline that mov_text uses.
 const testSubripSubtitleSourcePath = "testdata/video_with_subrip_subtitle.mkv"
 
+// testDataStreamSourcePath is a synthetic mp4 carrying a QuickTime timecode
+// (tmcd) track that ffmpeg surfaces as a data stream. matroska's track muxer
+// rejects anything other than audio/video/subtitle, so any source whose data
+// streams reach WriteHeader fails with "Only audio, video, and subtitles are
+// supported for Matroska" / "Invalid argument". Equivalent in shape to the
+// bin_data tracks (chapters, metadata, indices) that mp4 sources commonly
+// carry in the wild.
+const testDataStreamSourcePath = "testdata/video_with_data_stream.mp4"
+
 // countVideoStreams returns the number of streams in path whose codec type is
 // video, by reading stream metadata via go-astiav directly. The matroska
 // demuxer surfaces MKV attachment elements as video streams with
@@ -878,6 +887,49 @@ func TestTranscode_SourceWithSubripSubtitle_IsCopied(t *testing.T) {
 	require.Len(t, packets, 1, "exactly one subtitle event expected")
 	assert.Contains(t, string(packets[0].data), "Hello world",
 		"subrip text must round-trip unchanged on the copy path")
+}
+
+// TestTranscode_SourceWithDataStream verifies that data-typed streams in the
+// source (here a QuickTime timecode track surfaced as `codec_type=data`) are
+// dropped from a matroska output instead of being copied through. matroska's
+// track muxer rejects anything other than audio/video/subtitle at WriteHeader
+// with "Only audio, video, and subtitles are supported for Matroska" /
+// "Invalid argument" — the same failure prod hits on mp4 sources carrying
+// bin_data chapter/metadata/index tracks. Output must contain the video and
+// audio (no surviving data stream) and must succeed.
+func TestTranscode_SourceWithDataStream(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testDataStreamSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	for _, stream := range info.Streams {
+		assert.NotEqual(t, "data", string(stream.CodecType),
+			"data-typed source streams must not be carried through to a matroska output")
+	}
+
+	// Sanity: the video and audio that the source did carry must still be
+	// present, so we know the drop policy didn't accidentally take them too.
+	var hasVideo, hasAudio bool
+
+	for _, stream := range info.Streams {
+		switch stream.CodecType {
+		case ffprobe.CodecTypeVideo:
+			hasVideo = true
+		case ffprobe.CodecTypeAudio:
+			hasAudio = true
+		}
+	}
+
+	assert.True(t, hasVideo, "output must retain the source's video stream")
+	assert.True(t, hasAudio, "output must retain the source's audio stream")
 }
 
 // testBlackBarsVideoPath is a 320x220 H.264 video with 22-pixel black bars on the
