@@ -112,13 +112,16 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, path string) string 
 			if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
 				continue
 			}
+
 			// Skip records already marked imported — Sonarr completed this on its own.
 			if strings.EqualFold(record.TrackedDownloadState, "imported") {
 				continue
 			}
+
 			if record.DownloadID == "" {
 				continue
 			}
+
 			return record.DownloadID
 		}
 
