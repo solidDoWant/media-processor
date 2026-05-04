@@ -105,8 +105,9 @@
           doCheck = false;
         });
 
-        # Only hash Go source files, go.mod, and go.sum so that changes to
-        # documentation, Nix files, etc. don't bust the build cache.
+        # Only hash Go source files, the C/H sources cgo packages compile
+        # alongside them, go.mod, and go.sum so that changes to documentation,
+        # Nix files, etc. don't bust the build cache.
         goSrc = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
@@ -114,6 +115,8 @@
             (type == "directory" && baseName != "e2e") ||
             (type != "directory" && (
               (pkgs.lib.hasSuffix ".go" path && !(pkgs.lib.hasSuffix "_test.go" path)) ||
+              pkgs.lib.hasSuffix ".c" path ||
+              pkgs.lib.hasSuffix ".h" path ||
               baseName == "go.mod" ||
               baseName == "go.sum"
             ));
