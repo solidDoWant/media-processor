@@ -520,7 +520,31 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 
 			s = audioState
 		default:
-			s = &copyStreamState{inStream: inStream}
+			inCodecID := inStream.CodecParameters().CodecID()
+
+			// Subtitle streams whose codec the matroska muxer cannot write
+			// directly need transcoding. Text codecs (e.g. mov_text, dvb
+			// teletext, separate-stream EIA-608) can be normalised through
+			// libavcodec's subtitle decoder/encoder pair to ASS, which
+			// matroska accepts and which preserves whatever styling the
+			// source decoder is able to surface. Bitmap codecs (PGS, VobSub,
+			// DVB subtitle) are matroska-native, so the muxer accepts them on
+			// copy and they need no special handling here; if a bitmap codec
+			// somehow isn't supported we fall through to copy and let the
+			// muxer fail loudly rather than silently dropping the stream.
+			if mediaType == astiav.MediaTypeSubtitle &&
+				t.effectiveContainerIsMKV() &&
+				!matroskaSupportsCodec(inCodecID) &&
+				isTextSubtitleCodec(inCodecID) {
+				s = &subtitleStreamState{
+					copyStreamState: copyStreamState{inStream: inStream},
+					targetCodecID:   astiav.CodecIDAss,
+					sourceCodecID:   inCodecID,
+					sourceExtraData: inStream.CodecParameters().ExtraData(),
+				}
+			} else {
+				s = &copyStreamState{inStream: inStream}
+			}
 		}
 
 		streams[inStream.Index()] = s
@@ -595,6 +619,13 @@ func (t *Transcoder) setupOutputContext(streams map[int]stream, downmix *audioSt
 			// incompatible with the output container (e.g. matroska).
 			outStream.CodecParameters().SetCodecTag(0)
 			outStream.SetTimeBase(inStream.TimeBase())
+		}
+
+		// Apply any per-stream codec-parameter overrides (e.g. mov_text →
+		// SubRip rewrite) now that the base parameters have been populated.
+		if err := s.applyOutputOverrides(outStream); err != nil {
+			outputFmt.Free()
+			return nil, noopClose, fmt.Errorf("ffmpeg: applying output overrides for stream %d: %w", inStream.Index(), err)
 		}
 
 		// Copy input stream metadata (language, title, etc.) to the output

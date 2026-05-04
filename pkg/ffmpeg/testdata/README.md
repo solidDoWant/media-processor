@@ -39,6 +39,46 @@ ffmpeg -y -f lavfi -i color=c=green:s=100x100:d=1 -frames:v 1 -q:v 5 \
        pkg/ffmpeg/testdata/cover.jpg
 ```
 
+## video_with_movtext_subtitle.mp4
+
+A synthetic mp4 with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and
+a single mov_text subtitle ("Hello world"). The matroska muxer rejects
+mov_text outright (`Subtitle codec mov_text (94213) is not supported.`), so
+this fixture is used to regression-test the conversion of mov_text to a
+matroska-compatible subtitle codec on the way through the transcoder.
+
+Generation command:
+
+```
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
+       -f lavfi -i sine=frequency=440:duration=0.5 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
+       -c:a aac -b:a 64k main.mp4
+printf '1\n00:00:00,000 --> 00:00:00,500\nHello world\n\n' > sub.srt
+ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s mov_text \
+       pkg/ffmpeg/testdata/video_with_movtext_subtitle.mp4
+```
+
+## video_with_subrip_subtitle.mkv
+
+A synthetic MKV with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track,
+and a single SubRip subtitle ("Hello world"). Used to verify that subtitle
+codecs the matroska muxer already supports natively (here, `subrip` →
+`S_TEXT/UTF8`) are passed through by copy and are *not* re-routed into the
+mov_text → ASS transcode pipeline.
+
+Generation command:
+
+```
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
+       -f lavfi -i sine=frequency=440:duration=0.5 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
+       -c:a aac -b:a 64k main.mp4
+printf '1\n00:00:00,000 --> 00:00:00,500\nHello world\n\n' > sub.srt
+ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s srt \
+       pkg/ffmpeg/testdata/video_with_subrip_subtitle.mkv
+```
+
 ## video_with_attached_pic.mp4
 
 A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a

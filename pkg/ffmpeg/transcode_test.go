@@ -633,6 +633,18 @@ const testAttachedPicSourcePath = "testdata/video_with_attached_pic.mp4"
 // testCoverJPEGPath is a small solid-colour JPEG used as a cover-art payload.
 const testCoverJPEGPath = "testdata/cover.jpg"
 
+// testMovTextSubtitleSourcePath is a synthetic mp4 carrying a mov_text
+// (3GPP timed text) subtitle stream. The matroska muxer has no codec mapping
+// for mov_text, so writing this stream to MKV via copy fails the muxer's
+// header-write call with "Function not implemented".
+const testMovTextSubtitleSourcePath = "testdata/video_with_movtext_subtitle.mp4"
+
+// testSubripSubtitleSourcePath is a synthetic MKV carrying a SubRip subtitle
+// stream. matroska handles SubRip natively (S_TEXT/UTF8), so the transcoder
+// must pass it through by copy — it must not get re-routed into the
+// libavcodec subtitle pipeline that mov_text uses.
+const testSubripSubtitleSourcePath = "testdata/video_with_subrip_subtitle.mkv"
+
 // countVideoStreams returns the number of streams in path whose codec type is
 // video, by reading stream metadata via go-astiav directly. The matroska
 // demuxer surfaces MKV attachment elements as video streams with
@@ -712,6 +724,159 @@ func TestTranscode_SourceWithAttachedPic_WithCoverArt(t *testing.T) {
 	attachments := probeAttachments(t, output)
 	require.Len(t, attachments, 1, "output must contain exactly one attachment (the supplied cover art)")
 	assert.Equal(t, coverBytes, attachments[0].data)
+}
+
+// subtitlePacketInfo holds one subtitle packet's payload and timing,
+// captured from a media file via go-astiav directly. ffprobe.Probe reports
+// stream-level metadata but not per-packet content; tests that need to
+// assert subtitle text or per-event timing read packets through this helper.
+type subtitlePacketInfo struct {
+	data     []byte
+	pts      int64
+	duration int64
+	timeBase astiav.Rational
+}
+
+// subtitlePackets returns every packet on path's subtitle streams in stream
+// order. For matroska's S_TEXT/ASS the payload is the muxer-reformatted
+// dialogue line (ReadOrder,Layer,Style,Name,...,Text); for S_TEXT/UTF8 it
+// is the raw SubRip text. Tests assert against substring matches so they
+// do not have to encode the matroska reformatter's exact output shape.
+func subtitlePackets(t *testing.T, path string) []subtitlePacketInfo {
+	t.Helper()
+
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
+
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	subtitleTimeBases := make(map[int]astiav.Rational)
+
+	for _, stream := range fmtCtx.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeSubtitle {
+			subtitleTimeBases[stream.Index()] = stream.TimeBase()
+		}
+	}
+
+	pkt := astiav.AllocPacket()
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	var packets []subtitlePacketInfo
+
+	for {
+		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			break
+		}
+
+		if tb, ok := subtitleTimeBases[pkt.StreamIndex()]; ok {
+			data := pkt.Data()
+			copied := make([]byte, len(data))
+			copy(copied, data)
+
+			packets = append(packets, subtitlePacketInfo{
+				data:     copied,
+				pts:      pkt.Pts(),
+				duration: pkt.Duration(),
+				timeBase: tb,
+			})
+		}
+
+		pkt.Unref()
+	}
+
+	return packets
+}
+
+// TestTranscode_SourceWithMovTextSubtitle verifies that a source carrying a
+// mov_text (3GPP timed text) subtitle stream transcodes successfully to MKV,
+// that the output stream is ASS (the matroska-compatible codec the
+// transcoder targets to preserve as much source styling as the libavcodec
+// subtitle pipeline can carry across), and that the source's text and
+// per-event timing survive the conversion. Pre-fix the matroska muxer
+// rejected mov_text and aborted the transcode at WriteHeader with "Function
+// not implemented".
+func TestTranscode_SourceWithMovTextSubtitle(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testMovTextSubtitleSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var subtitleStreams []ffprobe.StreamInfo
+
+	for _, s := range info.Streams {
+		if s.CodecType == ffprobe.CodecTypeSubtitle {
+			subtitleStreams = append(subtitleStreams, s)
+		}
+	}
+
+	require.Len(t, subtitleStreams, 1, "output must contain exactly one subtitle stream")
+	require.Equal(t, "ass", subtitleStreams[0].CodecName,
+		"subtitle codec must be transcoded from mov_text to ASS for matroska compatibility")
+
+	// Fidelity: the source carries one mov_text event ("Hello world", 0–500ms);
+	// the converted ASS event must carry the same text and a duration that
+	// round-trips within timebase rounding.
+	packets := subtitlePackets(t, output)
+	require.Len(t, packets, 1, "exactly one subtitle event expected from the single-event source")
+
+	assert.Contains(t, string(packets[0].data), "Hello world",
+		"converted ASS dialogue must preserve the source text verbatim")
+
+	durationMs := astiav.RescaleQ(packets[0].duration, packets[0].timeBase, astiav.NewRational(1, 1000))
+	assert.InDelta(t, 500, durationMs, 50,
+		"subtitle event duration must round-trip from the 0.5s source within timebase tolerance")
+}
+
+// TestTranscode_SourceWithSubripSubtitle_IsCopied verifies the negative case
+// of the subtitle-routing policy: a source carrying a SubRip subtitle stream
+// — which matroska supports natively as S_TEXT/UTF8 — must be passed through
+// by copy, not silently re-routed into the libavcodec subtitle pipeline used
+// for mov_text. A regression here would burn CGO subtitle decode/encode work
+// on every standard subrip-carrying source for no benefit.
+func TestTranscode_SourceWithSubripSubtitle_IsCopied(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testSubripSubtitleSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var subtitleStreams []ffprobe.StreamInfo
+
+	for _, s := range info.Streams {
+		if s.CodecType == ffprobe.CodecTypeSubtitle {
+			subtitleStreams = append(subtitleStreams, s)
+		}
+	}
+
+	require.Len(t, subtitleStreams, 1, "output must contain exactly one subtitle stream")
+	require.Equal(t, "subrip", subtitleStreams[0].CodecName,
+		"subrip is matroska-native; the transcoder must copy it through, not transcode to ASS")
+
+	packets := subtitlePackets(t, output)
+	require.Len(t, packets, 1, "exactly one subtitle event expected")
+	assert.Contains(t, string(packets[0].data), "Hello world",
+		"subrip text must round-trip unchanged on the copy path")
 }
 
 // testBlackBarsVideoPath is a 320x220 H.264 video with 22-pixel black bars on the
