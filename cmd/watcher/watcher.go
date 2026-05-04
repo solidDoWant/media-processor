@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -156,39 +157,19 @@ func workflowID(input mediatypes.MediaInput) string {
 	return id
 }
 
-// sanitizeWorkflowIDSegment restricts s to [A-Za-z0-9._-], replacing any other
-// rune with "_" and collapsing adjacent underscores. When stripLeadingDots is
-// true, leading dots are also removed so a sanitized hidden filename does not
-// produce an ID that resembles a sentinel file.
+// workflowIDSegmentInvalid matches any run of characters that should be
+// replaced by a single "_" in a sanitized WorkflowID segment: anything outside
+// [A-Za-z0-9.-]. Treating "_" as part of the run (rather than allowed) is what
+// gives us the "adjacent underscores collapsed" behaviour for free, since runs
+// of input underscores are matched and replaced by exactly one "_".
+var workflowIDSegmentInvalid = regexp.MustCompile(`[^A-Za-z0-9.-]+`)
+
+// sanitizeWorkflowIDSegment restricts s to [A-Za-z0-9._-], replacing any run
+// of disallowed characters (or input underscores) with a single "_". When
+// stripLeadingDots is true, leading dots are also removed so a sanitized
+// hidden filename does not produce an ID that resembles a sentinel file.
 func sanitizeWorkflowIDSegment(s string, stripLeadingDots bool) string {
-	var b strings.Builder
-	b.Grow(len(s))
-
-	var prevUnderscore bool
-
-	for _, r := range s {
-		allowed := (r >= 'A' && r <= 'Z') ||
-			(r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '.' || r == '_' || r == '-'
-		if !allowed {
-			r = '_'
-		}
-
-		if r == '_' {
-			if prevUnderscore {
-				continue
-			}
-
-			prevUnderscore = true
-		} else {
-			prevUnderscore = false
-		}
-
-		b.WriteRune(r)
-	}
-
-	out := b.String()
+	out := workflowIDSegmentInvalid.ReplaceAllString(s, "_")
 	if stripLeadingDots {
 		out = strings.TrimLeft(out, ".")
 	}
