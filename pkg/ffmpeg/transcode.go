@@ -67,8 +67,8 @@ func (b *TranscodeBuilder) HardwareAccel(h HWAccel) *TranscodeBuilder {
 
 // WithHardwareDevice sets the device path passed to CreateHardwareDeviceContext
 // for both the decoder and encoder hardware device contexts. Typical values are
-// "/dev/dri/renderD128" for VAAPI/QSV or "0"/"1" for CUDA device indices.
-// An empty string leaves the path unset (libav auto-selects the hardware device).
+// "/dev/dri/renderD128" for VAAPI/QSV. An empty string leaves the path unset
+// (libav auto-selects the hardware device).
 func (b *TranscodeBuilder) WithHardwareDevice(path string) *TranscodeBuilder {
 	b.hardwareDevicePath = path
 	return b
@@ -191,11 +191,11 @@ func (b *TranscodeBuilder) WithCoverArt(imageBytes []byte, mimeType string) *Tra
 
 // WithH265CRF sets the constant-quality value for H.265 video encoders. A value
 // of 0 (the default) leaves the encoder's built-in default in effect. For
-// libx265 this sets the CRF; for hevc_nvenc it sets the CQ value; for hevc_qsv
-// and hevc_vaapi it sets the global_quality (ICQ) value. Valid explicit values
-// are 1 through 51; values outside that range are treated as a no-op. Typical
-// values range from 18 (high quality) to 28 (lower quality). Has no effect
-// when the video codec is CodecCopy or when the encoder is not an H.265 variant.
+// libx265 this sets the CRF; for hevc_qsv and hevc_vaapi it sets the
+// global_quality (ICQ) value. Valid explicit values are 1 through 51; values
+// outside that range are treated as a no-op. Typical values range from 18 (high
+// quality) to 28 (lower quality). Has no effect when the video codec is
+// CodecCopy or when the encoder is not an H.265 variant.
 func (b *TranscodeBuilder) WithH265CRF(crf int) *TranscodeBuilder {
 	if crf >= 1 && crf <= 51 {
 		b.h265CRF = crf
@@ -553,21 +553,9 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 				return nil, fmt.Errorf("ffmpeg: setting up decoder for stream %d: %w", inStream.Index(), err)
 			}
 
-			// For NVENC with a crop region, try to apply the crop via the cuvid
-			// decoder's built-in dictionary option (zero CPU copies). If successful
-			// the context is already open; otherwise it is left in a configured but
-			// unopened state for the normal Open below.
-			cuvidApplied, err := videoState.tryCuvidCropOption(inStream, inputFmt, hwAccel)
-			if err != nil {
+			if err := videoState.decoder.codecContext.Open(videoState.decoder.codec, nil); err != nil {
 				freeStreams(streams)
-				return nil, fmt.Errorf("ffmpeg: trying cuvid crop option for stream %d: %w", inStream.Index(), err)
-			}
-
-			if !cuvidApplied {
-				if err := videoState.decoder.codecContext.Open(videoState.decoder.codec, nil); err != nil {
-					freeStreams(streams)
-					return nil, fmt.Errorf("ffmpeg: opening decoder for stream %d: %w", inStream.Index(), err)
-				}
+				return nil, fmt.Errorf("ffmpeg: opening decoder for stream %d: %w", inStream.Index(), err)
 			}
 
 			videoState.decoder.codecContext.SetTimeBase(inStream.TimeBase())

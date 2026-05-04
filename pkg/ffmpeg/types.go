@@ -30,9 +30,7 @@ type HWAccel int
 const (
 	// HWAccelNone uses software encoding only.
 	HWAccelNone HWAccel = iota
-	// HWAccelNVENC uses NVIDIA NVENC via CUDA.
-	HWAccelNVENC
-	// HWAccelVAAPI uses Intel/AMD VAAPI.
+	// HWAccelVAAPI uses VAAPI.
 	HWAccelVAAPI
 	// HWAccelQSV uses Intel Quick Sync Video.
 	HWAccelQSV

@@ -209,20 +209,8 @@ func parseTimeout(envVar string, defaultVal time.Duration) (time.Duration, error
 // validateHardwareDevicePath rejects paths that exist but are not character
 // devices and paths that do not exist at all, surfacing typos like
 // "/dev/dri/render128" (missing D) before any workflow is dispatched.
-//
-// MEDIA_HARDWARE_DEVICE_PATH is overloaded: QSV/VAAPI take a filesystem path,
-// but NVENC takes a CUDA ordinal string like "0" or "1" (see
-// docs/hardware-acceleration.md). The backend is auto-selected at activity
-// time from the encoders FFmpeg exposes, so we cannot tell at startup which
-// interpretation will apply — a value that parses as a non-negative decimal
-// integer is treated as the ordinal form and skipped rather than rejected as
-// a missing file.
 func validateHardwareDevicePath(path string) error {
 	if path == "" {
-		return nil
-	}
-
-	if _, err := strconv.ParseUint(path, 10, 32); err == nil {
 		return nil
 	}
 
