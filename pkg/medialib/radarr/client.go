@@ -7,13 +7,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golift.io/starr"
 	radarrlib "golift.io/starr/radarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	"github.com/solidDoWant/media-processor/pkg/medialib/internal/arrcommand"
 	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
@@ -24,6 +28,9 @@ var _ medialib.ArrLibrary = (*Client)(nil)
 type Config struct {
 	URL    string
 	APIKey string
+	// CommandPollInterval overrides the default poll interval for waiting on
+	// command completion. Zero uses arrcommand.DefaultPollInterval.
+	CommandPollInterval time.Duration
 }
 
 // Client is a Radarr client implementing medialib.ArrLibrary.
@@ -41,8 +48,8 @@ func New(cfg Config) *Client {
 // getMovieByFilePath returns the movie identified by parsing the file path.
 // Uses Radarr's parse endpoint, so it works for pre-import files.
 // Returns medialib.ErrNotFound if no movie is identified.
-func (c *Client) getMovieByFilePath(ctx context.Context, path string) (*medialib.Movie, error) {
-	movie, err := c.parseFilePath(ctx, path)
+func (c *Client) getMovieByFilePath(ctx context.Context, filePath string) (*medialib.Movie, error) {
+	movie, err := c.parseFilePath(ctx, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("parse file path: %w", err)
 	}
@@ -61,12 +68,12 @@ func (c *Client) getMovieByFilePath(ctx context.Context, path string) (*medialib
 // path parameter because Radarr's parse endpoint matches path against library
 // paths only, returning 204 No Content for download paths that haven't been
 // imported yet.
-func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Movie, error) {
+func (c *Client) parseFilePath(ctx context.Context, filePath string) (*radarrlib.Movie, error) {
 	var output struct {
 		Movie *radarrlib.Movie `json:"movie"`
 	}
 
-	base := filepath.Base(path)
+	base := filepath.Base(filePath)
 	q := make(url.Values)
 	q.Set("title", strings.TrimSuffix(base, filepath.Ext(base)))
 
@@ -83,8 +90,8 @@ func (c *Client) parseFilePath(ctx context.Context, path string) (*radarrlib.Mov
 // when no JPEG or PNG poster is available. Returns medialib.ErrNotFound if the
 // path cannot be matched to a movie. Returns other errors if the library is
 // unreachable or a Radarr API call fails.
-func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
-	movie, err := c.getMovieByFilePath(ctx, path)
+func (c *Client) GetPosterImage(ctx context.Context, filePath string) ([]byte, string, error) {
+	movie, err := c.getMovieByFilePath(ctx, filePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("get movie for poster: %w", err)
 	}
@@ -99,19 +106,22 @@ func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, strin
 
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for
 // the movie at path.
-func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
-	return c.getMovieByFilePath(ctx, path)
+func (c *Client) GetInfo(ctx context.Context, filePath string) (medialib.MediaInfo, error) {
+	return c.getMovieByFilePath(ctx, filePath)
 }
 
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedMoviesScan command
-// for path, causing Radarr to import the file at path into the library.
-func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
+// for filePath, causing Radarr to import the file at filePath into the library, and blocks
+// until Radarr reports the command has reached a terminal status.
+// Blocking is required so the caller can safely operate on filePath (e.g. prune the
+// containing directory) once Radarr has finished moving the file into its library.
+func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
 	requestPayload := struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
 	}{
 		Name: "DownloadedMoviesScan",
-		Path: path,
+		Path: filePath,
 	}
 
 	var body bytes.Buffer
@@ -121,8 +131,30 @@ func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
 
 	var resp radarrlib.CommandResponse
 	if err := c.radarr.PostInto(ctx, starr.Request{URI: radarrlib.APIver + "/command", Body: &body}, &resp); err != nil {
-		return fmt.Errorf("scan downloaded movies at %q: %w", path, err)
+		return fmt.Errorf("scan downloaded movies at %q: %w", filePath, err)
+	}
+
+	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "radarr"); err != nil {
+		return fmt.Errorf("wait for command for %q: %w", filePath, err)
 	}
 
 	return nil
+}
+
+// fetchCommandStatus implements arrcommand.Fetcher. It hits Radarr's
+// /command/{id} endpoint with a custom struct so the Result field
+// (not exposed by starr's typed response) is decoded too.
+func (c *Client) fetchCommandStatus(ctx context.Context, id int64) (arrcommand.Status, error) {
+	var resp struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Result  string `json:"result"`
+	}
+
+	uri := path.Join(radarrlib.APIver, "command", strconv.FormatInt(id, 10))
+	if err := c.radarr.GetInto(ctx, starr.Request{URI: uri}, &resp); err != nil {
+		return arrcommand.Status{}, err
+	}
+
+	return arrcommand.Status{Status: resp.Status, Message: resp.Message, Result: resp.Result}, nil
 }

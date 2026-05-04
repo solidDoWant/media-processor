@@ -39,9 +39,15 @@ const (
 
 	// defaultProbeTimeout is the StartToCloseTimeout applied to the probe activity.
 	defaultProbeTimeout = 5 * time.Minute
-	// defaultFinalizeTimeout is the StartToCloseTimeout applied to the
-	// post-transcode activities (notify, cleanup, failure-webhook).
+	// defaultFinalizeTimeout is the StartToCloseTimeout applied to cleanup and
+	// the failure-webhook activity.
 	defaultFinalizeTimeout = 10 * time.Minute
+	// defaultNotifyTimeout is the StartToCloseTimeout applied to the notify
+	// activity. Notify blocks on Sonarr/Radarr command completion, and those
+	// services run import-disk commands strictly serially across a 3-thread
+	// pool, so a queued scan can wait behind many siblings before executing.
+	// One hour covers ~120 serialized scans at a generous 30s each.
+	defaultNotifyTimeout = 1 * time.Hour
 
 	// defaultMaxAttempts is the RetryPolicy MaximumAttempts applied to probe,
 	// detectcrop, transcode, and the failure-webhook. Single attempt: retry

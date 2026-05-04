@@ -44,7 +44,7 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(cropOut, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut)).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -60,7 +60,9 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 		Return(ProbeOutput{IsValidMedia: false}, nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	// Invalid-media path skips Transcode; Cleanup must receive a zero-value
+	// TranscodeOutput so output-side pruning is suppressed.
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{})).Return(nil).Once()
 
 	// DetectCrop, Transcode, and Notify must NOT be invoked. The mock fails
 	// the test if any unexpected call arrives because no .Return was
@@ -151,8 +153,8 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 			return nil
 		})
 
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput) error {
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"})).
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
 			cleanupAttempts++
 			if cleanupAttempts < 3 {
 				return errors.New("transient cleanup failure")
@@ -349,7 +351,7 @@ func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
 		}).Once()
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"})).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -362,3 +364,13 @@ func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
 // stubLibraryClient lives in testhelpers_test.go and satisfies medialib.ArrLibrary
 // for tests that do not exercise the live library calls.
 var _ medialib.ArrLibrary = (*stubLibraryClient)(nil)
+
+// expectTranscode builds a mock matcher that asserts the Cleanup activity
+// received the exact TranscodeOutput the workflow should have passed at this
+// call site. Equality matters here: the valid path must forward the real
+// transcode result (so output-side pruning targets the right file), and the
+// invalid path must pass a zero TranscodeOutput (so pruning is suppressed).
+// Using mock.Anything would let either regression slip through.
+func expectTranscode(want TranscodeOutput) any {
+	return mock.MatchedBy(func(got TranscodeOutput) bool { return got == want })
+}

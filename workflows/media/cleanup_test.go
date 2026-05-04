@@ -188,6 +188,68 @@ func TestRunCleanup_WatchRootNotRemoved(t *testing.T) {
 	assert.NoError(t, statErr, "watch root must not be removed even when empty")
 }
 
+// TestPruneOutputDirs_RemovesEmptyMirroredSubdirs verifies that the mirrored
+// subdirectory holding the transcoded file is removed once Sonarr/Radarr has
+// drained the file, leaving the directory empty.
+func TestPruneOutputDirs_RemovesEmptyMirroredSubdirs(t *testing.T) {
+	t.Parallel()
+
+	outputRoot := t.TempDir()
+	subdir := filepath.Join(outputRoot, "Show.S01.Complete")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	// destFilePath points at where the transcode wrote the file. Sonarr has
+	// already moved it out, so the file path no longer exists on disk.
+	destFilePath := filepath.Join(subdir, "Show.S01E01.mkv")
+
+	PruneOutputDirs(destFilePath, outputRoot)
+
+	_, statErr := os.Stat(subdir)
+	assert.True(t, os.IsNotExist(statErr), "empty mirrored subdir should be removed")
+
+	_, statErr = os.Stat(outputRoot)
+	assert.NoError(t, statErr, "output root must not be removed")
+}
+
+// TestPruneOutputDirs_LeavesNonEmptyDirAlone verifies that pruning halts when
+// the directory is not empty (e.g. Sonarr copied rather than moved, or a
+// sibling release file is still present).
+func TestPruneOutputDirs_LeavesNonEmptyDirAlone(t *testing.T) {
+	t.Parallel()
+
+	outputRoot := t.TempDir()
+	subdir := filepath.Join(outputRoot, "release")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+
+	// File still present (e.g. Sonarr copied instead of moved). Pruning
+	// should not remove the parent directory.
+	stillThere := filepath.Join(subdir, "Show.S01E01.mkv")
+	require.NoError(t, os.WriteFile(stillThere, []byte("data"), 0o600))
+
+	PruneOutputDirs(stillThere, outputRoot)
+
+	_, statErr := os.Stat(subdir)
+	assert.NoError(t, statErr, "directory still containing the transcoded file must be kept")
+
+	_, statErr = os.Stat(stillThere)
+	assert.NoError(t, statErr, "file itself must not be touched")
+}
+
+// TestPruneOutputDirs_EmptyDestPathIsNoOp verifies that the invalid-media
+// path (no transcode → empty DestFilePath) does not attempt any pruning.
+func TestPruneOutputDirs_EmptyDestPathIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	outputRoot := t.TempDir()
+	keep := filepath.Join(outputRoot, "keep")
+	require.NoError(t, os.MkdirAll(keep, 0o755))
+
+	PruneOutputDirs("", outputRoot)
+
+	_, statErr := os.Stat(keep)
+	assert.NoError(t, statErr, "empty destFilePath must skip pruning entirely")
+}
+
 // TestRunCleanup_PrunesMultiLevelEmptyChain verifies that multiple levels of empty
 // ancestor directories are removed bottom-up until a non-empty ancestor or the watch root.
 func TestRunCleanup_PrunesMultiLevelEmptyChain(t *testing.T) {

@@ -6,13 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golift.io/starr"
 	sonarrlib "golift.io/starr/sonarr"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
+	"github.com/solidDoWant/media-processor/pkg/medialib/internal/arrcommand"
 	"github.com/solidDoWant/media-processor/pkg/medialib/internal/artwork"
 )
 
@@ -23,6 +27,9 @@ var _ medialib.ArrLibrary = (*Client)(nil)
 type Config struct {
 	URL    string
 	APIKey string
+	// CommandPollInterval overrides the default poll interval for waiting on
+	// command completion. Zero uses arrcommand.DefaultPollInterval.
+	CommandPollInterval time.Duration
 }
 
 // Client is a Sonarr client implementing medialib.ArrLibrary.
@@ -40,11 +47,11 @@ func New(cfg Config) *Client {
 // getEpisodeByFilePath returns the episode identified by parsing the file path.
 // Uses Sonarr's parse endpoint, so it works for pre-import files.
 // Returns medialib.ErrNotFound if no episode is identified.
-func (c *Client) getEpisodeByFilePath(ctx context.Context, path string) (*medialib.Episode, error) {
+func (c *Client) getEpisodeByFilePath(ctx context.Context, filePath string) (*medialib.Episode, error) {
 	// Use the title parameter (filename stem) rather than path because Sonarr's
 	// parse endpoint matches path against library paths only, returning 204 No
 	// Content for download paths that haven't been imported yet.
-	base := filepath.Base(path)
+	base := filepath.Base(filePath)
 
 	parsed, err := c.sonarr.ParseContext(ctx, &sonarrlib.ParseInput{Title: strings.TrimSuffix(base, filepath.Ext(base))})
 	if err != nil {
@@ -70,8 +77,8 @@ func (c *Client) getEpisodeByFilePath(ctx context.Context, path string) (*medial
 // Returns nil bytes (no error) when no JPEG or PNG poster is available.
 // Returns medialib.ErrNotFound if the path cannot be matched to an episode.
 // Returns other errors if the library is unreachable or a Sonarr API call fails.
-func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, string, error) {
-	episode, err := c.getEpisodeByFilePath(ctx, path)
+func (c *Client) GetPosterImage(ctx context.Context, filePath string) ([]byte, string, error) {
+	episode, err := c.getEpisodeByFilePath(ctx, filePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("get episode for poster: %w", err)
 	}
@@ -86,16 +93,16 @@ func (c *Client) GetPosterImage(ctx context.Context, path string) ([]byte, strin
 
 // GetInfo implements medialib.ArrLibrary. It returns structured metadata for
 // the episode at path.
-func (c *Client) GetInfo(ctx context.Context, path string) (medialib.MediaInfo, error) {
-	return c.getEpisodeByFilePath(ctx, path)
+func (c *Client) GetInfo(ctx context.Context, filePath string) (medialib.MediaInfo, error) {
+	return c.getEpisodeByFilePath(ctx, filePath)
 }
 
 // findTrackedDownloadID returns the download client's native ID for the pending
 // tracked download that corresponds to the episode at path, or "" if none is
 // found. API errors are treated as "no match" so callers always get a safe
 // fallback.
-func (c *Client) findTrackedDownloadID(ctx context.Context, path string) string {
-	episode, err := c.getEpisodeByFilePath(ctx, path)
+func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) string {
+	episode, err := c.getEpisodeByFilePath(ctx, filePath)
 	if err != nil {
 		return ""
 	}
@@ -135,12 +142,15 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, path string) string 
 }
 
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command
-// for path, causing Sonarr to import the file at path into the library.
+// for filePath, causing Sonarr to import the file at filePath into the library, and blocks
+// until Sonarr reports the command has reached a terminal status.
+// Blocking is required so the caller can safely operate on filePath (e.g. prune the
+// containing directory) once Sonarr has finished moving the file into its library.
 // When a pending tracked download for the episode is found in the queue, its
 // download client ID is included so Sonarr calls VerifyImport and removes the
 // item from the downloads queue.
-func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
-	downloadClientID := c.findTrackedDownloadID(ctx, path)
+func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
+	downloadClientID := c.findTrackedDownloadID(ctx, filePath)
 
 	requestPayload := struct {
 		Name             string `json:"name"`
@@ -148,7 +158,7 @@ func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
 		DownloadClientId string `json:"downloadClientId,omitempty"`
 	}{
 		Name:             "DownloadedEpisodesScan",
-		Path:             path,
+		Path:             filePath,
 		DownloadClientId: downloadClientID,
 	}
 
@@ -160,8 +170,30 @@ func (c *Client) ImportByFilePath(ctx context.Context, path string) error {
 	var resp sonarrlib.CommandResponse
 
 	if err := c.sonarr.PostInto(ctx, starr.Request{URI: sonarrlib.APIver + "/command", Body: &body}, &resp); err != nil {
-		return fmt.Errorf("scan downloaded episodes at %q: %w", path, err)
+		return fmt.Errorf("scan downloaded episodes at %q: %w", filePath, err)
+	}
+
+	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "sonarr"); err != nil {
+		return fmt.Errorf("wait for command for %q: %w", filePath, err)
 	}
 
 	return nil
+}
+
+// fetchCommandStatus implements arrcommand.Fetcher. It hits Sonarr's
+// /command/{id} endpoint with a custom struct so the Result field
+// (not exposed by starr's typed response) is decoded too.
+func (c *Client) fetchCommandStatus(ctx context.Context, id int64) (arrcommand.Status, error) {
+	var resp struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Result  string `json:"result"`
+	}
+
+	uri := path.Join(sonarrlib.APIver, "command", strconv.FormatInt(id, 10))
+	if err := c.sonarr.GetInto(ctx, starr.Request{URI: uri}, &resp); err != nil {
+		return arrcommand.Status{}, err
+	}
+
+	return arrcommand.Status{Status: resp.Status, Message: resp.Message, Result: resp.Result}, nil
 }

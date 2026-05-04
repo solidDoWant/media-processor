@@ -330,13 +330,16 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 	return nil
 }
 
-// Cleanup deletes the source file or writes the .done sentinel. RunCleanup
-// tolerates ErrNotExist so retrying after a partial cleanup is safe;
-// WriteSentinel re-writes the same zero-byte file. Shared between the valid
-// and invalid paths — in the invalid path the source has already been removed
-// by Probe and Cleanup is a near-no-op for the file, but the sentinel branch
-// is still exercised when PreserveSource is set.
-func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
+// Cleanup deletes the source file or writes the .done sentinel, then prunes
+// the mirrored subdirectory under OutputPath if Notify has drained the
+// transcoded file. RunCleanup tolerates ErrNotExist so retrying after a
+// partial cleanup is safe; WriteSentinel re-writes the same zero-byte file.
+// Output-side pruning is best-effort: it only removes truly-empty
+// directories, so a copied-but-not-moved transcode is left in place.
+// Shared between the valid and invalid paths — in the invalid path the
+// source has already been removed by Probe (RunCleanup is a near-no-op),
+// transcode.DestFilePath is empty, and output pruning is skipped.
+func (a *Activities) Cleanup(ctx context.Context, input MediaInput, transcode TranscodeOutput) error {
 	start := time.Now()
 
 	var err error
@@ -344,6 +347,10 @@ func (a *Activities) Cleanup(ctx context.Context, input MediaInput) error {
 		err = WriteSentinel(input.FilePath)
 	} else {
 		err = RunCleanup(input.FilePath, input.WatchRoot, input.RetainEmptyDirectories)
+	}
+
+	if err == nil && !input.RetainEmptyDirectories {
+		PruneOutputDirs(transcode.DestFilePath, input.OutputPath)
 	}
 
 	logStepResult(ctx, "cleanup", input.FilePath, start, err)

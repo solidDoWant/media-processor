@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,6 +23,9 @@ import (
 // privileged port with no listener in any normal environment).
 const unreachableURL = "http://127.0.0.1:1"
 
+// fastPollInterval keeps tests that exercise the command polling loop snappy.
+const fastPollInterval = time.Millisecond
+
 // sonarrTestServerConfig holds configuration for test HTTP servers.
 type sonarrTestServerConfig struct {
 	parseResp       *sonarrlib.ParseOutput
@@ -30,6 +35,21 @@ type sonarrTestServerConfig struct {
 	queueHTTPStatus int                // override HTTP status for /api/v3/queue; 0 means 200
 	imageBody       []byte
 	imageType       string
+	// commandStatuses is the sequence of status values returned by GET
+	// /api/v3/command/{id} on successive polls. The last entry is reused for
+	// any further polls. Empty defaults to a single "completed" entry.
+	commandStatuses []string
+	// commandResult is the value of the response's "result" field. Sonarr
+	// returns "unsuccessful" when a command finishes but reports no useful
+	// work (e.g. import that found nothing eligible). Empty leaves the field
+	// out of the response.
+	commandResult string
+	// commandStatusMessage is the message attached to non-terminal/terminal
+	// status responses. Useful to assert the wrapped error mentions it.
+	commandStatusMessage string
+	// commandStatusHTTPStatus, when non-zero, is returned by GET
+	// /api/v3/command/{id} instead of the JSON body.
+	commandStatusHTTPStatus int
 	// onCommand is called with the raw command request when /api/v3/command is hit.
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
@@ -98,6 +118,44 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&sonarrlib.CommandResponse{ID: 1, Status: "queued"}))
+	})
+
+	// /api/v3/command/{id} drives the post-submit polling loop. Default
+	// behavior is to immediately return a terminal "completed" so existing
+	// tests don't have to opt in. Tests that want to exercise the polling
+	// loop set commandStatuses to a sequence of returns.
+	var commandStatusCalls atomic.Int32
+
+	mux.HandleFunc("/api/v3/command/", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.commandStatusHTTPStatus != 0 {
+			w.WriteHeader(cfg.commandStatusHTTPStatus)
+			return
+		}
+
+		statuses := cfg.commandStatuses
+		if len(statuses) == 0 {
+			statuses = []string{"completed"}
+		}
+
+		idx := int(commandStatusCalls.Add(1) - 1)
+		if idx >= len(statuses) {
+			idx = len(statuses) - 1
+		}
+
+		// starr's typed CommandResponse doesn't carry the Result field, so
+		// build the body manually to include it.
+		body := map[string]any{
+			"id":      1,
+			"status":  statuses[idx],
+			"message": cfg.commandStatusMessage,
+		}
+
+		if cfg.commandResult != "" {
+			body["result"] = cfg.commandResult
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(body))
 	})
 
 	mux.HandleFunc("/api/v3/series/", func(w http.ResponseWriter, r *http.Request) {
@@ -218,8 +276,8 @@ func TestImportByFilePath(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			var gotCmd struct {
 				Name             string `json:"name"`
 				Path             string `json:"path"`
@@ -227,21 +285,21 @@ func TestImportByFilePath(t *testing.T) {
 			}
 
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
-				parseResp:       tc.parseResp,
-				queueResp:       tc.queueResp,
-				queuePages:      tc.queuePages,
-				queueHTTPStatus: tc.queueHTTPStatus,
+				parseResp:       test.parseResp,
+				queueResp:       test.queueResp,
+				queuePages:      test.queuePages,
+				queueHTTPStatus: test.queueHTTPStatus,
 				onCommand: func(t *testing.T, r *http.Request) {
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
 				},
 			})
 			t.Cleanup(srv.Close)
 
-			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), tc.path)
+			err := client.ImportByFilePath(t.Context(), test.path)
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
@@ -249,9 +307,9 @@ func TestImportByFilePath(t *testing.T) {
 			errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
-				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
-				assert.Equal(t, tc.wantDownloadClientID, gotCmd.DownloadClientId)
+				assert.Equal(t, test.wantCmdName, gotCmd.Name)
+				assert.Equal(t, test.wantCmdPath, gotCmd.Path)
+				assert.Equal(t, test.wantDownloadClientID, gotCmd.DownloadClientId)
 			}
 		})
 	}
@@ -304,6 +362,81 @@ func TestImportByFilePath_UnreachableURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
+	tests := []struct {
+		name             string
+		commandStatuses  []string
+		commandResult    string
+		commandHTTPError int
+		commandMessage   string
+		errFunc          require.ErrorAssertionFunc
+		errSubstring     string
+	}{
+		{
+			name:            "transitions queued then started then completed",
+			commandStatuses: []string{"queued", "started", "completed"},
+		},
+		{
+			name:            "completed with successful result is treated as success",
+			commandStatuses: []string{"completed"},
+			commandResult:   "successful",
+		},
+		{
+			name:            "completed with unsuccessful result surfaces as error",
+			commandStatuses: []string{"completed"},
+			commandResult:   "unsuccessful",
+			commandMessage:  "no eligible files",
+			errFunc:         require.Error,
+			errSubstring:    "no successful imports",
+		},
+		{
+			name:            "terminal failed surfaces as error",
+			commandStatuses: []string{"failed"},
+			commandMessage:  "import rejected",
+			errFunc:         require.Error,
+			errSubstring:    "failed",
+		},
+		{
+			name:            "terminal aborted surfaces as error",
+			commandStatuses: []string{"started", "aborted"},
+			errFunc:         require.Error,
+			errSubstring:    "aborted",
+		},
+		{
+			name:             "polling endpoint failure surfaces as error",
+			commandHTTPError: http.StatusInternalServerError,
+			errFunc:          require.Error,
+			errSubstring:     "get sonarr command status",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.errFunc == nil {
+				test.errFunc = require.NoError
+			}
+
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseResp:               &sonarrlib.ParseOutput{},
+				commandStatuses:         test.commandStatuses,
+				commandResult:           test.commandResult,
+				commandStatusMessage:    test.commandMessage,
+				commandStatusHTTPStatus: test.commandHTTPError,
+			})
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+			test.errFunc(t, err)
+
+			if test.errSubstring != "" && err != nil {
+				assert.Contains(t, err.Error(), test.errSubstring)
+			}
+		})
+	}
+}
+
 func TestGetInfo(t *testing.T) {
 	knownParseOutput := &sonarrlib.ParseOutput{
 		Title: "Breaking Bad",
@@ -350,16 +483,16 @@ func TestGetInfo(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newSonarrTestServer(t, tc.parseResp)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newSonarrTestServer(t, test.parseResp)
 			t.Cleanup(srv.Close)
 
-			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
 			info, err := client.GetInfo(t.Context(), "/tv/some.file.mkv")
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
@@ -367,12 +500,12 @@ func TestGetInfo(t *testing.T) {
 			errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.wantID, info.GetID())
-				assert.Equal(t, tc.wantTitle, info.GetTitle())
-				assert.Equal(t, tc.wantYear, info.GetYear())
-				assert.Equal(t, tc.wantSeries, info.GetSeriesTitle())
-				assert.Equal(t, tc.wantSeason, info.GetSeasonNumber())
-				assert.Equal(t, tc.wantEp, info.GetEpisodeNumber())
+				assert.Equal(t, test.wantID, info.GetID())
+				assert.Equal(t, test.wantTitle, info.GetTitle())
+				assert.Equal(t, test.wantYear, info.GetYear())
+				assert.Equal(t, test.wantSeries, info.GetSeriesTitle())
+				assert.Equal(t, test.wantSeason, info.GetSeasonNumber())
+				assert.Equal(t, test.wantEp, info.GetEpisodeNumber())
 			}
 		})
 	}
@@ -457,28 +590,28 @@ func TestGetPosterImage(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
 				parseResp:  knownParseOutput,
-				seriesByID: tc.seriesByID,
-				imageBody:  tc.imageBody,
-				imageType:  tc.imageType,
+				seriesByID: test.seriesByID,
+				imageBody:  test.imageBody,
+				imageType:  test.imageType,
 			})
 			t.Cleanup(srv.Close)
 
-			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
 			gotBytes, gotMime, err := client.GetPosterImage(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
 
 			errFunc(t, err)
-			assert.Equal(t, tc.wantBytes, gotBytes)
-			assert.Equal(t, tc.wantMime, gotMime)
+			assert.Equal(t, test.wantBytes, gotBytes)
+			assert.Equal(t, test.wantMime, gotMime)
 		})
 	}
 }
