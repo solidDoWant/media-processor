@@ -18,8 +18,15 @@ import (
 const defaultDRMRoot = "/sys/class/drm"
 
 // devDRIRoot is the device-node directory render paths are reported under.
-// Pulled out so tests can verify the returned path without hard-coding it.
-const devDRIRoot = "/dev/dri"
+// Declared as a var rather than a const so tests can point it at a fake
+// directory; production code never reassigns it.
+var devDRIRoot = "/dev/dri"
+
+// validateDevice checks that a candidate render-node path is a usable
+// character device. Declared as a var (not invoked by name) so tests can
+// substitute an existence-only stub — user-mode tests cannot create real
+// character devices under t.TempDir().
+var validateDevice = validateHardwareDevicePath
 
 // detectI915RenderNode scans drmRoot for render nodes whose backing driver is
 // the Intel i915 kernel module and returns the /dev/dri path of the
@@ -28,6 +35,11 @@ const devDRIRoot = "/dev/dri"
 // failures are skipped so a partial sysfs view doesn't fail detection. A
 // missing drmRoot is treated as "no GPU detected" rather than an error so
 // non-Linux hosts and minimal containers don't fail the orchestration.
+//
+// Each candidate's matching /dev/dri/renderD<N> character device must also
+// pass validateHardwareDevicePath; without that check, a container that sees
+// the host's DRM sysfs but doesn't have /dev/dri mounted would log an
+// auto-detected device and then fail the first transcode.
 func detectI915RenderNode(drmRoot string) (string, error) {
 	entries, err := os.ReadDir(drmRoot)
 	if err != nil {
@@ -39,7 +51,7 @@ func detectI915RenderNode(drmRoot string) (string, error) {
 	}
 
 	type renderMatch struct {
-		name string
+		path string
 		num  int
 	}
 
@@ -65,7 +77,12 @@ func detectI915RenderNode(drmRoot string) (string, error) {
 			continue
 		}
 
-		matches = append(matches, renderMatch{name: name, num: num})
+		devicePath := filepath.Join(devDRIRoot, name)
+		if err := validateDevice(devicePath); err != nil {
+			continue
+		}
+
+		matches = append(matches, renderMatch{path: devicePath, num: num})
 	}
 
 	if len(matches) == 0 {
@@ -74,7 +91,7 @@ func detectI915RenderNode(drmRoot string) (string, error) {
 
 	sort.Slice(matches, func(i, j int) bool { return matches[i].num < matches[j].num })
 
-	return filepath.Join(devDRIRoot, matches[0].name), nil
+	return matches[0].path, nil
 }
 
 // resolveHardwareDevicePath returns the device path the worker should pass to

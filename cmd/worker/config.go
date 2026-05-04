@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
@@ -96,8 +97,15 @@ func loadConfig() (workerConfig, error) {
 	cfg.Sonarr = sonarr.Config{URL: sonarrURL, APIKey: sonarrAPIKey}
 
 	hardwareDevicePathOverride := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
-	if err := validateHardwareDevicePath(hardwareDevicePathOverride); err != nil {
-		return workerConfig{}, err
+
+	// Only enforce the override when this worker actually transcodes. With
+	// shared config across worker controllers, a GPU path set for the
+	// transcode worker must not fail startup on CPU-only workers that never
+	// open the device.
+	if slices.Contains(cfg.EnabledTokens, media.TranscodeActivityToken) {
+		if err := validateHardwareDevicePath(hardwareDevicePathOverride); err != nil {
+			return workerConfig{}, err
+		}
 	}
 
 	cfg.HardwareDevicePathOverride = hardwareDevicePathOverride

@@ -42,9 +42,13 @@ type Activities struct {
 // flow through here so test callers don't have to thread them.
 type ActivitiesOption func(*Activities)
 
-// WithHardwareDevicePath injects the device path used by the transcode activity
-// for hardware-accelerated encoding. The empty string (the default) means the
-// transcode activity runs in software-only mode.
+// WithHardwareDevicePath injects the device path used by the transcode
+// activity for hardware-accelerated encoding. The empty string (the default)
+// is forwarded to libav's CreateHardwareDeviceContext as "auto-select"; when
+// no hardware backend is available the encoder layer falls back to libx265
+// per the existing per-profile fallback in pkg/ffmpeg/stream_video.go. A
+// non-empty path is used verbatim (validated as a character device at
+// startup).
 func WithHardwareDevicePath(path string) ActivitiesOption {
 	return func(a *Activities) { a.hardwareDevicePath = path }
 }
