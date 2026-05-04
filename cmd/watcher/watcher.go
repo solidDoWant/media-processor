@@ -132,8 +132,10 @@ const workflowIDShortHashLen = 12
 // sha256(absFilePath). Determinism and collision resistance are anchored on
 // the full absolute path, so two paths with the same basename still produce
 // distinct IDs. If the assembled ID would exceed Temporal's 1000-char limit,
-// the basename segment is right-truncated by exactly the overflow amount so
-// the trailing "-{shortHash}" segment is preserved unchanged.
+// basename is trimmed first so the operator-configured mapping name stays
+// visible; only when mapping alone would exceed the budget does mapping get
+// trimmed too. The trailing "-{shortHash}" segment is always preserved
+// unchanged.
 func workflowID(input mediatypes.MediaInput) string {
 	sum := sha256.Sum256([]byte(input.FilePath))
 	shortHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
@@ -141,20 +143,19 @@ func workflowID(input mediatypes.MediaInput) string {
 	mapping := sanitizeWorkflowIDSegment(input.MappingName, false)
 	basename := sanitizeWorkflowIDSegment(filepath.Base(input.FilePath), true)
 
-	suffix := "-" + shortHash
-
-	id := mapping + "-" + basename + suffix
-	if overflow := len(id) - workflowIDMaxLen; overflow > 0 {
-		if overflow >= len(basename) {
+	// Two literal "-" separators plus the hash are the fixed overhead; the
+	// remaining budget is shared between mapping and basename.
+	budget := workflowIDMaxLen - (2 + workflowIDShortHashLen)
+	if len(mapping)+len(basename) > budget {
+		if len(mapping) >= budget {
+			mapping = mapping[:budget]
 			basename = ""
 		} else {
-			basename = basename[:len(basename)-overflow]
+			basename = basename[:budget-len(mapping)]
 		}
-
-		id = mapping + "-" + basename + suffix
 	}
 
-	return id
+	return mapping + "-" + basename + "-" + shortHash
 }
 
 // workflowIDSegmentInvalid matches any run of characters that should be

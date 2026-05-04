@@ -772,6 +772,24 @@ func TestWorkflowID_LengthCapPreservesHash(t *testing.T) {
 	assert.True(t, strings.HasSuffix(id, "-"+expectedHash), "short hash suffix must be preserved unchanged")
 }
 
+// TestWorkflowID_LengthCapTrimsMappingWhenItAloneOverflows verifies that when
+// the mapping name alone is already long enough to overflow the 1000-char
+// cap, mapping is also trimmed (after basename is fully consumed) so the
+// resulting ID still fits and the trailing -{shortHash} suffix survives.
+func TestWorkflowID_LengthCapTrimsMappingWhenItAloneOverflows(t *testing.T) {
+	t.Parallel()
+
+	longMapping := strings.Repeat("m", 2000)
+	path := "/watch/x/movie.mkv"
+	id := workflowID(mediatypes.MediaInput{FilePath: path, MappingName: longMapping})
+
+	sum := sha256.Sum256([]byte(path))
+	expectedHash := hex.EncodeToString(sum[:])[:workflowIDShortHashLen]
+
+	assert.LessOrEqual(t, len(id), workflowIDMaxLen, "ID must respect the 1000-char cap even when mapping alone overflows")
+	assert.True(t, strings.HasSuffix(id, "-"+expectedHash), "short hash suffix must be preserved unchanged")
+}
+
 // TestScan_PreserveSourceForwardedToDispatch verifies that the preserveSource value from a
 // WatchEntry is forwarded verbatim to the dispatch callback for each discovered file.
 func TestScan_PreserveSourceForwardedToDispatch(t *testing.T) {
