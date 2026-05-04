@@ -39,6 +39,12 @@ type subtitleStreamState struct {
 	// default font/style; the decoder reads it to populate subtitle_header.
 	sourceExtraData []byte
 
+	// sourceTimeBase is the input stream's AVStream.time_base, used as the
+	// decoder's pkt_timebase so that AVPacket.pts/duration on inbound packets
+	// are interpreted in the right units (mp4 subtitle streams typically use
+	// 1/1000000, MKV typically 1/1000 — they cannot be assumed equal).
+	sourceTimeBase astiav.Rational
+
 	converter *subtitleConverter
 }
 
@@ -50,7 +56,7 @@ func (sss *subtitleStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext)
 		return nil
 	}
 
-	conv, err := newSubtitleConverter(sss.sourceCodecID, sss.targetCodecID, sss.sourceExtraData)
+	conv, err := newSubtitleConverter(sss.sourceCodecID, sss.targetCodecID, sss.sourceExtraData, sss.sourceTimeBase)
 	if err != nil {
 		return fmt.Errorf("opening subtitle converter (%v → %v): %w", sss.sourceCodecID, sss.targetCodecID, err)
 	}

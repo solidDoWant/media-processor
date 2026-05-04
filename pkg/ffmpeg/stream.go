@@ -30,7 +30,7 @@ type stream interface {
 	// codec parameters after they have been populated from either the encoder
 	// context (encoded streams) or the input stream (copy streams). The
 	// default implementation in copyStreamState is a no-op; subtitleStreamState
-	// uses it to switch the codec ID for the mov_text → SubRip rewrite path.
+	// uses it to switch the codec ID for the mov_text → ASS rewrite path.
 	applyOutputOverrides(outStream *astiav.Stream) error
 	// free releases all resources held by this stream state.
 	free()

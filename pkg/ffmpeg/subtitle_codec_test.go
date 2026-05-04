@@ -26,9 +26,41 @@ func TestMatroskaSupportsCodec(t *testing.T) {
 		{"dvb_subtitle is matroska-native via S_DVBSUB", astiav.CodecIDDvbSubtitle, true},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, matroskaSupportsCodec(tc.codecID))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, matroskaSupportsCodec(test.codecID))
+		})
+	}
+}
+
+// TestEffectiveContainerIsMKV pins the recognised matroska output extensions.
+// effectiveContainerIsMKV gates the source-side cover-art exclusion and the
+// mov_text → ASS subtitle transcode; if it doesn't recognise the full
+// matroska family of extensions when the container is inferred from the
+// output filename, callers writing to .mka / .mks / .mk3d will hit the same
+// header-write failures the explicit ContainerMKV path already avoids.
+func TestEffectiveContainerIsMKV(t *testing.T) {
+	tests := []struct {
+		name       string
+		container  Container
+		outputPath string
+		want       bool
+	}{
+		{name: "explicit ContainerMKV", container: ContainerMKV, outputPath: "/tmp/anything", want: true},
+		{name: "explicit ContainerMP4 ignores extension", container: ContainerMP4, outputPath: "/tmp/foo.mkv", want: false},
+		{name: "inferred from .mkv extension", container: "", outputPath: "/tmp/foo.mkv", want: true},
+		{name: "inferred from .mka audio-only matroska", container: "", outputPath: "/tmp/foo.mka", want: true},
+		{name: "inferred from .mks subtitles-only matroska", container: "", outputPath: "/tmp/foo.mks", want: true},
+		{name: "inferred from .mk3d 3D matroska", container: "", outputPath: "/tmp/foo.mk3d", want: true},
+		{name: "inferred extension is case-insensitive", container: "", outputPath: "/tmp/Foo.MKV", want: true},
+		{name: "inferred from non-matroska extension", container: "", outputPath: "/tmp/foo.mp4", want: false},
+		{name: "inferred from no extension", container: "", outputPath: "/tmp/foo", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := &TranscodeBuilder{container: test.container, outputPath: test.outputPath}
+			assert.Equal(t, test.want, b.effectiveContainerIsMKV())
 		})
 	}
 }
@@ -55,9 +87,9 @@ func TestIsTextSubtitleCodec(t *testing.T) {
 		{"unknown codec ID", astiav.CodecIDNone, false},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isTextSubtitleCodec(tc.codecID))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, isTextSubtitleCodec(test.codecID))
 		})
 	}
 }

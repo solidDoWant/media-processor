@@ -11,7 +11,9 @@
 #include <string.h>
 
 AVCodecContext* mpsub_decoder_open(int codec_id, const uint8_t* extradata,
-                                   int extradata_size, int* err) {
+                                   int extradata_size,
+                                   int pkt_timebase_num, int pkt_timebase_den,
+                                   int* err) {
     const AVCodec* codec = avcodec_find_decoder((enum AVCodecID)codec_id);
     if (!codec) {
         *err = AVERROR_DECODER_NOT_FOUND;
@@ -29,6 +31,20 @@ AVCodecContext* mpsub_decoder_open(int codec_id, const uint8_t* extradata,
     // the ASS encoder uses internally for timestamp rescales.
     ctx->time_base.num = 1;
     ctx->time_base.den = 1000;
+
+    // pkt_timebase is the timebase the libavcodec subtitle decode wrapper
+    // expects AVPacket.pts/duration to be expressed in. Without this the
+    // wrapper silently skips its sub->pts / sub->end_display_time rescale
+    // (the `if (avctx->pkt_timebase.num)` guard in avcodec_decode_subtitle2),
+    // which happens to be benign for the matroska→ASS path we use today
+    // — the ASS encoder doesn't read sub->pts and matroska Block timing
+    // comes from the output packet's pts/duration via av_packet_copy_props
+    // — but it would silently break any future converter target whose
+    // encoder consumes sub->pts (e.g. SubRip via libavcodec).
+    if (pkt_timebase_num > 0 && pkt_timebase_den > 0) {
+        ctx->pkt_timebase.num = pkt_timebase_num;
+        ctx->pkt_timebase.den = pkt_timebase_den;
+    }
 
     if (extradata_size > 0) {
         ctx->extradata = av_mallocz((size_t)extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);

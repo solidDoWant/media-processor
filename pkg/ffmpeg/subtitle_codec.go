@@ -47,8 +47,11 @@ type subtitleConverter struct {
 // newSubtitleConverter opens decoder + encoder pair and threads the decoder's
 // generated subtitle_header into the encoder before opening, so the encoder's
 // extradata matches the decoder's understanding of the source's styling
-// defaults.
-func newSubtitleConverter(srcCodec, dstCodec astiav.CodecID, srcExtraData []byte) (*subtitleConverter, error) {
+// defaults. srcTimeBase is the input stream's AVStream.time_base; it is set
+// as the decoder's pkt_timebase so the libavcodec subtitle decode wrapper
+// can rescale packet timestamps into AVSubtitle fields without falling into
+// its zero-pkt_timebase no-op branch.
+func newSubtitleConverter(srcCodec, dstCodec astiav.CodecID, srcExtraData []byte, srcTimeBase astiav.Rational) (*subtitleConverter, error) {
 	sc := &subtitleConverter{}
 
 	var srcExtraPtr *C.uint8_t
@@ -58,7 +61,11 @@ func newSubtitleConverter(srcCodec, dstCodec astiav.CodecID, srcExtraData []byte
 
 	var rc C.int
 
-	sc.decoder = C.mpsub_decoder_open(C.int(srcCodec), srcExtraPtr, C.int(len(srcExtraData)), &rc)
+	sc.decoder = C.mpsub_decoder_open(
+		C.int(srcCodec), srcExtraPtr, C.int(len(srcExtraData)),
+		C.int(srcTimeBase.Num()), C.int(srcTimeBase.Den()),
+		&rc,
+	)
 	if sc.decoder == nil {
 		return nil, fmt.Errorf("opening subtitle decoder for codec %v: %w", srcCodec, avError(rc))
 	}

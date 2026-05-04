@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/asticode/go-astiav"
@@ -232,11 +233,28 @@ func (b *TranscodeBuilder) WithDownmix(idx *int) *TranscodeBuilder {
 
 // effectiveContainerIsMKV reports whether the output container is Matroska,
 // either because it was explicitly set via ToContainer or because the output
-// filename has a .mkv extension (the case where the container is inferred by
-// astiav.AllocOutputFormatContext from the filename).
+// filename's extension identifies a member of the Matroska family — .mkv
+// (video), .mka (audio-only), .mks (subtitles-only), or .mk3d (3D), the
+// extensions astiav.AllocOutputFormatContext infers as Matroska from the
+// filename. Recognising the full family is necessary because
+// container-specific behaviour (cover-art exclusion, mov_text → ASS subtitle
+// transcode) must fire whenever the output is Matroska, not only when the
+// extension happens to be .mkv.
 func (b *TranscodeBuilder) effectiveContainerIsMKV() bool {
-	return b.container == ContainerMKV ||
-		(b.container == "" && strings.HasSuffix(strings.ToLower(b.outputPath), ".mkv"))
+	if b.container == ContainerMKV {
+		return true
+	}
+
+	if b.container != "" {
+		return false
+	}
+
+	switch strings.ToLower(filepath.Ext(b.outputPath)) {
+	case ".mkv", ".mka", ".mks", ".mk3d":
+		return true
+	default:
+		return false
+	}
 }
 
 // Build returns a runnable Transcoder.
@@ -541,6 +559,7 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 					targetCodecID:   astiav.CodecIDAss,
 					sourceCodecID:   inCodecID,
 					sourceExtraData: inStream.CodecParameters().ExtraData(),
+					sourceTimeBase:  inStream.TimeBase(),
 				}
 			} else {
 				s = &copyStreamState{inStream: inStream}

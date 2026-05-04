@@ -12,10 +12,18 @@
 // codec ID. The input stream's extradata (e.g. mp4 TextSampleEntry for
 // mov_text) is copied onto the context so the decoder can derive the ASS
 // [V4+ Styles] header that downstream encoders embed in their own extradata.
+// pkt_timebase_num/pkt_timebase_den must reflect the timebase of the
+// AVPacket pts/duration values that will be passed to mpsub_convert; the
+// libavcodec subtitle decode wrapper uses pkt_timebase to rescale packet
+// timestamps into AVSubtitle.pts (AV_TIME_BASE) and end_display_time (ms),
+// and silently skips that rescale (leaving sub->pts == AV_NOPTS_VALUE)
+// whenever pkt_timebase.num is zero.
 // On failure, *err is set to a negative AVERROR and NULL is returned; the
 // caller frees with mpsub_codec_close.
 AVCodecContext* mpsub_decoder_open(int codec_id, const uint8_t* extradata,
-                                   int extradata_size, int* err);
+                                   int extradata_size,
+                                   int pkt_timebase_num, int pkt_timebase_den,
+                                   int* err);
 
 // mpsub_encoder_open allocates and opens a subtitle encoder for the given
 // codec ID. The decoder's subtitle_header (the [V4+ Styles] section the

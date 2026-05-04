@@ -773,6 +773,7 @@ func subtitlePackets(t *testing.T, path string) []subtitlePacketInfo {
 
 	for {
 		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			require.ErrorIs(t, err, astiav.ErrEof, "ReadFrame failed before EOF — possibly a truncated or corrupt file")
 			break
 		}
 
@@ -818,9 +819,9 @@ func TestTranscode_SourceWithMovTextSubtitle(t *testing.T) {
 
 	var subtitleStreams []ffprobe.StreamInfo
 
-	for _, s := range info.Streams {
-		if s.CodecType == ffprobe.CodecTypeSubtitle {
-			subtitleStreams = append(subtitleStreams, s)
+	for _, stream := range info.Streams {
+		if stream.CodecType == ffprobe.CodecTypeSubtitle {
+			subtitleStreams = append(subtitleStreams, stream)
 		}
 	}
 
@@ -863,9 +864,9 @@ func TestTranscode_SourceWithSubripSubtitle_IsCopied(t *testing.T) {
 
 	var subtitleStreams []ffprobe.StreamInfo
 
-	for _, s := range info.Streams {
-		if s.CodecType == ffprobe.CodecTypeSubtitle {
-			subtitleStreams = append(subtitleStreams, s)
+	for _, stream := range info.Streams {
+		if stream.CodecType == ffprobe.CodecTypeSubtitle {
+			subtitleStreams = append(subtitleStreams, stream)
 		}
 	}
 

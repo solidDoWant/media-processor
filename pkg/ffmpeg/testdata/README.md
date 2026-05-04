@@ -29,27 +29,22 @@ Expected `cropdetect` output: `crop=320:176:0:22` (round=16 reduces 180 → 176;
 
 ## cover.jpg
 
-A 100x100 solid-green JPEG used as a cover-art payload in transcode tests that
-need to verify the bytes that end up in the output MKV's attachment stream.
+A 100x100 solid-green JPEG used as a cover-art payload in transcode tests that need to verify the bytes that end up in the output MKV's attachment stream.
 
 Generation command:
 
-```
+```bash
 ffmpeg -y -f lavfi -i color=c=green:s=100x100:d=1 -frames:v 1 -q:v 5 \
        pkg/ffmpeg/testdata/cover.jpg
 ```
 
 ## video_with_movtext_subtitle.mp4
 
-A synthetic mp4 with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and
-a single mov_text subtitle ("Hello world"). The matroska muxer rejects
-mov_text outright (`Subtitle codec mov_text (94213) is not supported.`), so
-this fixture is used to regression-test the conversion of mov_text to a
-matroska-compatible subtitle codec on the way through the transcoder.
+A synthetic mp4 with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and a single mov_text subtitle ("Hello world"). The matroska muxer rejects mov_text outright (`Subtitle codec mov_text (94213) is not supported.`), so this fixture is used to regression-test the conversion of mov_text to a matroska-compatible subtitle codec on the way through the transcoder.
 
 Generation command:
 
-```
+```bash
 ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
        -f lavfi -i sine=frequency=440:duration=0.5 \
        -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
@@ -61,15 +56,11 @@ ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s mov_text \
 
 ## video_with_subrip_subtitle.mkv
 
-A synthetic MKV with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track,
-and a single SubRip subtitle ("Hello world"). Used to verify that subtitle
-codecs the matroska muxer already supports natively (here, `subrip` →
-`S_TEXT/UTF8`) are passed through by copy and are *not* re-routed into the
-mov_text → ASS transcode pipeline.
+A synthetic MKV with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and a single SubRip subtitle ("Hello world"). Used to verify that subtitle codecs the matroska muxer already supports natively (here, `subrip` → `S_TEXT/UTF8`) are passed through by copy and are *not* re-routed into the mov_text → ASS transcode pipeline.
 
 Generation command:
 
-```
+```bash
 ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
        -f lavfi -i sine=frequency=440:duration=0.5 \
        -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
@@ -81,15 +72,11 @@ ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s srt \
 
 ## video_with_attached_pic.mp4
 
-A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a
-200x300 mjpeg cover-art image carrying `disposition:attached_pic`. Used to
-regression-test the embedded-cover-art exclusion in `Transcoder` (a missing
-exclusion fed the still image into the HEVC encoder; on QSV this returned
-"Function not implemented").
+A synthetic mp4 with two video streams: a 0.25 s 160x120 H.264 main video and a 200x300 mjpeg cover-art image carrying `disposition:attached_pic`. Used to regression-test the embedded-cover-art exclusion in `Transcoder` (a missing exclusion fed the still image into the HEVC encoder; on QSV this returned "Function not implemented").
 
 Generation command:
 
-```
+```bash
 ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.25 \
        -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p main.mp4
 ffmpeg -y -f lavfi -i color=c=red:s=200x300:d=1 -frames:v 1 -q:v 8 poster.jpg
