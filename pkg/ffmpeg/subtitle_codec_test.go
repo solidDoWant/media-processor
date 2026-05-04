@@ -167,6 +167,39 @@ func TestSubtitleConverter_GrowsEncodeBufferOnOverflow(t *testing.T) {
 		"convert must have grown the encode buffer beyond the initial size to fit the payload")
 }
 
+// TestSubtitleConverter_FreeIsIdempotent verifies that calling free() more
+// than once on the same converter is safe (no double-free, no panic) and
+// that the decoder/encoder pointers are observably nil after the first
+// call. Implicit because libavcodec's avcodec_free_context (called via
+// mpsub_codec_close) takes AVCodecContext** and writes NULL to the pointer
+// it freed, so the existing `if sc.decoder != nil` guards short-circuit on
+// the second call without any explicit assignment in free() itself.
+//
+// Pinning this in a test avoids drift if mpsub_codec_close is ever
+// reimplemented to break the contract avcodec_free_context guarantees.
+func TestSubtitleConverter_FreeIsIdempotent(t *testing.T) {
+	conv, err := newSubtitleConverter(
+		astiav.CodecIDMovText, astiav.CodecIDAss, nil,
+		astiav.NewRational(1, 1000),
+	)
+	require.NoError(t, err)
+
+	require.NotNil(t, conv.decoder, "decoder must be non-nil after construction")
+	require.NotNil(t, conv.encoder, "encoder must be non-nil after construction")
+	require.NotNil(t, conv.encBuf, "encode buffer must be non-nil after construction")
+
+	conv.free()
+
+	assert.Nil(t, conv.decoder, "decoder must be nil after free (avcodec_free_context clears via double-pointer)")
+	assert.Nil(t, conv.encoder, "encoder must be nil after free (avcodec_free_context clears via double-pointer)")
+	assert.Nil(t, conv.encBuf, "encode buffer must be nil after free")
+
+	// Second free must be a no-op — the nil guards short-circuit. A double
+	// free would otherwise abort the process via libavcodec's internal
+	// asserts long before this assertion line runs.
+	assert.NotPanics(t, conv.free, "free must be safe to call more than once")
+}
+
 // TestNextEncodeBufferSize pins the doubling-with-clamp policy used by
 // growEncodeBuffer. The default initial buffer (64 KiB) happens to double
 // cleanly onto the 4 MiB cap, but a non-power-of-two starting size would
