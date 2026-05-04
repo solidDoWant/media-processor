@@ -26,6 +26,12 @@ type stream interface {
 	processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
 	// flush drains any buffered encoder output. No-op for copy streams.
 	flush(outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error
+	// applyOutputOverrides allows the stream to mutate the output stream's
+	// codec parameters after they have been populated from either the encoder
+	// context (encoded streams) or the input stream (copy streams). The
+	// default implementation in copyStreamState is a no-op; subtitleStreamState
+	// uses it to switch the codec ID for the mov_text → ASS rewrite path.
+	applyOutputOverrides(outStream *astiav.Stream) error
 	// free releases all resources held by this stream state.
 	free()
 }
@@ -86,6 +92,8 @@ func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *asti
 func (css *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ int64) error {
 	return nil
 }
+
+func (css *copyStreamState) applyOutputOverrides(_ *astiav.Stream) error { return nil }
 
 func (css *copyStreamState) free() {}
 
