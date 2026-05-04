@@ -426,7 +426,7 @@ func TestRunTranscode(t *testing.T) {
 			},
 		},
 		{
-			name: "pre-existing final file is overwritten",
+			name: "pre-existing non-media final file is overwritten",
 			setup: func(t *testing.T) (string, string) {
 				inputPath := copyTestVideo(t)
 				outputDir := t.TempDir()
@@ -441,6 +441,65 @@ func TestRunTranscode(t *testing.T) {
 				info, err := os.Stat(filepath.Join(outputDir, mkvOutputName(inputPath)))
 				require.NoError(t, err, "final output file should exist")
 				assert.Greater(t, info.Size(), int64(len("old output")), "final file should contain transcoded data, not old content")
+			},
+		},
+		{
+			name: "pre-existing final file with matching duration is reused without re-encoding",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+
+				src, err := os.ReadFile(testVideoPath)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), src, 0o600))
+
+				return inputPath, outputDir
+			},
+			probe: ProbeOutput{
+				IsValidMedia:    true,
+				VideoCodec:      "h264",
+				Format:          "mov,mp4,m4a,3gp,3g2,mj2",
+				DurationSeconds: 5.013333,
+				AudioStreams:    []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+			},
+			errFunc: require.NoError,
+			checkOutput: func(t *testing.T, out TranscodeOutput, inputPath string) {
+				assert.Equal(t, "h264", out.DestCodec, "reused file's codec should be reported, not a fresh-transcode codec")
+				assert.Equal(t, "mkv", out.DestContainer)
+				assert.Zero(t, out.TranscodeDurationSeconds, "reuse path should report zero transcode duration since no encoding ran")
+			},
+			check: func(t *testing.T, outputDir, inputPath string) {
+				finalContents, err := os.ReadFile(filepath.Join(outputDir, mkvOutputName(inputPath)))
+				require.NoError(t, err, "final output file should exist")
+
+				srcContents, err := os.ReadFile(testVideoPath)
+				require.NoError(t, err)
+
+				assert.Equal(t, srcContents, finalContents, "existing output should be preserved byte-for-byte when its duration matches")
+			},
+		},
+		{
+			name: "pre-existing final file with mismatched duration is overwritten",
+			setup: func(t *testing.T) (string, string) {
+				inputPath := copyTestVideo(t)
+				outputDir := t.TempDir()
+
+				src, err := os.ReadFile(testVideoPath)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(outputDir, mkvOutputName(inputPath)), src, 0o600))
+
+				return inputPath, outputDir
+			},
+			probe: ProbeOutput{
+				IsValidMedia:    true,
+				VideoCodec:      "h264",
+				Format:          "mov,mp4,m4a,3gp,3g2,mj2",
+				DurationSeconds: 100.0,
+				AudioStreams:    []AudioStreamInfo{audioStreamInfo(1, "und", 2)},
+			},
+			errFunc: require.NoError,
+			checkOutput: func(t *testing.T, out TranscodeOutput, inputPath string) {
+				assert.Equal(t, "hevc", out.DestCodec, "duration mismatch should trigger a fresh H.265 transcode")
 			},
 		},
 		{

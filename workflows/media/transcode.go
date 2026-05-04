@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +122,8 @@ type TranscodeOutput struct {
 	// DestFileSizeBytes is the size of the output file in bytes, measured after transcoding.
 	DestFileSizeBytes int64 `json:"dest_file_size_bytes"`
 	// TranscodeDurationSeconds is the wall-clock time spent in RunTranscode (the ffmpeg call
-	// plus surrounding stat/rename operations), in seconds.
+	// plus surrounding stat/rename operations), in seconds. Zero when the existing output
+	// was reused without re-encoding.
 	TranscodeDurationSeconds float64 `json:"transcode_duration_seconds"`
 	// ArtworkFetchSkipped is true when artwork fetch was attempted but yielded no
 	// embeddable image (library unreachable, no poster available, or unsupported type).
@@ -192,6 +194,55 @@ type TranscodeRequest struct {
 	// embeddable image, transcoding proceeds without an embedded attachment and
 	// ArtworkFetchSkipped is set to true.
 	Library medialib.ArrLibrary
+}
+
+// reuseExistingOutput reports whether finalPath already holds a media file
+// whose duration is within 1% of srcDurationSeconds. When it does, the existing
+// file's video codec name and on-disk size are returned along with reuse=true,
+// indicating the caller can skip transcoding and reuse the file as-is.
+//
+// Any non-fatal failure (no file present, file unreadable as media, missing
+// duration on either side) returns reuse=false with a nil error so the caller
+// proceeds with a normal transcode that will overwrite the destination via the
+// usual atomic rename. Context cancellation/deadline errors from probing are
+// propagated so a cancelled activity fails instead of silently bypassing the
+// reuse check and starting a fresh transcode.
+func reuseExistingOutput(ctx context.Context, finalPath string, srcDurationSeconds float64) (codec string, size int64, reuse bool, err error) {
+	if srcDurationSeconds <= 0 {
+		return "", 0, false, nil
+	}
+
+	info, statErr := os.Stat(finalPath)
+	if statErr != nil || info.IsDir() {
+		return "", 0, false, nil
+	}
+
+	probeInfo, probeErr := ffprobe.Probe(ctx, finalPath)
+	if probeErr != nil {
+		if errors.Is(probeErr, context.Canceled) || errors.Is(probeErr, context.DeadlineExceeded) {
+			return "", 0, false, probeErr
+		}
+
+		return "", 0, false, nil
+	}
+
+	existingDuration := probeInfo.Duration.Seconds()
+	if existingDuration <= 0 {
+		return "", 0, false, nil
+	}
+
+	if math.Abs(existingDuration-srcDurationSeconds)/srcDurationSeconds > 0.01 {
+		return "", 0, false, nil
+	}
+
+	for _, stream := range probeInfo.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo {
+			codec = stream.CodecName
+			break
+		}
+	}
+
+	return codec, info.Size(), true, nil
 }
 
 // RunTranscode transcodes req.FilePath into req.OutputDir, writing to a temp file named
@@ -316,6 +367,30 @@ func RunTranscode(ctx context.Context, req TranscodeRequest) (TranscodeOutput, e
 	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
 	tempPath := filepath.Join(effectiveOutputDir, "._"+mkvBase+".tmp")
 	finalPath := filepath.Join(effectiveOutputDir, mkvBase)
+
+	// Skip transcoding if finalPath already holds a media file whose duration
+	// is within 1% of the source — assume it is the result of a previous
+	// successful run for this input and reuse it.
+	codec, dstSize, reuse, reuseErr := reuseExistingOutput(ctx, finalPath, probe.DurationSeconds)
+	if reuseErr != nil {
+		return TranscodeOutput{}, fmt.Errorf("probe existing output: %w", reuseErr)
+	}
+
+	if reuse {
+		slog.InfoContext(ctx, "reusing existing transcoded output",
+			slog.String("path", finalPath),
+			slog.Float64("source_duration_seconds", probe.DurationSeconds),
+		)
+
+		return TranscodeOutput{
+			DestCodec:                codec,
+			DestContainer:            "mkv",
+			DestFilePath:             finalPath,
+			SourceFileSizeBytes:      srcSize,
+			DestFileSizeBytes:        dstSize,
+			TranscodeDurationSeconds: 0,
+		}, nil
+	}
 
 	// Build per-stream title map for retained audio streams. Language is only
 	// included when streams span multiple distinct languages; it adds no useful
