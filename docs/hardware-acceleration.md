@@ -2,9 +2,17 @@
 
 media-processor supports hardware-accelerated H.265 encoding via two backends. The backend is selected automatically based on which encoders are available at runtime; selection priority is QSV > VAAPI. If no hardware encoder is found, the worker falls back to software encoding (libx265).
 
-Hardware acceleration is **auto-enabled** when the appropriate encoder is available in the FFmpeg shared libraries the worker uses. No configuration is required to activate it — set `MEDIA_HARDWARE_DEVICE_PATH` only when you need to target a specific device (e.g. when multiple GPUs are present); when left empty a device is selected automatically.
+## Device selection
 
-Note that the `hardware_accelerated` metric label is derived from whether `MEDIA_HARDWARE_DEVICE_PATH` is set, not from whether a hardware encoder was actually selected at runtime. Set the device path if you want the label to reflect hardware use.
+On startup, transcode-enabled workers resolve the device path used for hardware-accelerated encoding in this order:
+
+1. **Operator override** — when `MEDIA_HARDWARE_DEVICE_PATH` is set, the worker uses that path verbatim. The path is validated as a character device at startup so a typo (e.g. `/dev/dri/render128` missing the `D`) fails fast rather than on the first transcode. The override is **not** restricted to Intel devices, so operators may point it at non-i915 hardware that future backends will support.
+2. **Auto-detection** — when the override is unset, the worker scans `/sys/class/drm/` for render nodes whose backing kernel driver is `i915` and uses the lowest-numbered match (e.g. `/dev/dri/renderD128`).
+3. **Software-only** — when neither yields a path, the worker logs `no Intel GPU detected — software-only mode` and the transcode activity uses the software encoder (libx265).
+
+Auto-detection runs only on workers that have the `transcode` activity enabled (see `WORKER_ACTIVITIES`); workers that don't transcode skip detection entirely.
+
+The chosen path is logged at startup with a `source` field of either `override` or `auto-detected`, so operators can confirm at a glance which branch the worker took.
 
 ## Backends
 

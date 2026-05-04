@@ -157,7 +157,7 @@ Variables marked **Required** cause the binary to exit immediately on startup wh
 | `SONARR_URL` | string (URL) | — | **Required** | Sonarr base URL (e.g. `http://sonarr:8989`). |
 | `SONARR_API_KEY` | string | — | **Required** | Sonarr API key. |
 | `MEDIA_WEBHOOK_URL` | string (URL) | `""` | Optional | Webhook endpoint notified on workflow failure. No notification is sent when empty. |
-| `MEDIA_HARDWARE_DEVICE_PATH` | string (path) | `""` | Optional | Hardware device path for hardware-accelerated transcoding (e.g. `/dev/dri/renderD128`). When empty, the software encoder is used. |
+| `MEDIA_HARDWARE_DEVICE_PATH` | string (path) | `""` | Optional | Operator override for the hardware encoding device path (e.g. `/dev/dri/renderD128`). When set, the worker uses it verbatim. When empty, transcode-enabled workers auto-detect an Intel i915 render node under `/sys/class/drm/`; if none is found, the software encoder is used. |
 | `MEDIA_MIN_CROP_X` | integer | `10` | Optional | Minimum number of pixels that must be trimmed horizontally before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_MIN_CROP_Y` | integer | `10` | Optional | Minimum number of pixels that must be trimmed vertically before a crop is applied. Set to `-1` to accept any detected crop. |
 | `MEDIA_DETECT_CROP_TIMEOUT` | Go duration | `30m` | Optional | Activity start-to-close timeout for the crop-detection step (e.g. `45m`, `1h`). |

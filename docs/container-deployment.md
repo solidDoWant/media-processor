@@ -99,7 +99,7 @@ Docker flags:
 
 The render-node GID varies between hosts. The command above resolves it from `/etc/group` at runtime; alternatively, pass the numeric GID directly (for example `--group-add 104`).
 
-On Linux hosts with more than one rendering device, set `MEDIA_HARDWARE_DEVICE_PATH` to pick a specific one (e.g. `/dev/dri/renderD129`). When unset, the worker selects a device automatically. See [hardware-acceleration.md](hardware-acceleration.md) for backend selection and device-path semantics per backend.
+On Linux hosts with more than one rendering device, set `MEDIA_HARDWARE_DEVICE_PATH` to pick a specific one (e.g. `/dev/dri/renderD129`). When unset, transcode-enabled workers auto-detect an Intel i915 render node under `/sys/class/drm/` and use the lowest-numbered match. See [hardware-acceleration.md](hardware-acceleration.md#device-selection) for the resolution order and per-backend device-path semantics.
 
 The worker image already bundles the Intel iHD VA-API driver and the oneVPL GPU runtime, with `LIBVA_DRIVERS_PATH` and `ONEVPL_SEARCH_PATH` pre-set to point to them. Operators do not need to set these variables; override them only if you replace the bundled drivers with a mounted alternative.
 

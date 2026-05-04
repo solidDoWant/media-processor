@@ -28,16 +28,31 @@ const errTypeNonRetryable = "MediaInputError"
 // Activities holds the dependencies needed by the activity methods. A single
 // instance is registered with the worker; all activities share its fields.
 type Activities struct {
-	cfg           MediaWorkflowConfig
-	radarrClient  medialib.ArrLibrary
-	sonarrClient  medialib.ArrLibrary
-	webhookClient *webhook.Client
+	cfg                MediaWorkflowConfig
+	hardwareDevicePath string
+	radarrClient       medialib.ArrLibrary
+	sonarrClient       medialib.ArrLibrary
+	webhookClient      *webhook.Client
+}
+
+// ActivitiesOption configures optional fields on the Activities returned by
+// NewActivities. Required dependencies (cfg, arr clients, webhook) stay as
+// positional args; per-worker values that are not always relevant (e.g. the
+// hardware device path, which is only meaningful on a transcode-enabled worker)
+// flow through here so test callers don't have to thread them.
+type ActivitiesOption func(*Activities)
+
+// WithHardwareDevicePath injects the device path used by the transcode activity
+// for hardware-accelerated encoding. The empty string (the default) means the
+// transcode activity runs in software-only mode.
+func WithHardwareDevicePath(path string) ActivitiesOption {
+	return func(a *Activities) { a.hardwareDevicePath = path }
 }
 
 // NewActivities constructs an Activities ready for registration. Defaults are
 // applied to cfg.TaskQueuePrefix, cfg.DetectCropTimeout, and cfg.TranscodeTimeout
 // when zero.
-func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client) (*Activities, error) {
+func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client, opts ...ActivitiesOption) (*Activities, error) {
 	if cfg.TaskQueuePrefix == "" {
 		cfg.TaskQueuePrefix = DefaultTaskQueuePrefix
 	}
@@ -50,12 +65,18 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 		cfg.TranscodeTimeout = DefaultTranscodeTimeout
 	}
 
-	return &Activities{
+	a := &Activities{
 		cfg:           cfg,
 		radarrClient:  radarrClient,
 		sonarrClient:  sonarrClient,
 		webhookClient: webhookClient,
-	}, nil
+	}
+
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	return a, nil
 }
 
 // Registrar is the subset of registration methods that both worker.Worker and
@@ -227,7 +248,7 @@ func (a *Activities) Transcode(ctx context.Context, input MediaInput, probe Prob
 		CropParams:          cropOut.Crop,
 		OutputDir:           outputPath,
 		WatcherRoot:         input.WatchRoot,
-		HardwareDevicePath:  a.cfg.HardwareDevicePath,
+		HardwareDevicePath:  a.hardwareDevicePath,
 		H265CRF:             a.cfg.H265CRF,
 		ProgressLogInterval: a.cfg.ProgressLogInterval,
 		Heartbeat:           heartbeat,

@@ -171,7 +171,7 @@ config:
 
 | Field                                          | Type   | Default | Description                                                                                                                                                                                                               |
 | ---------------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.worker.media.hardware.devicePath`      | string | `""`    | Host path to the hardware encoding device (e.g. `/dev/dri/renderD128`). Sets `MEDIA_HARDWARE_DEVICE_PATH` when non-empty                                                                                                  |
+| `config.worker.media.hardware.devicePath`      | string | `""`    | Host path to the hardware encoding device (e.g. `/dev/dri/renderD128`). Sets `MEDIA_HARDWARE_DEVICE_PATH` when non-empty, which the worker uses verbatim. When empty, transcode-enabled workers auto-detect an Intel i915 render node                                                                                                  |
 | `config.worker.media.hardware.mountHostDevice` | bool   | `true`  | When true and `devicePath` is non-empty, creates a `hostPath` volume mounting the device at the same path inside the worker container. Set to `false` when using a Kubernetes device plugin (e.g. `intel.com/gpu`) or DRA |
 
 ### `config.worker.media.blackBarRemoval`

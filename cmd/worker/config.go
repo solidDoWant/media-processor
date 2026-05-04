@@ -27,9 +27,15 @@ type workerConfig struct {
 	HealthAddr        string
 	WebhookURL        string
 	WorkerStopTimeout time.Duration
-	Radarr            radarr.Config
-	Sonarr            sonarr.Config
-	Workflow          media.MediaWorkflowConfig
+	// HardwareDevicePathOverride is the operator-supplied
+	// MEDIA_HARDWARE_DEVICE_PATH value (empty when unset). When non-empty it
+	// overrides hardware auto-detection and is validated at startup;
+	// auto-detection of an Intel i915 render node runs only when this is
+	// empty (and only on workers with the transcode activity enabled).
+	HardwareDevicePathOverride string
+	Radarr                     radarr.Config
+	Sonarr                     sonarr.Config
+	Workflow                   media.MediaWorkflowConfig
 }
 
 // defaultHealthAddr is the fallback HTTP listen address for the health server
@@ -89,6 +95,13 @@ func loadConfig() (workerConfig, error) {
 
 	cfg.Sonarr = sonarr.Config{URL: sonarrURL, APIKey: sonarrAPIKey}
 
+	hardwareDevicePathOverride := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
+	if err := validateHardwareDevicePath(hardwareDevicePathOverride); err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.HardwareDevicePathOverride = hardwareDevicePathOverride
+
 	workflow, err := loadWorkflowConfig()
 	if err != nil {
 		return workerConfig{}, err
@@ -113,15 +126,8 @@ func loadConfig() (workerConfig, error) {
 
 // loadWorkflowConfig reads the media-workflow tuning env vars and returns a
 // ready-to-use MediaWorkflowConfig. Split from loadConfig to keep the dense
-// crop/timeout/CRF block testable in isolation. Validates
-// MEDIA_HARDWARE_DEVICE_PATH so a typo surfaces at startup rather than on the
-// first transcode.
+// crop/timeout/CRF block testable in isolation.
 func loadWorkflowConfig() (media.MediaWorkflowConfig, error) {
-	hardwareDevicePath := os.Getenv("MEDIA_HARDWARE_DEVICE_PATH")
-	if err := validateHardwareDevicePath(hardwareDevicePath); err != nil {
-		return media.MediaWorkflowConfig{}, err
-	}
-
 	minCropX, err := parseCropThreshold("MEDIA_MIN_CROP_X", 10)
 	if err != nil {
 		return media.MediaWorkflowConfig{}, err
@@ -158,7 +164,6 @@ func loadWorkflowConfig() (media.MediaWorkflowConfig, error) {
 	}
 
 	return media.MediaWorkflowConfig{
-		HardwareDevicePath:    hardwareDevicePath,
 		HighCardinalityLabels: highCardinalityLabels,
 		MinCropX:              minCropX,
 		MinCropY:              minCropY,

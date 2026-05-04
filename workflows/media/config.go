@@ -143,9 +143,6 @@ type MediaWorkflowConfig struct {
 	// DefaultTaskQueuePrefix ("media-processor"). Tests override this so
 	// parallel runs do not share activity queues.
 	TaskQueuePrefix string
-	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
-	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
-	HardwareDevicePath string
 	// HighCardinalityLabels controls whether per-item labels (id, title, year, etc.)
 	// are attached to metric observations. Corresponds to METRICS_HIGH_CARDINALITY_LABELS.
 	HighCardinalityLabels bool
