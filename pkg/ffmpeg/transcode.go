@@ -474,15 +474,23 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 	streams := make(map[int]stream)
 
 	// Pre-scan to detect whether the source carries any "real" (non-still-image)
-	// video stream. If it does, any other video stream that uses a still-image
-	// codec (mjpeg/png/etc.) is by elimination a cover-art / thumbnail / preview
-	// frame — even when it lacks the disposition:attached_pic flag, which mp4
-	// sources from iTunes/Plex/etc. routinely omit. The "another real video
-	// stream exists" guard avoids dropping legitimate motion-mjpeg sources where
-	// the still-image codec IS the main video.
+	// video stream that the caller actually wants in the output. If it does,
+	// any other video stream using a still-image codec (mjpeg/png/etc.) is by
+	// elimination a cover-art / thumbnail / preview frame — even when it lacks
+	// the disposition:attached_pic flag, which mp4 sources from iTunes/Plex/etc.
+	// routinely omit. The "another real video stream exists" guard avoids
+	// dropping legitimate motion-mjpeg sources where the still-image codec IS
+	// the main video, and honouring excludeStreams here avoids the surprise
+	// case where excluding the only real video stream would otherwise leave
+	// the output with no video at all (still-image streams dropped because
+	// the soon-to-be-excluded real video was still counted).
 	hasRealVideoStream := false
 
 	for _, inStream := range inputFmt.Streams() {
+		if t.excludeStreams[inStream.Index()] {
+			continue
+		}
+
 		params := inStream.CodecParameters()
 		if params.MediaType() == astiav.MediaTypeVideo &&
 			!inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) &&

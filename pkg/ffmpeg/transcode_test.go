@@ -919,6 +919,34 @@ func TestTranscode_SourceWithImageVideoStream(t *testing.T) {
 		"output must contain exactly one video stream; the source's still-image mjpeg track must be dropped, not re-encoded as a second hevc track")
 }
 
+// TestTranscode_StillImageDropRespectsExcludeStreams guards against the
+// pre-scan ignoring the caller's ExcludeStreams set. If the only "real"
+// video stream in the source is excluded by the caller, the still-image
+// codecs that remain are by elimination the only video the caller wants
+// kept — they must NOT be dropped by the still-image guard. Without
+// honouring ExcludeStreams in the pre-scan, the source's only output
+// video would silently disappear.
+func TestTranscode_StillImageDropRespectsExcludeStreams(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	// The fixture has stream 0 = H.264 (real video) and stream 1 = mjpeg
+	// (still-image, no attached_pic). Excluding stream 0 leaves only the
+	// still-image stream — which the transcoder must keep, not drop, since
+	// it is now the only video the caller wants in the output.
+	const realVideoStreamIdx = 0
+
+	err := ffmpeg.NewTranscode(testImageVideoStreamSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		ExcludeStreams(realVideoStreamIdx).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.GreaterOrEqual(t, countVideoStreams(t, output), 1,
+		"output must retain at least one video stream after the main video is excluded; the still-image guard must not drop the source's only remaining video stream")
+}
+
 // TestTranscode_SourceWithDataStream verifies that data-typed streams in the
 // source (here a QuickTime timecode track surfaced as `codec_type=data`) are
 // dropped from a matroska output instead of being copied through. matroska's
