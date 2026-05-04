@@ -3,6 +3,7 @@
 package media
 
 import (
+	"fmt"
 	"time"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
@@ -26,6 +27,76 @@ const (
 	CleanupActivityName       = "Cleanup"
 	NotifyFailureActivityName = "NotifyFailure"
 )
+
+// Activity tokens: kebab-case identifiers used in the worker's activity
+// selection list (WORKER_ACTIVITIES) and as the suffix on each activity's
+// dedicated task queue. The mapping is documented in docs/configuration.md.
+const (
+	ProbeActivityToken         = "probe"
+	DetectCropActivityToken    = "detect-crop"
+	TranscodeActivityToken     = "transcode"
+	NotifyActivityToken        = "notify"
+	CleanupActivityToken       = "cleanup"
+	NotifyFailureActivityToken = "notify-failure"
+
+	// WorkflowToken is the WORKER_ACTIVITIES token that enables a worker's
+	// workflow task-queue Worker. Unlike activity tokens, the workflow worker
+	// polls the prefix-only queue (no suffix); see ActivityTaskQueue.
+	WorkflowToken = "workflow"
+)
+
+// DefaultTaskQueuePrefix is the prefix applied to the workflow task queue and
+// every activity task queue. Operators can override it via TEMPORAL_TASK_QUEUE
+// (the watcher dispatches workflows there, the worker polls there); tests pass
+// a per-test value through MediaWorkflowConfig.TaskQueuePrefix to keep parallel
+// runs from sharing queues. Re-exported from the types package so the watcher
+// can read it without pulling in libav.
+const DefaultTaskQueuePrefix = mediatypes.DefaultTaskQueuePrefix
+
+// KnownActivities lists every activity's kebab-case token in the order the
+// workflow invokes them. WORKER_ACTIVITIES references these tokens; the worker
+// uses this list to register one Temporal Worker per resolved activity.
+var KnownActivities = []string{
+	ProbeActivityToken,
+	DetectCropActivityToken,
+	TranscodeActivityToken,
+	NotifyActivityToken,
+	CleanupActivityToken,
+	NotifyFailureActivityToken,
+}
+
+// ActivityTokensByName maps each Temporal-registered activity name to its
+// kebab-case token. The workflow uses this to derive ActivityOptions.TaskQueue
+// per ExecuteActivity call.
+var ActivityTokensByName = map[string]string{
+	ProbeActivityName:         ProbeActivityToken,
+	DetectCropActivityName:    DetectCropActivityToken,
+	TranscodeActivityName:     TranscodeActivityToken,
+	NotifyActivityName:        NotifyActivityToken,
+	CleanupActivityName:       CleanupActivityToken,
+	NotifyFailureActivityName: NotifyFailureActivityToken,
+}
+
+// ActivityTaskQueue returns the task queue name for the activity identified by
+// its kebab-case token. The result is "{prefix}-{token}", e.g.
+// "media-processor-detect-crop".
+func ActivityTaskQueue(prefix, token string) string {
+	return prefix + "-" + token
+}
+
+// ActivityTaskQueueByName is a convenience for workflow code that already has
+// the Temporal activity name (e.g. DetectCropActivityName) and wants the task
+// queue to route to. Panics if activityName is not registered in
+// ActivityTokensByName — that would silently route to "{prefix}-" and strand
+// activity tasks, so a programming error here must fail loud at the call site.
+func ActivityTaskQueueByName(prefix, activityName string) string {
+	token, ok := ActivityTokensByName[activityName]
+	if !ok {
+		panic(fmt.Sprintf("ActivityTaskQueueByName: unknown activity name %q", activityName))
+	}
+
+	return ActivityTaskQueue(prefix, token)
+}
 
 const (
 	// DefaultDetectCropTimeout is the default Temporal StartToCloseTimeout for
@@ -66,6 +137,12 @@ const (
 // MediaWorkflowConfig holds the configuration for the media processing workflow
 // and its activities.
 type MediaWorkflowConfig struct {
+	// TaskQueuePrefix is the base task queue name. The workflow itself runs on
+	// this exact queue; each activity is routed to "{prefix}-{token}" via
+	// ActivityOptions.TaskQueue. When zero-value, NewActivities applies
+	// DefaultTaskQueuePrefix ("media-processor"). Tests override this so
+	// parallel runs do not share activity queues.
+	TaskQueuePrefix string
 	// HardwareDevicePath is the device path passed to CreateHardwareDeviceContext
 	// for hardware-accelerated transcoding. An empty string uses libav auto-select.
 	HardwareDevicePath string

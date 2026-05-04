@@ -121,6 +121,15 @@ config:
 
   worker:
     logLevel: info
+    # activities selects which workflow + activity tokens this worker pod handles.
+    # Comma-separated list (no spaces required); tokens are: workflow, probe,
+    # detect-crop, transcode, notify, cleanup, notify-failure. Sugar: "all" expands
+    # to every token; "!token" removes one. The default "all" preserves the
+    # single-controller layout. Examples: "transcode" for a transcode-only
+    # autoscaling pool, "all,!transcode" for a general worker that does not
+    # transcode. Sets WORKER_ACTIVITIES on the worker. See
+    # docs/configuration.md#activity-task-queues.
+    activities: "all"
     # stopTimeout bounds the SIGTERM-triggered drain of in-flight Temporal activities, as a
     # Go duration string (e.g. "30m", "2h"). Sets WORKER_STOP_TIMEOUT on the worker. The
     # chart default of 30s pairs with METRICS_SCRAPE_WAIT_TIMEOUT (60s) and a 30s buffer

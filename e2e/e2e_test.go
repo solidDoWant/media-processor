@@ -38,15 +38,23 @@ const (
 	bbbZipURL  = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip"
 	bbbMP4Name = "bbb_sunflower_1080p_30fps_normal.mp4"
 
-	// Fixed host-side ports for the watcher and worker Prometheus endpoints,
-	// bound by the compose services (127.0.0.1:19090 and 127.0.0.1:19091).
-	watcherMetricsAddr = "127.0.0.1:19090"
-	workerMetricsAddr  = "127.0.0.1:19091"
+	// Fixed host-side ports for the watcher and the three worker pools'
+	// Prometheus endpoints, bound by the compose services. The compose file
+	// runs three worker containers — one polling the workflow queue, one the
+	// transcode activity queue, and one every other activity queue — so the
+	// workflow's metrics fan out across them and the e2e tests have to
+	// aggregate.
+	watcherMetricsAddr         = "127.0.0.1:19090"
+	workerWorkflowMetricsAddr  = "127.0.0.1:19091"
+	workerTranscodeMetricsAddr = "127.0.0.1:19094"
+	workerRestMetricsAddr      = "127.0.0.1:19096"
 
-	// Fixed host-side ports for the watcher and worker HTTP health endpoints,
-	// bound by the compose services (127.0.0.1:19092 and 127.0.0.1:19093).
-	watcherHealthBase = "http://127.0.0.1:19092"
-	workerHealthBase  = "http://127.0.0.1:19093"
+	// Fixed host-side ports for the watcher and worker pools' HTTP health
+	// endpoints, bound by the compose services.
+	watcherHealthBase         = "http://127.0.0.1:19092"
+	workerWorkflowHealthBase  = "http://127.0.0.1:19093"
+	workerTranscodeHealthBase = "http://127.0.0.1:19095"
+	workerRestHealthBase      = "http://127.0.0.1:19097"
 
 	// Host-mapped Temporal frontend port (compose binds 127.0.0.1:17233:7233).
 	// A non-default host port avoids colliding with a developer's local
@@ -54,6 +62,23 @@ const (
 	temporalHostPort  = "127.0.0.1:17233"
 	temporalNamespace = "default"
 )
+
+// workerPool bundles the docker-compose service name, /readyz base URL, and
+// /metrics endpoint for a single worker container. Storing the three pieces
+// together (rather than as parallel slices) keeps them from drifting out of
+// sync and removes the need for index-keyed correlation in the helpers.
+type workerPool struct {
+	serviceName string
+	healthBase  string
+	metricsAddr string
+}
+
+//nolint:gochecknoglobals // immutable metadata describing the worker pools.
+var workerPools = []workerPool{
+	{"worker-workflow", workerWorkflowHealthBase, workerWorkflowMetricsAddr},
+	{"worker-transcode", workerTranscodeHealthBase, workerTranscodeMetricsAddr},
+	{"worker-rest", workerRestHealthBase, workerRestMetricsAddr},
+}
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
 // messages are distinguishable from subprocess output in interleaved logs.

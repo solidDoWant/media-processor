@@ -138,6 +138,12 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{- $_ := set $workerEnv "TEMPORAL_TASK_QUEUE"  $temporalTaskQueue -}}
 {{- $_ := set $workerEnv "TEMPORAL_CONFIG_FILE" $temporalConfigFile -}}
 
+{{/* WORKER_ACTIVITIES — controls which workflow + activity tokens this pod
+     handles. See docs/configuration.md#activity-task-queues. */}}
+{{- if .Values.config.worker.activities -}}
+  {{- $_ := set $workerEnv "WORKER_ACTIVITIES" .Values.config.worker.activities -}}
+{{- end -}}
+
 {{/* LOG_LEVEL */}}
 {{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
 

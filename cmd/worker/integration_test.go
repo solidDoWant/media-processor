@@ -37,6 +37,10 @@ func TestWorkerConnectsToTemporal(t *testing.T) {
 		t.Setenv("TEMPORAL_TASK_QUEUE", "media-processor-test")
 	}
 
+	// Force the default WORKER_ACTIVITIES (=all) so the test exercises the
+	// multi-Worker startup path even when the host environment is restrictive.
+	t.Setenv("WORKER_ACTIVITIES", "")
+
 	// Provide the env vars required by run(). Neither Radarr nor Sonarr is
 	// exercised by this test — dummy values are sufficient.
 	t.Setenv("RADARR_URL", "http://localhost:9999")

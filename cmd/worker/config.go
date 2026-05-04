@@ -16,8 +16,14 @@ import (
 // Concentrating env-var reads here keeps main.go to wiring only and gives
 // operators a single file to grep when answering "what does this binary read?".
 type workerConfig struct {
-	LogLevel          string
-	TaskQueue         string
+	LogLevel string
+	// TaskQueuePrefix is the workflow task queue (set from TEMPORAL_TASK_QUEUE,
+	// default media.DefaultTaskQueuePrefix). Activity queues are derived from
+	// it via media.ActivityTaskQueue.
+	TaskQueuePrefix string
+	// EnabledTokens is the resolved WORKER_ACTIVITIES set. Each entry is
+	// either media.WorkflowToken or one of media.KnownActivities.
+	EnabledTokens     []string
 	HealthAddr        string
 	WebhookURL        string
 	WorkerStopTimeout time.Duration
@@ -45,12 +51,19 @@ func loadConfig() (workerConfig, error) {
 		cfg.HealthAddr = defaultHealthAddr
 	}
 
-	taskQueue, err := envvar.RequireEnv("TEMPORAL_TASK_QUEUE")
+	cfg.TaskQueuePrefix = os.Getenv("TEMPORAL_TASK_QUEUE")
+	if cfg.TaskQueuePrefix == "" {
+		cfg.TaskQueuePrefix = media.DefaultTaskQueuePrefix
+	}
+
+	known := append([]string{media.WorkflowToken}, media.KnownActivities...)
+
+	enabledTokens, err := resolveActivities(parseWorkerActivities(os.Getenv("WORKER_ACTIVITIES")), known)
 	if err != nil {
 		return workerConfig{}, err
 	}
 
-	cfg.TaskQueue = taskQueue
+	cfg.EnabledTokens = enabledTokens
 
 	radarrURL, err := envvar.RequireEnv("RADARR_URL")
 	if err != nil {
@@ -81,6 +94,7 @@ func loadConfig() (workerConfig, error) {
 		return workerConfig{}, err
 	}
 
+	workflow.TaskQueuePrefix = cfg.TaskQueuePrefix
 	cfg.Workflow = workflow
 
 	// Default WORKER_STOP_TIMEOUT to the effective transcodeTimeout (not

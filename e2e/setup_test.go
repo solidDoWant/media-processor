@@ -96,15 +96,22 @@ func composeUp() error {
 	return err
 }
 
-// composeUpWatcherWorker starts the watcher and worker containers (profile
-// "app"). Compose blocks until temporal-create-namespace exits successfully
-// (their depends_on condition), so the Temporal namespace is guaranteed to be
-// registered before either app container starts.
+// composeUpWatcherWorker starts the watcher and the three worker pools
+// (profile "app"). Compose blocks until temporal-create-namespace exits
+// successfully (their depends_on condition), so the Temporal namespace is
+// guaranteed to be registered before any app container starts.
 func composeUpWatcherWorker(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", composeArgs("--profile", "app", "up", "-d", "watcher", "worker")...)
+	services := []string{"watcher"}
+	for _, pool := range workerPools {
+		services = append(services, pool.serviceName)
+	}
+
+	args := composeArgs(append([]string{"--profile", "app", "up", "-d"}, services...)...)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = composeEnv()
 	stdout := newSlogWriter(slog.LevelInfo, "docker")
 	stderr := newSlogWriter(slog.LevelWarn, "docker")
@@ -134,13 +141,20 @@ func composeDown() {
 	_ = os.RemoveAll(baseDir)
 }
 
-// streamAppLogs starts a goroutine that runs "docker compose logs --follow
-// watcher worker" and pipes the output directly to stdout. The goroutine exits
+// streamAppLogs starts a goroutine that follows the watcher and every worker
+// pool's logs and pipes the output directly to stdout. The goroutine exits
 // when ctx is cancelled. Output lines are already prefixed with the service
-// name by Docker Compose (e.g. "watcher-1  | ...").
+// name by Docker Compose (e.g. "worker-transcode-1  | ...").
 func streamAppLogs(ctx context.Context) {
 	go func() {
-		cmd := exec.CommandContext(ctx, "docker", composeArgs("logs", "--follow", "watcher", "worker")...)
+		services := []string{"watcher"}
+		for _, pool := range workerPools {
+			services = append(services, pool.serviceName)
+		}
+
+		args := composeArgs(append([]string{"logs", "--follow"}, services...)...)
+
+		cmd := exec.CommandContext(ctx, "docker", args...)
 		cmd.Env = composeEnv()
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -167,9 +181,18 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
-			workerErr := checkHTTP(workerHealthBase + "/readyz")
 
-			if watcherErr == nil && workerErr == nil {
+			workerErrs := make(map[string]error, len(workerPools))
+			anyWorkerErr := false
+
+			for _, pool := range workerPools {
+				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
+					workerErrs[pool.serviceName] = err
+					anyWorkerErr = true
+				}
+			}
+
+			if watcherErr == nil && !anyWorkerErr {
 				if !everReady {
 					everReady = true
 
@@ -189,8 +212,10 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				msgs = append(msgs, "watcher: "+watcherErr.Error())
 			}
 
-			if workerErr != nil {
-				msgs = append(msgs, "worker: "+workerErr.Error())
+			for _, pool := range workerPools {
+				if err, ok := workerErrs[pool.serviceName]; ok {
+					msgs = append(msgs, pool.serviceName+": "+err.Error())
+				}
 			}
 
 			select {

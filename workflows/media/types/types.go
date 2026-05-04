@@ -7,6 +7,13 @@ import "github.com/solidDoWant/media-processor/pkg/medialib"
 
 const MediaWorkflowName = "Media"
 
+// DefaultTaskQueuePrefix is the prefix applied to the workflow task queue and
+// every activity task queue. The watcher dispatches workflows to the
+// prefix-only queue and the worker derives activity queues from it. Lives
+// here (the CGo-free types package) so the watcher can import it without
+// pulling in libav.
+const DefaultTaskQueuePrefix = "media-processor"
+
 // MediaInput is the workflow's trigger payload.
 type MediaInput struct {
 	FilePath               string             `json:"file_path"`

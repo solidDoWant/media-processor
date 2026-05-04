@@ -99,18 +99,18 @@ services:
       temporal-create-namespace:
         condition: service_completed_successfully
 
-  worker:
+  # Three worker pools exercise the per-activity task-queue routing introduced
+  # in #201: one polls only the workflow queue, one polls only the transcode
+  # activity queue, and one polls every other activity queue. Together they
+  # cover end-to-end execution while proving each piece is reachable from a
+  # different process.
+  worker-workflow:
     image: worker:latest
     pull_policy: never
     restart: on-failure
     profiles:
       - app
-    # Run as the host user so bind-mounted /tmp directories are writable by
-    # the container regardless of the image's baked-in UID.
     user: "${UID}:${GID}"
-    # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
-    # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
-    # capability by default, producing "set_mempolicy: Operation not permitted".
     cap_add:
       - SYS_NICE
     ports:
@@ -123,6 +123,72 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: media-processor-e2e
+      WORKER_ACTIVITIES: workflow
+      METRICS_ADDR: ":9090"
+      HEALTH_ADDR: ":9091"
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: e2e-radarr-api-key-e2e
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: e2e-sonarr-api-key-e2e
+      MEDIA_H265_CRF: "51"
+    depends_on:
+      temporal-create-namespace:
+        condition: service_completed_successfully
+
+  worker-transcode:
+    image: worker:latest
+    pull_policy: never
+    restart: on-failure
+    profiles:
+      - app
+    user: "${UID}:${GID}"
+    # SYS_NICE is required for set_mempolicy, which FFmpeg and the Intel media
+    # stack (iHD/VPL) use for NUMA-aware memory placement. Docker drops this
+    # capability by default, producing "set_mempolicy: Operation not permitted".
+    cap_add:
+      - SYS_NICE
+    ports:
+      - "127.0.0.1:19094:9090"
+      - "127.0.0.1:19095:9091"
+    volumes:
+      - /dev:/dev
+      - /tmp/e2e-media-processor:/tmp/e2e-media-processor
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor-e2e
+      WORKER_ACTIVITIES: transcode
+      METRICS_ADDR: ":9090"
+      HEALTH_ADDR: ":9091"
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: e2e-radarr-api-key-e2e
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: e2e-sonarr-api-key-e2e
+      MEDIA_H265_CRF: "51"
+    depends_on:
+      temporal-create-namespace:
+        condition: service_completed_successfully
+
+  worker-rest:
+    image: worker:latest
+    pull_policy: never
+    restart: on-failure
+    profiles:
+      - app
+    user: "${UID}:${GID}"
+    cap_add:
+      - SYS_NICE
+    ports:
+      - "127.0.0.1:19096:9090"
+      - "127.0.0.1:19097:9091"
+    volumes:
+      - /dev:/dev
+      - /tmp/e2e-media-processor:/tmp/e2e-media-processor
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: media-processor-e2e
+      WORKER_ACTIVITIES: all,!workflow,!transcode
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878

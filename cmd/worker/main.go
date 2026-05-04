@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
@@ -69,18 +70,36 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	}
 	defer shutdownTemporal()
 
-	w := worker.New(temporalClient, cfg.TaskQueue, worker.Options{
-		WorkerStopTimeout: cfg.WorkerStopTimeout,
-	})
+	started, err := startWorkers(temporalClient, activities, cfg)
+	if err != nil {
+		return err
+	}
 
-	activities.Register(w)
+	// Closure (not direct call) so the deferred stop reads `started` at
+	// invocation time, not at defer-statement time. Setting started = nil
+	// after the explicit shutdown below makes this defer a safe no-op when
+	// run() exits cleanly, while still draining workers if we return early
+	// from a later step.
+	defer func() {
+		stopWorkers(ctx, started)
+	}()
 
-	slog.InfoContext(ctx, "connected to Temporal, starting worker", slog.String("task_queue", cfg.TaskQueue))
+	queues := make([]string, len(started))
+	for index, startedWorker := range started {
+		queues[index] = startedWorker.label
+	}
+
+	slog.InfoContext(ctx, "connected to Temporal, starting workers", slog.Any("queues", queues))
 	healthServer.SetReady()
 
-	if err := w.Run(interruptCh); err != nil {
-		return fmt.Errorf("worker stopped: %w", err)
+	select {
+	case <-ctx.Done():
+	case <-interruptCh:
 	}
+
+	slog.InfoContext(ctx, "stopping workers")
+	stopWorkers(ctx, started)
+	started = nil // suppress the deferred stop now that drain has completed
 
 	// Hold the /metrics endpoint open for one Prometheus scrape after drain so
 	// end-of-lifecycle metrics are observed before exporter shutdown. Use
@@ -93,4 +112,67 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	}
 
 	return nil
+}
+
+// startedWorker pairs a Temporal Worker with the queue label used in logs and
+// errors. Activity workers carry their queue name; the workflow worker uses
+// "workflow:{prefix}" so the two cases are distinguishable.
+type startedWorker struct {
+	label string
+	w     worker.Worker
+}
+
+// startWorkers builds and starts one Temporal Worker per token in
+// cfg.EnabledTokens. The workflow token (if present) yields a Worker on the
+// prefix-only queue with only the workflow function registered; each activity
+// token yields a Worker on its activity-specific queue with only that activity
+// registered. If any Worker fails to start, already-started Workers are stopped
+// and the error is returned.
+func startWorkers(c client.Client, activities *media.Activities, cfg workerConfig) ([]startedWorker, error) {
+	started := make([]startedWorker, 0, len(cfg.EnabledTokens))
+
+	opts := worker.Options{WorkerStopTimeout: cfg.WorkerStopTimeout}
+
+	for _, token := range cfg.EnabledTokens {
+		var (
+			queue string
+			label string
+			w     worker.Worker
+		)
+
+		if token == media.WorkflowToken {
+			queue = cfg.TaskQueuePrefix
+			label = "workflow:" + queue
+			w = worker.New(c, queue, opts)
+			activities.RegisterWorkflow(w)
+		} else {
+			queue = media.ActivityTaskQueue(cfg.TaskQueuePrefix, token)
+			label = "activity:" + queue
+			w = worker.New(c, queue, opts)
+
+			if err := activities.RegisterActivity(w, token); err != nil {
+				stopWorkers(context.Background(), started)
+				return nil, fmt.Errorf("register %s: %w", token, err)
+			}
+		}
+
+		if err := w.Start(); err != nil {
+			stopWorkers(context.Background(), started)
+			return nil, fmt.Errorf("start %s: %w", label, err)
+		}
+
+		started = append(started, startedWorker{label: label, w: w})
+	}
+
+	return started, nil
+}
+
+// stopWorkers stops every started Worker in reverse order (LIFO). Each Stop
+// call blocks for at most WorkerStopTimeout while the SDK drains in-flight
+// activities, so calling sequentially keeps shutdown ordering predictable.
+func stopWorkers(ctx context.Context, started []startedWorker) {
+	for index := len(started) - 1; index >= 0; index-- {
+		slog.InfoContext(ctx, "stopping worker", slog.String("queue", started[index].label))
+		started[index].w.Stop()
+	}
 }

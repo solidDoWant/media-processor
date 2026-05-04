@@ -35,8 +35,13 @@ type Activities struct {
 }
 
 // NewActivities constructs an Activities ready for registration. Defaults are
-// applied to cfg.DetectCropTimeout and cfg.TranscodeTimeout when zero.
+// applied to cfg.TaskQueuePrefix, cfg.DetectCropTimeout, and cfg.TranscodeTimeout
+// when zero.
 func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client) (*Activities, error) {
+	if cfg.TaskQueuePrefix == "" {
+		cfg.TaskQueuePrefix = DefaultTaskQueuePrefix
+	}
+
 	if cfg.DetectCropTimeout == 0 {
 		cfg.DetectCropTimeout = DefaultDetectCropTimeout
 	}
@@ -55,43 +60,68 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 
 // Registrar is the subset of registration methods that both worker.Worker and
 // *testsuite.TestWorkflowEnvironment expose. Accepting this interface lets the
-// production worker and the workflow test environment share one registration
-// list, so adding or renaming an activity only requires editing Register.
+// production worker and the workflow test environment share registration
+// helpers, so adding or renaming an activity only requires editing the maps
+// below.
 type Registrar interface {
 	RegisterWorkflowWithOptions(w any, options workflow.RegisterOptions)
 	RegisterActivityWithOptions(a any, options activity.RegisterOptions)
 }
 
-// Register attaches the workflow function and the activities to the given
-// Temporal registrar (a worker.Worker in production, a TestWorkflowEnvironment
-// in tests). The slice literals below are the single source of truth for the
-// (name, function) pairs the worker and tests register.
+// activityRegistration pairs a Temporal-registered activity name with the
+// method that implements it.
+type activityRegistration struct {
+	name string
+	fn   any
+}
+
+// activityRegistrations returns the kebab-case-token → (name, fn) map used
+// to register exactly one activity per Temporal Worker. Constructed per call
+// because the function values close over the receiver.
+func (a *Activities) activityRegistrations() map[string]activityRegistration {
+	return map[string]activityRegistration{
+		ProbeActivityToken:         {ProbeActivityName, a.Probe},
+		DetectCropActivityToken:    {DetectCropActivityName, a.DetectCrop},
+		TranscodeActivityToken:     {TranscodeActivityName, a.Transcode},
+		NotifyActivityToken:        {NotifyActivityName, a.Notify},
+		CleanupActivityToken:       {CleanupActivityName, a.Cleanup},
+		NotifyFailureActivityToken: {NotifyFailureActivityName, a.NotifyFailure},
+	}
+}
+
+// RegisterWorkflow attaches only the media workflow function to r. Used by
+// the worker pod's workflow-task-queue Worker, which polls the prefix-only
+// queue and runs no activities.
+func (a *Activities) RegisterWorkflow(r Registrar) {
+	r.RegisterWorkflowWithOptions(a.MediaWorkflow, workflow.RegisterOptions{Name: MediaWorkflowName})
+}
+
+// RegisterActivity attaches the activity identified by its kebab-case token
+// (e.g. "transcode", "detect-crop") to r. Returns an error if the token is
+// not a known activity name.
+func (a *Activities) RegisterActivity(r Registrar, token string) error {
+	entry, ok := a.activityRegistrations()[token]
+	if !ok {
+		return fmt.Errorf("unknown activity token %q", token)
+	}
+
+	r.RegisterActivityWithOptions(entry.fn, activity.RegisterOptions{Name: entry.name})
+
+	return nil
+}
+
+// Register attaches the workflow function and every activity to r. Used by
+// the workflow test environment, which runs everything on a single in-memory
+// task queue.
 func (a *Activities) Register(r Registrar) {
-	workflowEntries := []struct {
-		name string
-		fn   any
-	}{
-		{MediaWorkflowName, a.MediaWorkflow},
-	}
+	a.RegisterWorkflow(r)
 
-	activityEntries := []struct {
-		name string
-		fn   any
-	}{
-		{ProbeActivityName, a.Probe},
-		{DetectCropActivityName, a.DetectCrop},
-		{TranscodeActivityName, a.Transcode},
-		{NotifyActivityName, a.Notify},
-		{CleanupActivityName, a.Cleanup},
-		{NotifyFailureActivityName, a.NotifyFailure},
-	}
-
-	for _, workflowEntry := range workflowEntries {
-		r.RegisterWorkflowWithOptions(workflowEntry.fn, workflow.RegisterOptions{Name: workflowEntry.name})
-	}
-
-	for _, activityEntry := range activityEntries {
-		r.RegisterActivityWithOptions(activityEntry.fn, activity.RegisterOptions{Name: activityEntry.name})
+	for _, token := range KnownActivities {
+		// Iterating KnownActivities directly cannot produce an unknown token,
+		// so the error is impossible here.
+		if err := a.RegisterActivity(r, token); err != nil {
+			panic(err)
+		}
 	}
 }
 
