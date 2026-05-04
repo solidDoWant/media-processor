@@ -244,3 +244,13 @@ func matroskaSupportsCodec(id astiav.CodecID) bool {
 func isTextSubtitleCodec(id astiav.CodecID) bool {
 	return C.mpsub_is_text_subtitle(C.int(id)) == 1
 }
+
+// isStillImageCodec reports whether the codec is a still-image codec, by
+// checking whether libavcodec's descriptor for it advertises any "image/*"
+// MIME type. Captures mjpeg, png, bmp, gif, tiff, jpeg2000, jpegls, webp,
+// and friends — the codecs that mp4 sources commonly use to carry a
+// cover-art / thumbnail / preview frame as a "video" stream rather than
+// (or in addition to) a disposition:attached_pic stream.
+func isStillImageCodec(id astiav.CodecID) bool {
+	return C.mpsub_codec_has_image_mime_type(C.int(id)) == 1
+}

@@ -645,6 +645,14 @@ const testMovTextSubtitleSourcePath = "testdata/video_with_movtext_subtitle.mp4"
 // libavcodec subtitle pipeline that mov_text uses.
 const testSubripSubtitleSourcePath = "testdata/video_with_subrip_subtitle.mkv"
 
+// testImageVideoStreamSourcePath is a synthetic mp4 carrying a real H.264
+// video plus a still-image mjpeg "video" stream that lacks the
+// disposition:attached_pic flag — the same shape iTunes/Plex-derived mp4
+// files commonly use for a preview thumbnail. The transcoder must drop
+// the still-image stream alongside any matroska output instead of
+// re-encoding it as a useless single-frame HEVC track.
+const testImageVideoStreamSourcePath = "testdata/video_with_image_stream.mp4"
+
 // testDataStreamSourcePath is a synthetic mp4 carrying a QuickTime timecode
 // (tmcd) track that ffmpeg surfaces as a data stream. matroska's track muxer
 // rejects anything other than audio/video/subtitle, so any source whose data
@@ -887,6 +895,28 @@ func TestTranscode_SourceWithSubripSubtitle_IsCopied(t *testing.T) {
 	require.Len(t, packets, 1, "exactly one subtitle event expected")
 	assert.Contains(t, string(packets[0].data), "Hello world",
 		"subrip text must round-trip unchanged on the copy path")
+}
+
+// TestTranscode_SourceWithImageVideoStream verifies that a still-image
+// "video" stream alongside a real video stream — common in iTunes / Plex
+// mp4 files where a preview thumbnail is muxed as a second video track
+// without the disposition:attached_pic flag — is dropped from the output
+// instead of being re-encoded as a single-frame HEVC track. Without the
+// drop the output mkv ends up with two hevc tracks (the real movie plus a
+// nonsense one-frame still), which players can pick wrong as the default
+// video and which silently bloats the output.
+func TestTranscode_SourceWithImageVideoStream(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testImageVideoStreamSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, countVideoStreams(t, output),
+		"output must contain exactly one video stream; the source's still-image mjpeg track must be dropped, not re-encoded as a second hevc track")
 }
 
 // TestTranscode_SourceWithDataStream verifies that data-typed streams in the

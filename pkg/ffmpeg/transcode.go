@@ -473,6 +473,25 @@ func (t *Transcoder) buildDownmixState(inputFmt *astiav.FormatContext, sourceIdx
 func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel HWAccel) (map[int]stream, error) {
 	streams := make(map[int]stream)
 
+	// Pre-scan to detect whether the source carries any "real" (non-still-image)
+	// video stream. If it does, any other video stream that uses a still-image
+	// codec (mjpeg/png/etc.) is by elimination a cover-art / thumbnail / preview
+	// frame — even when it lacks the disposition:attached_pic flag, which mp4
+	// sources from iTunes/Plex/etc. routinely omit. The "another real video
+	// stream exists" guard avoids dropping legitimate motion-mjpeg sources where
+	// the still-image codec IS the main video.
+	hasRealVideoStream := false
+
+	for _, inStream := range inputFmt.Streams() {
+		params := inStream.CodecParameters()
+		if params.MediaType() == astiav.MediaTypeVideo &&
+			!inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) &&
+			!isStillImageCodec(params.CodecID()) {
+			hasRealVideoStream = true
+			break
+		}
+	}
+
 	for _, inStream := range inputFmt.Streams() {
 		if t.excludeStreams[inStream.Index()] {
 			continue
@@ -495,6 +514,17 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 		if t.effectiveContainerIsMKV() {
 			if mediaType == astiav.MediaTypeVideo &&
 				inStream.DispositionFlags().Has(astiav.DispositionFlagAttachedPic) {
+				continue
+			}
+
+			// Drop still-image "video" streams that sit alongside a real
+			// video. The still-image codec check (mjpeg, png, bmp, …) catches
+			// the iTunes/Plex preview-thumbnail pattern where the cover art is
+			// muxed as a second video track without disposition:attached_pic;
+			// without this guard the transcoder would re-encode the one-frame
+			// still as a useless single-frame HEVC track.
+			if mediaType == astiav.MediaTypeVideo && hasRealVideoStream &&
+				isStillImageCodec(inStream.CodecParameters().CodecID()) {
 				continue
 			}
 
