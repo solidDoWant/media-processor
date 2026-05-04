@@ -25,10 +25,15 @@ Assess whether the issue is large before doing anything else. It is large if any
 1. If the scope is ambiguous, save current state to `.claude/tasks/$ISSUE_NUMBER.md`, post a focused clarifying question as an issue comment, and stop. Do not continue until answered.
 2. Determine how to split the issue into sub-issues. Each sub-issue must be atomic (one concern, one service/module, ≤~10 files).
 3. For each sub-issue, write a high-level plan: what it does, its acceptance criteria (Given/When/Then), and any dependencies on other sub-issues.
-4. Create the sub-issues: `gh issue create -t "<type>(<scope>): <title>" -b "<body>"` using the standard template. Link each to the parent in its Technical Context section. After creating each sub-issue, attach it as a GitHub sub-issue of the parent: `gh api repos/{owner}/{repo}/issues/$ISSUE_NUMBER/sub_issues --method POST --field sub_issue_id=<child_issue_number>`.
-5. Post a decomposition summary as a comment on the parent issue listing the sub-issues created and their dependency order.
-6. Label the parent: `gh issue edit $ISSUE_NUMBER --add-label "status:decomposed"`
-7. **Stop.** Present the decomposition to the user for review. Do not implement.
+4. Create each sub-issue: `gh issue create -t "<type>(<scope>): <title>" -b "<body>"` using the standard template. Link it to the parent in its Technical Context section. Then attach it as a GitHub sub-issue of the parent: `gh api repos/{owner}/{repo}/issues/$ISSUE_NUMBER/sub_issues --method POST --field sub_issue_id=<child_issue_number>`.
+5. Track dependencies between sub-issues using GitHub's issue dependencies feature — **do not build a markdown dependency table**. For each pair where sub-issue A must land before sub-issue B, add a `blocked by` link on B pointing to A. The API requires the blocker's database id (not its issue number); fetch it first, then add the dependency:
+   ```
+   BLOCKER_ID=$(gh api repos/{owner}/{repo}/issues/<blocker_number> --jq '.id')
+   gh api repos/{owner}/{repo}/issues/<blocked_number>/dependencies/blocked_by --method POST --field issue_id=$BLOCKER_ID
+   ```
+6. Post a decomposition summary as a comment on the parent issue listing the sub-issues created. Do not include a markdown dependency or blocking table — the `blocked by` relationships from step 5 are the source of truth and GitHub renders them on each sub-issue.
+7. Label the parent: `gh issue edit $ISSUE_NUMBER --add-label "status:decomposed"`
+8. **Stop.** Present the decomposition to the user for review. Do not implement.
 
 **If small → proceed with steps 1–6 below.**
 
