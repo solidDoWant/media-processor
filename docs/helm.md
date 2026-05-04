@@ -92,14 +92,6 @@ config:
     existingClaim: my-input-pvc
 ```
 
-### `config.metrics`
-
-Shared observability settings applied to both watcher and worker.
-
-| Field                                  | Type | Default | Description                                                              |
-| -------------------------------------- | ---- | ------- | ------------------------------------------------------------------------ |
-| `config.metrics.highCardinalityLabels` | bool | `false` | Sets `METRICS_HIGH_CARDINALITY_LABELS=true` on both containers when true |
-
 ### `config.watcher`
 
 | Field                                      | Type   | Default     | Description                                                                                                                                                                                                                                                                                                                                                                                |
@@ -169,11 +161,11 @@ config:
 
 | Field                                     | Type   | Default | Description                                                                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.worker.logLevel`                  | string | `info`  | Sets `LOG_LEVEL` on the worker container                                                                                                                                                                                                                                                                                                                                                          |
-| `config.worker.activities`                | string | `all`   | Sets `WORKER_ACTIVITIES` on the worker container. Comma-separated list of activity tokens (`workflow`, `probe`, `detect-crop`, `transcode`, `notify`, `cleanup`, `notify-failure`); `all` expands to every token, `!token` removes one. See [configuration.md](configuration.md#activity-task-queues) for the full grammar and examples. Default `all` keeps single-controller deployments working unchanged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `config.worker.stopTimeout`               | string | `30s`   | Sets `WORKER_STOP_TIMEOUT` on the worker container. The chart default of `30s` keeps the SIGTERM-to-SIGKILL window inside the default `terminationGracePeriodSeconds` of `120s`. Operators running long transcodes must raise this together with `metrics.scrapeWaitTimeout` and the worker controller's `pod.terminationGracePeriodSeconds`. See [Termination and drain](#termination-and-drain) |
-| `config.worker.metrics.enabled`           | bool   | `false` | When true, the chart emits the worker-metrics `Service` and its `PodMonitor`. The worker binary always exposes `/metrics` on port 9090 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping))                                                                                                                                     |
-| `config.worker.metrics.scrapeWaitTimeout` | string | `""`    | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the worker container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain)                                                                                                                                                                                                                   |
+| `config.worker.logLevel`                  | string | `info`  | Sets `LOG_LEVEL` on every worker container                                                                                                                                                                                                                                                                                                                                                          |
+| `config.worker.stopTimeout`               | string | `30s`   | Sets `WORKER_STOP_TIMEOUT` on every worker container. The chart default of `30s` keeps the SIGTERM-to-SIGKILL window inside the default `terminationGracePeriodSeconds` of `120s`. Operators running long transcodes must raise this together with `metrics.scrapeWaitTimeout` and the worker controller's `pod.terminationGracePeriodSeconds`. See [Termination and drain](#termination-and-drain) |
+| `config.worker.metrics.enabled`               | bool   | `false` | When true, the chart emits one `Service` (`<workerName>-metrics`) and one `PodMonitor` per worker controller defined under `workers`. The worker binary always exposes `/metrics` on port 9090 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping))                                                                              |
+| `config.worker.metrics.scrapeWaitTimeout`     | string | `""`    | Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on every worker container when non-empty. When empty, the binary default of `60s` applies. See [Termination and drain](#termination-and-drain)                                                                                                                                                                                                                  |
+| `config.worker.metrics.highCardinalityLabels` | bool   | `false` | When true, sets `METRICS_HIGH_CARDINALITY_LABELS=true` on every worker container. Enables labels with high cardinality (e.g. media titles) on worker metrics — useful for debugging but can multiply Prometheus series counts                                                                                                                                                                       |
 
 ### `config.worker.media.hardware`
 
@@ -220,47 +212,127 @@ Sets `MEDIA_WEBHOOK_URL` on the worker when non-empty.
 | `config.worker.sonarr.apiKey.secretKeyRef.name` | string | `""`    | Secret name for the API key (takes precedence over `value`) |
 | `config.worker.sonarr.apiKey.secretKeyRef.key`  | string | `""`    | Key within the Secret                                       |
 
+### `workers`
+
+`workers` is a map of worker controller name → per-worker app config. Each entry produces one Kubernetes `Deployment` that polls a configurable subset of activity task queues. Default `workers: {}` produces a single controller named `main` with `activities: ["all"]`, behaviorally equivalent to the pre-multi-worker chart.
+
+Per-worker app config (currently):
+
+| Field                            | Type | Default | Description                                                                                                                                                                                                                                                                                          |
+| -------------------------------- | ---- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workers.<name>.activities`      | list | —       | List of `WORKER_ACTIVITIES` tokens. `all` expands to every known activity; `!name` removes one. Examples: `["all"]`, `["all", "!transcode"]`, `["transcode"]`. The chart joins the list with commas and sets `WORKER_ACTIVITIES` on the worker. See [configuration.md](configuration.md#activity-task-queues) for token grammar |
+
+The container inside each worker controller is named `main` regardless of the worker key. Operator-supplied Kubernetes-level configuration (replicas, resources, node selectors, tolerations, pod spec overrides) for a given worker goes under `resources.controllers.<workerName>` using the upstream `app-template` controller schema and is deep-merged over the chart-generated defaults.
+
+#### Default (single-controller) deployment
+
+The chart's default values produce one Deployment named `<release>-media-processor-main` with `WORKER_ACTIVITIES=all`. No `workers` block is required:
+
+```yaml
+config:
+  temporal:
+    address: "temporal-frontend.temporal.svc.cluster.local:7233"
+  # ... rest of config ...
+# workers omitted — chart implicitly defines workers.main = { activities: ["all"] }
+```
+
+To raise replicas or override container resources for the default worker, add a `resources.controllers.main` block:
+
+```yaml
+resources:
+  controllers:
+    main:
+      replicas: 3
+      containers:
+        main:
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+```
+
+#### Split-controller deployment
+
+Defining at least one entry under `workers` fully replaces the implicit `main` default — operators control the worker set entirely. This example separates a transcode-only worker (with GPU resource limits and a node selector) from a general worker that handles everything else:
+
+```yaml
+workers:
+  general:
+    activities: ["all", "!transcode"]
+  transcode:
+    activities: ["transcode"]
+
+resources:
+  controllers:
+    general:
+      replicas: 2
+    transcode:
+      replicas: 4
+      pod:
+        nodeSelector:
+          intel.feature.node.kubernetes.io/gpu: "true"
+      containers:
+        main:
+          resources:
+            limits:
+              gpu.intel.com/i915: "1"
+```
+
+The chart emits two `Deployment`s (`<release>-media-processor-general` and `<release>-media-processor-transcode`) and, when `config.worker.metrics.enabled` is true, one `Service` and `PodMonitor` per worker (`<release>-media-processor-<workerName>-metrics` and `<release>-media-processor-<workerName>` respectively). Each worker's `Deployment` carries its own `WORKER_ACTIVITIES` env var and inherits the shared `config.worker.*` settings.
+
+To keep `main` alongside additional workers, include it explicitly:
+
+```yaml
+workers:
+  main:
+    activities: ["all"]
+  transcode:
+    activities: ["transcode"]
+```
+
 ### `resources`
 
 Arbitrary bjw-s app-template resources. The chart deep-merges this with its generated resources — values here take precedence over chart defaults. You can use this to override controllers, add services, tune persistence, add RBAC, etc.
 
 The top-level keys follow the [bjw-s common library schema](https://bjw-s-labs.github.io/helm-charts/docs/common-library/common-library-storage): `controllers`, `persistence`, `service`, `configMaps`, `secrets`, `rbac`, `serviceAccount`, `rawResources`, etc.
 
-Default image repositories are set here:
+Worker controllers (one per `workers.<name>` entry) are generated by the chart template — there are no static worker controller defaults under `resources.controllers` in `values.yaml`. The chart-generated defaults include the worker image, named metrics port `9090`, `/healthz` and `/readyz` probes on `8080`, hardened `securityContext`, a `PodDisruptionBudget` enabled when replicas > 1, and `pod.terminationGracePeriodSeconds: 120`. Override per-worker by adding `resources.controllers.<workerName>` with the standard bjw-s controller schema.
 
-| Field                                                               | Default                               |
-| ------------------------------------------------------------------- | ------------------------------------- |
-| `resources.controllers.watcher.containers.watcher.image.repository` | `ghcr.io/soliddowant/watcher`         |
-| `resources.controllers.watcher.containers.watcher.image.tag`        | `""` (defaults to `Chart.AppVersion`) |
-| `resources.controllers.worker.containers.worker.image.repository`   | `ghcr.io/soliddowant/worker`          |
-| `resources.controllers.worker.containers.worker.image.tag`          | `""` (defaults to `Chart.AppVersion`) |
+Default image repositories:
+
+| Field                                                               | Default                                          |
+| ------------------------------------------------------------------- | ------------------------------------------------ |
+| `resources.controllers.watcher.containers.watcher.image.repository` | `ghcr.io/soliddowant/media-processor/watcher`    |
+| `resources.controllers.watcher.containers.watcher.image.tag`        | `""` (defaults to `Chart.AppVersion`)            |
+| `resources.controllers.<workerName>.containers.main.image.repository` | `ghcr.io/soliddowant/media-processor/worker` (chart-generated default; override per worker if needed) |
+| `resources.controllers.<workerName>.containers.main.image.tag`      | `Chart.AppVersion` (chart-generated default; override per worker if needed) |
 
 ## Metrics scraping
 
 The watcher and worker binaries always expose `/metrics` (worker on `:9090`, watcher on `:9091` — defaults chosen so the two can run side-by-side on the same host). The `config.{watcher,worker}.metrics.enabled` toggles control whether the chart creates the cluster-side scraping infrastructure on top — the metrics `Service` and its Prometheus-operator monitor. Leave both off when running without prometheus-operator CRDs installed; the binaries still serve `/metrics` for `kubectl port-forward` or any other in-cluster client.
 
-When a toggle is true, the chart emits a monitor for the matching controller. The watcher and worker use different monitor types because their drain behavior differs.
+When a toggle is true, the chart emits a monitor for the matching controller. The watcher and each worker use different monitor types because their drain behavior differs.
 
-| Controller | Monitor type     | Resource name suffix | Why                                                                                                                                                                                                                                                                                                                                   |
-| ---------- | ---------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| watcher    | `ServiceMonitor` | `-watcher`           | The scan loop exits within milliseconds of SIGTERM. The pod is removed from the `Endpoints` object on termination, but the metrics scrape-wait gate completes well before that matters                                                                                                                                                |
-| worker     | `PodMonitor`     | `-worker`            | The activity drain can run for the full `WORKER_STOP_TIMEOUT`. A `ServiceMonitor` would lose the terminating pod from `Endpoints` immediately and the final scrape would be missed, breaking the [scrape-on-shutdown gate](configuration.md#shared-watcher-and-worker). `PodMonitor` watches pods directly and is unaffected by drain |
+| Controller         | Monitor type     | Resource name                      | Why                                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ---------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| watcher            | `ServiceMonitor` | `{release}-media-processor-watcher`           | The scan loop exits within milliseconds of SIGTERM. The pod is removed from the `Endpoints` object on termination, but the metrics scrape-wait gate completes well before that matters                                                                                                                                                |
+| each `<workerName>`| `PodMonitor`     | `{release}-media-processor-<workerName>`      | Worker activity drain can run for the full `WORKER_STOP_TIMEOUT`. A `ServiceMonitor` would lose the terminating pod from `Endpoints` immediately and the final scrape would be missed, breaking the [scrape-on-shutdown gate](configuration.md#shared-watcher-and-worker). `PodMonitor` watches pods directly and is unaffected by drain |
 
-The watcher's metrics service (`{release}-media-processor-watcher-metrics`) and the worker's (`{release}-media-processor-worker-metrics`) are still emitted; they remain useful for `kubectl port-forward` even though the worker no longer relies on a Service for scrape discovery.
+`config.worker.metrics.enabled` toggles the metrics infrastructure for **every** worker controller — it is shared, not per-worker. When true, the chart emits one `Service` (`{release}-media-processor-<workerName>-metrics`) and one `PodMonitor` (`{release}-media-processor-<workerName>`) for each entry in `workers`. The watcher's metrics service is `{release}-media-processor-watcher-metrics`. The worker `Service`s remain useful for `kubectl port-forward` even though scrape discovery uses `PodMonitor`.
 
-The `PodMonitor` is added via the bjw-s `rawResources` mechanism (the bundled `common` library does not yet have a native `podMonitor` template). The PodMonitor selector matches `app.kubernetes.io/name`, `app.kubernetes.io/instance`, and `app.kubernetes.io/controller: worker` — the labels the bjw-s app-template applies to every controller's pods. The worker container exposes the metrics port under the name `metrics` so the PodMonitor can reference it by port name.
+The `PodMonitor`s are added via the bjw-s `rawResources` mechanism (the bundled `common` library does not yet have a native `podMonitor` template). Each `PodMonitor`'s selector matches `app.kubernetes.io/name`, `app.kubernetes.io/instance`, and `app.kubernetes.io/controller: <workerName>` — the labels the bjw-s app-template applies to every controller's pods. Each worker container exposes the metrics port under the name `metrics` so the `PodMonitor` can reference it by port name.
 
 ## Termination and drain
 
 The chart sets the following defaults to make the SIGTERM → drain → final-scrape → exit sequence fit inside the Kubernetes pod grace period:
 
-| Knob                                                              | Default | Notes                                                                                                                                                                                  |
-| ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resources.controllers.watcher.pod.terminationGracePeriodSeconds` | `120`   | Covers the watcher's near-instant scan-loop teardown plus the binary's `60s` `METRICS_SCRAPE_WAIT_TIMEOUT` plus a buffer                                                               |
-| `resources.controllers.worker.pod.terminationGracePeriodSeconds`  | `120`   | Sized for the chart's `WORKER_STOP_TIMEOUT=30s` + binary's `METRICS_SCRAPE_WAIT_TIMEOUT=60s` + 30s buffer                                                                              |
-| `config.worker.stopTimeout`                                       | `30s`   | Sets `WORKER_STOP_TIMEOUT`. Overrides the binary's much longer fallback (which tracks `MEDIA_TRANSCODE_TIMEOUT`) so a fresh-out-of-the-box install drains within its 120s grace period |
-| `config.watcher.metrics.scrapeWaitTimeout`                        | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher                                                                                            |
-| `config.worker.metrics.scrapeWaitTimeout`                         | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the worker                                                                                             |
+| Knob                                                                  | Default | Notes                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources.controllers.watcher.pod.terminationGracePeriodSeconds`     | `120`   | Covers the watcher's near-instant scan-loop teardown plus the binary's `60s` `METRICS_SCRAPE_WAIT_TIMEOUT` plus a buffer                                                                                                                            |
+| `resources.controllers.<workerName>.pod.terminationGracePeriodSeconds`| `120`   | Chart-generated default for every worker controller; sized for the chart's `WORKER_STOP_TIMEOUT=30s` + binary's `METRICS_SCRAPE_WAIT_TIMEOUT=60s` + 30s buffer. Override per worker by setting `resources.controllers.<workerName>.pod.terminationGracePeriodSeconds` |
+| `config.worker.stopTimeout`                                           | `30s`   | Sets `WORKER_STOP_TIMEOUT` on every worker. Overrides the binary's much longer fallback (which tracks `MEDIA_TRANSCODE_TIMEOUT`) so a fresh-out-of-the-box install drains within its 120s grace period                                              |
+| `config.watcher.metrics.scrapeWaitTimeout`                            | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on the watcher                                                                                                                                                         |
+| `config.worker.metrics.scrapeWaitTimeout`                             | `""`    | Empty leaves the binary default of `60s`. Sets `METRICS_SCRAPE_WAIT_TIMEOUT` on every worker                                                                                                                                                        |
 
 The required relationship is:
 
@@ -270,7 +342,7 @@ terminationGracePeriodSeconds >= WORKER_STOP_TIMEOUT + METRICS_SCRAPE_WAIT_TIMEO
 
 For the worker chart defaults this works out to `120 >= 30 + 60 + 30` (30s buffer for SIGKILL margin). For the watcher there is no `WORKER_STOP_TIMEOUT` and the scan loop teardown is sub-second, so `120 >= 0 + 60 + 60` holds with room to spare.
 
-**Operators running long transcodes must raise all three together.** The chart's 120s grace will SIGKILL an in-flight activity on shutdown unless `config.worker.stopTimeout`, `config.worker.metrics.scrapeWaitTimeout`, and the worker controller's `pod.terminationGracePeriodSeconds` are all increased to fit the longest expected activity:
+**Operators running long transcodes must raise all three together.** The chart's 120s grace will SIGKILL an in-flight activity on shutdown unless `config.worker.stopTimeout`, `config.worker.metrics.scrapeWaitTimeout`, and the worker controller's `pod.terminationGracePeriodSeconds` are all increased to fit the longest expected activity. `config.worker.*` is shared across every worker controller; the per-worker `terminationGracePeriodSeconds` override goes under `resources.controllers.<workerName>.pod`. For the default single-controller layout the worker name is `main`:
 
 ```yaml
 config:
@@ -283,9 +355,25 @@ config:
 
 resources:
   controllers:
-    worker:
+    main:
       pod:
         # 6h drain + 60s scrape wait + 60s buffer.
+        terminationGracePeriodSeconds: 21720
+```
+
+In a split-controller setup, only the worker(s) running the long activity need the raised grace period:
+
+```yaml
+workers:
+  general:
+    activities: ["all", "!transcode"]
+  transcode:
+    activities: ["transcode"]
+
+resources:
+  controllers:
+    transcode:
+      pod:
         terminationGracePeriodSeconds: 21720
 ```
 
@@ -403,11 +491,12 @@ config:
           key: sonarr-api-key
 
 # Add a Service for the worker health port so a load balancer or
-# external health check can reach it.
+# external health check can reach it. The default single-controller layout
+# names its worker "main".
 resources:
   service:
     worker-health:
-      controller: worker
+      controller: main
       ports:
         health:
           port: 8080
@@ -416,7 +505,7 @@ resources:
 
 ### Using a device plugin instead of hostPath
 
-When using a Kubernetes device plugin (e.g. `intel.com/gpu`) or DRA to expose the hardware device, set `mountHostDevice: false` and configure device access via the `resources` passthrough:
+When using a Kubernetes device plugin (e.g. `intel.com/gpu`) or DRA to expose the hardware device, set `mountHostDevice: false` and configure device access via the `resources` passthrough. The default single-controller layout names its worker `main` and the container inside it is also named `main`:
 
 ```yaml
 config:
@@ -428,9 +517,9 @@ config:
 
 resources:
   controllers:
-    worker:
+    main:
       containers:
-        worker:
+        main:
           resources:
             limits:
               gpu.intel.com/i915: "1"
