@@ -121,6 +121,13 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $watcherEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.watcher.metrics.scrapeWaitTimeout -}}
 {{- end -}}
 
+{{/* WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED */}}
+{{- if not (kindIs "invalid" .Values.config.watcher.searchAttributes.enabled) -}}
+  {{- if not .Values.config.watcher.searchAttributes.enabled -}}
+    {{- $_ := set $watcherEnv "WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED" "false" -}}
+  {{- end -}}
+{{- end -}}
+
 
 {{/* ============================================================ */}}
 {{/* Worker env vars                                              */}}

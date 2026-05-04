@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/api/serviceerror"
 
 	"github.com/solidDoWant/media-processor/internal/watcherconfig"
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -1021,4 +1023,217 @@ func TestScan_OutputRemotePathForwardedToDispatch(t *testing.T) {
 	require.NoError(t, scan(t.Context(), cfg, noopInstruments(t), dispatch))
 	require.True(t, dispatched, "expected dispatch to be called")
 	assert.Equal(t, "/remote/movies", gotOutputRemotePath)
+}
+
+// TestBuildWorkflowMemo verifies that buildWorkflowMemo produces the correct
+// five fields from the input, using the basename for MediaTitle and the
+// original FilePath (not the rewritten OutputRemotePath) for MediaFilePath.
+func TestBuildWorkflowMemo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    mediatypes.MediaInput
+		expected map[string]interface{}
+	}{
+		{
+			name: "all fields populated correctly",
+			input: mediatypes.MediaInput{
+				FilePath:         "/downloads/movies/movie.mkv",
+				MediaType:        medialib.MovieType,
+				MappingName:      "movies",
+				WatchRoot:        "/downloads/movies",
+				OutputRemotePath: "/remote/movies",
+			},
+			expected: map[string]interface{}{
+				"MediaFilePath":    "/downloads/movies/movie.mkv",
+				"MediaTitle":       "movie.mkv",
+				"MediaType":        string(medialib.MovieType),
+				"MediaMappingName": "movies",
+				"MediaWatchRoot":   "/downloads/movies",
+			},
+		},
+		{
+			name: "show type",
+			input: mediatypes.MediaInput{
+				FilePath:    "/downloads/tv/Show (2020)/S01E01.mkv",
+				MediaType:   medialib.ShowType,
+				MappingName: "shows",
+				WatchRoot:   "/downloads/tv",
+			},
+			expected: map[string]interface{}{
+				"MediaFilePath":    "/downloads/tv/Show (2020)/S01E01.mkv",
+				"MediaTitle":       "S01E01.mkv",
+				"MediaType":        string(medialib.ShowType),
+				"MediaMappingName": "shows",
+				"MediaWatchRoot":   "/downloads/tv",
+			},
+		},
+		{
+			name: "original input path used, not output remote path",
+			input: mediatypes.MediaInput{
+				FilePath:         "/input/file.mkv",
+				MediaType:        medialib.MovieType,
+				MappingName:      "movies",
+				WatchRoot:        "/input",
+				OutputRemotePath: "/remote/different/path",
+			},
+			expected: map[string]interface{}{
+				"MediaFilePath":    "/input/file.mkv",
+				"MediaTitle":       "file.mkv",
+				"MediaType":        string(medialib.MovieType),
+				"MediaMappingName": "movies",
+				"MediaWatchRoot":   "/input",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			memo := buildWorkflowMemo(test.input)
+
+			assert.Equal(t, test.expected, memo)
+
+			for _, memoValue := range memo {
+				assert.NotEqual(t, test.input.OutputRemotePath, memoValue, "memo must not contain the output remote path")
+			}
+		})
+	}
+}
+
+// TestBuildSearchAttributes verifies that buildSearchAttributes produces typed
+// search attributes with the correct keys and values, using the basename for
+// MediaTitle and the original FilePath for MediaFilePath.
+func TestBuildSearchAttributes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		input           mediatypes.MediaInput
+		wantFilePath    string
+		wantTitle       string
+		wantMediaType   string
+		wantMappingName string
+		wantWatchRoot   string
+		wantNotRemote   string
+	}{
+		{
+			name: "movie with remote path",
+			input: mediatypes.MediaInput{
+				FilePath:         "/downloads/movies/movie.mkv",
+				MediaType:        medialib.MovieType,
+				MappingName:      "movies",
+				WatchRoot:        "/downloads/movies",
+				OutputRemotePath: "/remote/movies",
+			},
+			wantFilePath:    "/downloads/movies/movie.mkv",
+			wantTitle:       "movie.mkv",
+			wantMediaType:   string(medialib.MovieType),
+			wantMappingName: "movies",
+			wantWatchRoot:   "/downloads/movies",
+			wantNotRemote:   "/remote/movies",
+		},
+		{
+			name: "show type",
+			input: mediatypes.MediaInput{
+				FilePath:    "/downloads/tv/S01E01.mkv",
+				MediaType:   medialib.ShowType,
+				MappingName: "shows",
+				WatchRoot:   "/downloads/tv",
+			},
+			wantFilePath:    "/downloads/tv/S01E01.mkv",
+			wantTitle:       "S01E01.mkv",
+			wantMediaType:   string(medialib.ShowType),
+			wantMappingName: "shows",
+			wantWatchRoot:   "/downloads/tv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			sa := buildSearchAttributes(tt.input)
+
+			fp, ok := sa.GetKeyword(mediaFilePathKey)
+			require.True(t, ok, "MediaFilePath should be present")
+			assert.Equal(t, tt.wantFilePath, fp)
+
+			title, ok := sa.GetString(mediaTitleKey)
+			require.True(t, ok, "MediaTitle should be present")
+			assert.Equal(t, tt.wantTitle, title)
+
+			mt, ok := sa.GetKeyword(mediaTypeKey)
+			require.True(t, ok, "MediaType should be present")
+			assert.Equal(t, tt.wantMediaType, mt)
+
+			mn, ok := sa.GetKeyword(mediaMappingNameKey)
+			require.True(t, ok, "MediaMappingName should be present")
+			assert.Equal(t, tt.wantMappingName, mn)
+
+			wr, ok := sa.GetKeyword(mediaWatchRootKey)
+			require.True(t, ok, "MediaWatchRoot should be present")
+			assert.Equal(t, tt.wantWatchRoot, wr)
+
+			if tt.wantNotRemote != "" {
+				untyped := sa.GetUntypedValues()
+				for _, v := range untyped {
+					assert.NotEqual(t, tt.wantNotRemote, v, "search attributes must not contain the output remote path")
+				}
+			}
+		})
+	}
+}
+
+// TestIsMissingSearchAttributeError verifies detection of InvalidArgument errors
+// that indicate unregistered custom search attributes.
+func TestIsMissingSearchAttributeError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "InvalidArgument mentioning search attribute",
+			err:  &serviceerror.InvalidArgument{Message: "invalid search attributes: MediaFilePath is not a registered search attribute"},
+			want: true,
+		},
+		{
+			name: "InvalidArgument with uppercase Search Attribute",
+			err:  &serviceerror.InvalidArgument{Message: "Search Attribute MediaMappingName not found"},
+			want: true,
+		},
+		{
+			name: "InvalidArgument about something else",
+			err:  &serviceerror.InvalidArgument{Message: "invalid task queue name"},
+			want: false,
+		},
+		{
+			name: "non-InvalidArgument error",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "wrapped InvalidArgument mentioning search attribute",
+			err:  fmt.Errorf("dispatch failed: %w", &serviceerror.InvalidArgument{Message: "invalid search attributes: MediaType is not registered"}),
+			want: true,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.want, isMissingSearchAttributeError(test.err))
+		})
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 
 	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
@@ -178,6 +179,59 @@ func sanitizeWorkflowIDSegment(s string, stripLeadingDots bool) string {
 	return out
 }
 
+// mediaSearchAttributeKeys are the five typed search attribute keys attached to every
+// media workflow. They must be pre-registered in the Temporal namespace before the
+// watcher starts with search attributes enabled:
+//
+//	temporal operator search-attribute create --namespace <namespace> \
+//	  --name MediaFilePath --type Keyword \
+//	  --name MediaTitle --type Text \
+//	  --name MediaType --type Keyword \
+//	  --name MediaMappingName --type Keyword \
+//	  --name MediaWatchRoot --type Keyword
+var (
+	mediaFilePathKey    = temporal.NewSearchAttributeKeyKeyword("MediaFilePath")
+	mediaTitleKey       = temporal.NewSearchAttributeKeyString("MediaTitle")
+	mediaTypeKey        = temporal.NewSearchAttributeKeyKeyword("MediaType")
+	mediaMappingNameKey = temporal.NewSearchAttributeKeyKeyword("MediaMappingName")
+	mediaWatchRootKey   = temporal.NewSearchAttributeKeyKeyword("MediaWatchRoot")
+)
+
+// buildWorkflowMemo returns the Memo map for a media workflow dispatch. Memo is
+// always attached to every run, independent of whether search attributes are enabled.
+func buildWorkflowMemo(input mediatypes.MediaInput) map[string]interface{} {
+	return map[string]interface{}{
+		"MediaFilePath":    input.FilePath,
+		"MediaTitle":       filepath.Base(input.FilePath),
+		"MediaType":        string(input.MediaType),
+		"MediaMappingName": input.MappingName,
+		"MediaWatchRoot":   input.WatchRoot,
+	}
+}
+
+// buildSearchAttributes returns the TypedSearchAttributes for a media workflow dispatch.
+func buildSearchAttributes(input mediatypes.MediaInput) temporal.SearchAttributes {
+	return temporal.NewSearchAttributes(
+		mediaFilePathKey.ValueSet(input.FilePath),
+		mediaTitleKey.ValueSet(filepath.Base(input.FilePath)),
+		mediaTypeKey.ValueSet(string(input.MediaType)),
+		mediaMappingNameKey.ValueSet(input.MappingName),
+		mediaWatchRootKey.ValueSet(input.WatchRoot),
+	)
+}
+
+// isMissingSearchAttributeError reports whether err is a Temporal InvalidArgument
+// error indicating that one or more custom search attributes are not registered in
+// the namespace.
+func isMissingSearchAttributeError(err error) bool {
+	var invalidArg *serviceerror.InvalidArgument
+	if !errors.As(err, &invalidArg) {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(invalidArg.Message), "search attribute")
+}
+
 // newTemporalDispatch returns a dispatchFunc that calls ExecuteWorkflow on the given
 // Temporal client with a deterministic WorkflowID, AllowDuplicate reuse policy, and
 // Fail conflict policy.
@@ -199,7 +253,7 @@ func sanitizeWorkflowIDSegment(s string, stripLeadingDots bool) string {
 // dispatch, over-counting dispatchesTotal under multi-watcher conditions. When the
 // conflict fires, the dispatch returns errWorkflowAlreadyStarted so the scan loop
 // can suppress both the dispatch and dispatch-error counters for that file.
-func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
+func newTemporalDispatch(c client.Client, taskQueue string, searchAttributesEnabled bool) dispatchFunc {
 	return func(ctx context.Context, input mediatypes.MediaInput) error {
 		options := client.StartWorkflowOptions{
 			ID:                                       workflowID(input),
@@ -207,12 +261,25 @@ func newTemporalDispatch(c client.Client, taskQueue string) dispatchFunc {
 			WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 			WorkflowIDConflictPolicy:                 enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 			WorkflowExecutionErrorWhenAlreadyStarted: true,
+			Memo:                                     buildWorkflowMemo(input),
+		}
+
+		if searchAttributesEnabled {
+			options.TypedSearchAttributes = buildSearchAttributes(input)
 		}
 
 		if _, err := c.ExecuteWorkflow(ctx, options, mediatypes.MediaWorkflowName, input); err != nil {
 			var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 			if errors.As(err, &alreadyStarted) {
 				return errWorkflowAlreadyStarted
+			}
+
+			if isMissingSearchAttributeError(err) {
+				slog.ErrorContext(ctx, "dispatch failed: custom Temporal search attributes are not registered in the namespace; register them or set WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=false to disable",
+					slog.String("required_attributes", "MediaFilePath (Keyword), MediaTitle (Text), MediaType (Keyword), MediaMappingName (Keyword), MediaWatchRoot (Keyword)"),
+					slog.String("registration_command", "temporal operator search-attribute create --namespace <namespace> --name MediaFilePath --type Keyword --name MediaTitle --type Text --name MediaType --type Keyword --name MediaMappingName --type Keyword --name MediaWatchRoot --type Keyword"),
+					slog.Any("err", err),
+				)
 			}
 
 			return err
