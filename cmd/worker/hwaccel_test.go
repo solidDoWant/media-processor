@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -197,28 +196,28 @@ func TestResolveHardwareDevicePath(t *testing.T) {
 	t.Run("override wins over detection", func(t *testing.T) {
 		root := buildFakeDRMRoot(t, []fakeDRMEntry{{name: "renderD128", driver: "i915", createDevDR: true}})
 
-		got := resolveHardwareDevicePath(context.Background(), "/dev/dri/custom", root)
+		got := resolveHardwareDevicePath(t.Context(), "/dev/dri/custom", root)
 		assert.Equal(t, "/dev/dri/custom", got)
 	})
 
 	t.Run("auto-detected path returned when no override", func(t *testing.T) {
 		root := buildFakeDRMRoot(t, []fakeDRMEntry{{name: "renderD128", driver: "i915", createDevDR: true}})
 
-		got := resolveHardwareDevicePath(context.Background(), "", root)
+		got := resolveHardwareDevicePath(t.Context(), "", root)
 		assert.Equal(t, filepath.Join(devDRIRoot, "renderD128"), got)
 	})
 
 	t.Run("software-only when no override and no i915", func(t *testing.T) {
 		root := buildFakeDRMRoot(t, []fakeDRMEntry{{name: "renderD128", driver: "amdgpu", createDevDR: true}})
 
-		got := resolveHardwareDevicePath(context.Background(), "", root)
+		got := resolveHardwareDevicePath(t.Context(), "", root)
 		assert.Empty(t, got)
 	})
 
 	t.Run("software-only when DRM root is missing", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "does-not-exist")
 
-		got := resolveHardwareDevicePath(context.Background(), "", missing)
+		got := resolveHardwareDevicePath(t.Context(), "", missing)
 		assert.Empty(t, got)
 	})
 }
