@@ -5,6 +5,7 @@ import (
 
 	"github.com/asticode/go-astiav"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMatroskaSupportsCodec pins the matroska codec-tag table for the codec
@@ -63,6 +64,107 @@ func TestEffectiveContainerIsMKV(t *testing.T) {
 			assert.Equal(t, test.want, b.effectiveContainerIsMKV())
 		})
 	}
+}
+
+// TestSubtitleConverter_GrowsEncodeBufferOnOverflow drives the
+// AVERROR_BUFFER_TOO_SMALL path in convert(): it shrinks the converter's
+// initial encode buffer to a size guaranteed to be too small for any real
+// ASS dialogue, then runs the mov_text fixture's first subtitle packet
+// through the converter and asserts the conversion succeeds and the buffer
+// grew. Without the grow-and-retry loop, a converter started with a buffer
+// smaller than the encoded payload would fail the transcode outright — the
+// same failure mode that would hit production today on any subtitle whose
+// ASS-encoded form exceeds the (currently fixed) 64 KiB initial buffer.
+func TestSubtitleConverter_GrowsEncodeBufferOnOverflow(t *testing.T) {
+	// Open the mov_text fixture and read its first subtitle packet (and a
+	// copy of the bytes / timing) before constructing the converter; the
+	// astiav packet's data is invalidated when its FormatContext is closed.
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx)
+
+	defer fmtCtx.Free()
+
+	// testMovTextSubtitleSourcePath lives in the external test package
+	// (transcode_test.go is package ffmpeg_test); duplicate the literal here
+	// rather than re-export the constant just for cross-package access.
+	require.NoError(t, fmtCtx.OpenInput("testdata/video_with_movtext_subtitle.mp4", nil, nil))
+
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	var subStream *astiav.Stream
+
+	for _, stream := range fmtCtx.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeSubtitle {
+			subStream = stream
+			break
+		}
+	}
+
+	require.NotNil(t, subStream, "fixture must carry a subtitle stream")
+
+	pkt := astiav.AllocPacket()
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	var (
+		subPacketData     []byte
+		subPacketPts      int64
+		subPacketDuration int64
+	)
+
+	for {
+		err := fmtCtx.ReadFrame(pkt)
+		require.NoError(t, err, "fixture must contain at least one subtitle packet before EOF")
+
+		if pkt.StreamIndex() == subStream.Index() {
+			data := pkt.Data()
+			subPacketData = make([]byte, len(data))
+			copy(subPacketData, data)
+
+			subPacketPts = pkt.Pts()
+			subPacketDuration = pkt.Duration()
+
+			pkt.Unref()
+
+			break
+		}
+
+		pkt.Unref()
+	}
+
+	// Force a tiny initial buffer so the first encode of even a trivial
+	// "Hello world" dialogue fails AVERROR_BUFFER_TOO_SMALL and exercises
+	// the growth path. Smaller than any ASS dialogue header would be.
+	const tinyInitial = 8
+
+	originalSize := subtitleEncodeBufferSize
+	subtitleEncodeBufferSize = tinyInitial
+
+	defer func() { subtitleEncodeBufferSize = originalSize }()
+
+	conv, err := newSubtitleConverter(
+		subStream.CodecParameters().CodecID(),
+		astiav.CodecIDAss,
+		subStream.CodecParameters().ExtraData(),
+		subStream.TimeBase(),
+	)
+	require.NoError(t, err)
+
+	defer conv.free()
+
+	require.Equal(t, tinyInitial, int(conv.encBufSize),
+		"converter must honour the overridden initial buffer size for this test to be meaningful")
+
+	encoded, err := conv.convert(subPacketData, subPacketPts, subPacketDuration)
+	require.NoError(t, err, "convert must transparently grow the encode buffer rather than failing")
+	assert.NotEmpty(t, encoded, "converter must produce a non-empty ASS payload")
+	assert.Contains(t, string(encoded), "Hello world",
+		"grown-buffer encode must still contain the source dialogue")
+	assert.Greater(t, int(conv.encBufSize), tinyInitial,
+		"convert must have grown the encode buffer beyond the initial size to fit the payload")
 }
 
 // TestIsTextSubtitleCodec pins the codec-descriptor flag the policy uses to

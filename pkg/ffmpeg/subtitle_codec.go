@@ -15,12 +15,24 @@ import (
 	"github.com/asticode/go-astiav"
 )
 
-// subtitleEncodeBufferSize is the staging buffer handed to the subtitle
-// encoder on each call. ASS Dialogue lines are short (typically a few hundred
-// bytes); 64 KiB leaves plenty of headroom even for unusually long subtitles
-// or many rects per packet, while staying small enough that the buffer can
-// live for the lifetime of the converter without being noticeable.
-const subtitleEncodeBufferSize = 64 * 1024
+// subtitleEncodeBufferSize is the initial staging buffer handed to the
+// subtitle encoder on each call. ASS Dialogue lines are short (typically a
+// few hundred bytes); 64 KiB covers any realistic subtitle in one shot.
+// convert() grows the buffer (doubling) when the encoder reports
+// AVERROR_BUFFER_TOO_SMALL, capped at subtitleEncodeBufferMax, so unusually
+// long subtitles (heavy override-tag styling, many rects per packet) don't
+// fail the transcode.
+//
+// Declared as a var (not a const) so tests can shrink it below any real
+// dialogue's encoded size to drive the grow-and-retry path without needing
+// a multi-megabyte subtitle fixture.
+var subtitleEncodeBufferSize = 64 * 1024 //nolint:gochecknoglobals
+
+// subtitleEncodeBufferMax is the upper bound on the encode buffer's growth.
+// 4 MiB is generous for any realistic subtitle event (the longest practical
+// ASS dialogue is on the order of kilobytes); the cap exists so a malformed
+// source can't drive the converter into unbounded allocation.
+const subtitleEncodeBufferMax = 4 * 1024 * 1024
 
 // subtitleConverter wraps a libavcodec subtitle decoder/encoder pair. It is
 // the Go-side equivalent of ffmpeg CLI's `-c:s <codec>` path: each input
@@ -84,7 +96,7 @@ func newSubtitleConverter(srcCodec, dstCodec astiav.CodecID, srcExtraData []byte
 		return nil, errors.New("allocating subtitle encode buffer")
 	}
 
-	sc.encBufSize = subtitleEncodeBufferSize
+	sc.encBufSize = C.int(subtitleEncodeBufferSize)
 
 	return sc, nil
 }
@@ -110,27 +122,66 @@ func (sc *subtitleConverter) extraData() []byte {
 // markers). pts and duration are passed through to the decoder so the
 // AVSubtitle intermediate carries correct timestamps for the encoder to
 // embed in the Dialogue line.
+//
+// If the encoder reports AVERROR_BUFFER_TOO_SMALL, the encode buffer is
+// doubled (up to subtitleEncodeBufferMax) and the conversion is retried.
+// The decoder runs again on each retry — wasteful in principle but cheap
+// in practice (subtitle decode is microseconds and overflow is rare),
+// and it keeps the AVSubtitle intermediate's lifetime entirely inside C
+// rather than threading it across the cgo boundary.
 func (sc *subtitleConverter) convert(data []byte, pts, duration int64) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
 
-	written := C.mpsub_convert(
-		sc.decoder, sc.encoder,
-		(*C.uint8_t)(unsafe.Pointer(&data[0])), C.int(len(data)),
-		C.int64_t(pts), C.int64_t(duration),
-		(*C.uint8_t)(sc.encBuf), sc.encBufSize,
-	)
+	for {
+		written := C.mpsub_convert(
+			sc.decoder, sc.encoder,
+			(*C.uint8_t)(unsafe.Pointer(&data[0])), C.int(len(data)),
+			C.int64_t(pts), C.int64_t(duration),
+			(*C.uint8_t)(sc.encBuf), sc.encBufSize,
+		)
 
-	if written < 0 {
-		return nil, avError(written)
+		if written == C.int(C.AVERROR_BUFFER_TOO_SMALL) {
+			if err := sc.growEncodeBuffer(); err != nil {
+				return nil, err
+			}
+
+			continue
+		}
+
+		if written < 0 {
+			return nil, avError(written)
+		}
+
+		if written == 0 {
+			return nil, nil
+		}
+
+		return C.GoBytes(sc.encBuf, written), nil
+	}
+}
+
+// growEncodeBuffer doubles the encode buffer, capped at
+// subtitleEncodeBufferMax. Returns an error if the cap has already been hit
+// (so a malformed source can't drive unbounded allocation) or if av_malloc
+// fails.
+func (sc *subtitleConverter) growEncodeBuffer() error {
+	newSize := int(sc.encBufSize) * 2
+	if newSize > subtitleEncodeBufferMax {
+		return fmt.Errorf("subtitle encode buffer would exceed maximum %d bytes", subtitleEncodeBufferMax)
 	}
 
-	if written == 0 {
-		return nil, nil
+	newBuf := C.av_malloc(C.size_t(newSize))
+	if newBuf == nil {
+		return fmt.Errorf("growing subtitle encode buffer to %d bytes", newSize)
 	}
 
-	return C.GoBytes(sc.encBuf, written), nil
+	C.av_free(sc.encBuf)
+	sc.encBuf = newBuf
+	sc.encBufSize = C.int(newSize)
+
+	return nil
 }
 
 func (sc *subtitleConverter) free() {
