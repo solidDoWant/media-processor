@@ -12,14 +12,59 @@ import (
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
-// TestLoadConfigMissingTaskQueue verifies that loadConfig surfaces a
-// descriptive error when TEMPORAL_TASK_QUEUE is unset.
-func TestLoadConfigMissingTaskQueue(t *testing.T) {
+// TestLoadConfigDefaultsTaskQueueAndActivities verifies that loadConfig fills
+// TaskQueuePrefix from the documented default when TEMPORAL_TASK_QUEUE is
+// unset, and that an unset WORKER_ACTIVITIES resolves to every known token.
+func TestLoadConfigDefaultsTaskQueueAndActivities(t *testing.T) {
 	t.Setenv("TEMPORAL_TASK_QUEUE", "")
+	t.Setenv("WORKER_ACTIVITIES", "")
+	t.Setenv("RADARR_URL", "http://radarr.local")
+	t.Setenv("RADARR_API_KEY", "k")
+	t.Setenv("SONARR_URL", "http://sonarr.local")
+	t.Setenv("SONARR_API_KEY", "k")
 
-	_, err := loadConfig()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "TEMPORAL_TASK_QUEUE")
+	cfg, err := loadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, media.DefaultTaskQueuePrefix, cfg.TaskQueuePrefix)
+	assert.Equal(t, media.DefaultTaskQueuePrefix, cfg.Workflow.TaskQueuePrefix)
+
+	expectedTokens := append([]string{media.WorkflowToken}, media.KnownActivities...)
+	assert.Equal(t, expectedTokens, cfg.EnabledTokens)
+}
+
+// TestLoadConfigWorkerActivitiesSelection verifies that loadConfig parses the
+// WORKER_ACTIVITIES env var, resolves it against the known token set, and
+// surfaces a descriptive error when the resolution fails.
+func TestLoadConfigWorkerActivitiesSelection(t *testing.T) {
+	t.Setenv("RADARR_URL", "http://radarr.local")
+	t.Setenv("RADARR_API_KEY", "k")
+	t.Setenv("SONARR_URL", "http://sonarr.local")
+	t.Setenv("SONARR_API_KEY", "k")
+
+	t.Run("transcode only", func(t *testing.T) {
+		t.Setenv("WORKER_ACTIVITIES", "transcode")
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, []string{media.TranscodeActivityToken}, cfg.EnabledTokens)
+	})
+
+	t.Run("all minus transcode", func(t *testing.T) {
+		t.Setenv("WORKER_ACTIVITIES", "all,!transcode")
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.NotContains(t, cfg.EnabledTokens, media.TranscodeActivityToken)
+		assert.Contains(t, cfg.EnabledTokens, media.WorkflowToken)
+	})
+
+	t.Run("unknown token errors", func(t *testing.T) {
+		t.Setenv("WORKER_ACTIVITIES", "frobnicate")
+
+		_, err := loadConfig()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "frobnicate")
+	})
 }
 
 func TestParseH265CRF(t *testing.T) {

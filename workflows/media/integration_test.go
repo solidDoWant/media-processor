@@ -18,16 +18,42 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/webhook"
 )
 
-// startMediaWorker registers the media workflow and activities on a fresh task
-// queue and starts a worker. The worker is stopped via t.Cleanup.
+// startMediaWorker registers the media workflow and every activity across
+// per-token Temporal Workers, mirroring the production layout. The workflow
+// runs on taskQueue; each activity runs on "{taskQueue}-{activity-token}". All
+// Workers are stopped via t.Cleanup.
 func startMediaWorker(t *testing.T, c client.Client, taskQueue string, activities *Activities) {
 	t.Helper()
 
-	w := worker.New(c, taskQueue, worker.Options{})
-	activities.Register(w)
+	tokens := append([]string{WorkflowToken}, KnownActivities...)
+	startMediaWorkerForTokens(t, c, taskQueue, activities, tokens)
+}
 
-	require.NoError(t, w.Start(), "start worker")
-	t.Cleanup(w.Stop)
+// startMediaWorkerForTokens starts one Worker per token in tokens, attaching
+// only the matching workflow function or activity. Used by the split-worker
+// test to put different tokens on different worker pools.
+func startMediaWorkerForTokens(t *testing.T, c client.Client, taskQueue string, activities *Activities, tokens []string) {
+	t.Helper()
+
+	for _, token := range tokens {
+		var (
+			queue string
+			w     worker.Worker
+		)
+
+		if token == WorkflowToken {
+			queue = taskQueue
+			w = worker.New(c, queue, worker.Options{})
+			activities.RegisterWorkflow(w)
+		} else {
+			queue = ActivityTaskQueue(taskQueue, token)
+			w = worker.New(c, queue, worker.Options{})
+			require.NoError(t, activities.RegisterActivity(w, token), "register %s", token)
+		}
+
+		require.NoError(t, w.Start(), "start worker for %s on %s", token, queue)
+		t.Cleanup(w.Stop)
+	}
 }
 
 // runMediaWorkflow starts a workflow execution on the given task queue and
@@ -65,10 +91,10 @@ func dialTemporal(t *testing.T) (client.Client, string) {
 	return c, taskQueue
 }
 
-func newTestActivities(t *testing.T, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) *Activities {
+func newTestActivities(t *testing.T, taskQueue string, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) *Activities {
 	t.Helper()
 
-	a, err := NewActivities(MediaWorkflowConfig{}, radarr, sonarr, wh)
+	a, err := NewActivities(MediaWorkflowConfig{TaskQueuePrefix: taskQueue}, radarr, sonarr, wh)
 	require.NoError(t, err)
 
 	return a
@@ -84,7 +110,7 @@ func TestMediaWorkflow_Movie_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	a := newTestActivities(t, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
@@ -109,7 +135,7 @@ func TestMediaWorkflow_Movie_SourcePreservedWhenPreserveSourceIsTrue(t *testing.
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	a := newTestActivities(t, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, PreserveSource: true, OutputPath: outputDir})
@@ -135,7 +161,7 @@ func TestMediaWorkflow_Movie_ImportByFilePathIsCalledAfterTranscode(t *testing.T
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{}
-	a := newTestActivities(t, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
@@ -159,7 +185,7 @@ func TestMediaWorkflow_Show_ValidVideoIsTranscodedAndSourceDeleted(t *testing.T)
 	inputPath := copyTestVideo(t)
 	outputDir := t.TempDir()
 
-	a := newTestActivities(t, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
@@ -185,7 +211,7 @@ func TestMediaWorkflow_Show_ImportByFilePathIsCalledAfterTranscode(t *testing.T)
 	outputDir := t.TempDir()
 
 	sonarrStub := &stubLibraryClient{}
-	a := newTestActivities(t, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, &stubLibraryClient{}, sonarrStub, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.ShowType, OutputPath: outputDir})
@@ -210,7 +236,7 @@ func TestMediaWorkflow_NonVideoFileIsDeletedByProbeAndDownstreamStepsSkipped(t *
 	require.NoError(t, os.WriteFile(inputPath, []byte("not a video"), 0o600))
 	outputDir := t.TempDir()
 
-	a := newTestActivities(t, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
@@ -236,7 +262,7 @@ func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.
 	remoteDir := "/remote/movies"
 
 	radarrStub := &stubLibraryClient{}
-	a := newTestActivities(t, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{
@@ -255,6 +281,50 @@ func TestMediaWorkflow_Movie_OutputRemotePathSubstitutedInImportCall(t *testing.
 	assert.Equal(t, expectedImportPath, radarrStub.importCalls[0], "ImportByFilePath should receive the remote path")
 }
 
+// TestMediaWorkflow_SplitWorkers_TranscodeOnDedicatedPool runs the workflow
+// with two disjoint worker pools: one polling only the transcode activity
+// queue, one polling the workflow queue and every other activity queue. The
+// pools register distinct *Activities instances backed by separate stubs, so
+// after the run we can assert which pool's Activities serviced which
+// activity. Covers AC-11 from issue #201.
+func TestMediaWorkflow_SplitWorkers_TranscodeOnDedicatedPool(t *testing.T) {
+	if os.Getenv("TEMPORAL_ADDRESS") == "" {
+		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")
+	}
+
+	c, taskQueue := dialTemporal(t)
+
+	inputPath := copyTestVideo(t)
+	outputDir := t.TempDir()
+
+	transcodePoolRadarr := &stubLibraryClient{}
+	restPoolRadarr := &stubLibraryClient{}
+
+	transcodePoolActivities := newTestActivities(t, taskQueue, transcodePoolRadarr, &stubLibraryClient{}, &webhook.Client{})
+	restPoolActivities := newTestActivities(t, taskQueue, restPoolRadarr, &stubLibraryClient{}, &webhook.Client{})
+
+	startMediaWorkerForTokens(t, c, taskQueue, transcodePoolActivities, []string{TranscodeActivityToken})
+	startMediaWorkerForTokens(t, c, taskQueue, restPoolActivities, []string{
+		WorkflowToken,
+		ProbeActivityToken,
+		DetectCropActivityToken,
+		NotifyActivityToken,
+		CleanupActivityToken,
+		NotifyFailureActivityToken,
+	})
+
+	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	require.NoError(t, err, "split-worker workflow should complete end-to-end")
+
+	inputBase := filepath.Base(inputPath)
+	mkvBase := strings.TrimSuffix(inputBase, filepath.Ext(inputBase)) + ".mkv"
+	_, statErr := os.Stat(filepath.Join(outputDir, mkvBase))
+	assert.NoError(t, statErr, "transcoded output file should exist")
+
+	assert.Empty(t, transcodePoolRadarr.importCalls, "Notify (which calls ImportByFilePath) must run on the rest pool, not the transcode pool")
+	require.Len(t, restPoolRadarr.importCalls, 1, "Notify must run exactly once on the rest pool")
+}
+
 func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	if os.Getenv("TEMPORAL_ADDRESS") == "" {
 		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")
@@ -266,7 +336,7 @@ func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	outputDir := t.TempDir()
 
 	radarrStub := &stubLibraryClient{err: medialib.ErrNotFound}
-	a := newTestActivities(t, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	a := newTestActivities(t, taskQueue, radarrStub, &stubLibraryClient{}, &webhook.Client{})
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})

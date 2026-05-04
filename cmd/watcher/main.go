@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/solidDoWant/media-processor/internal/envvar"
 	"github.com/solidDoWant/media-processor/pkg/health"
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 	"github.com/solidDoWant/media-processor/pkg/temporalclient"
+	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
 func main() {
@@ -34,9 +34,9 @@ func main() {
 func run(ctx context.Context, configPath string) error {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
 
-	taskQueue, err := envvar.RequireEnv("TEMPORAL_TASK_QUEUE")
-	if err != nil {
-		return err
+	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
+	if taskQueue == "" {
+		taskQueue = media.DefaultTaskQueuePrefix
 	}
 
 	const defaultHealthAddr = ":8081"

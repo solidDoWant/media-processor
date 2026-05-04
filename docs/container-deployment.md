@@ -36,13 +36,13 @@ The watcher scans one or more download directories at a configurable interval an
 
 ### Required environment variables
 
-| Variable              | Description                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------- |
-| `TEMPORAL_ADDRESS`    | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                    |
-| `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (for example `default`).                     |
-| `TEMPORAL_TASK_QUEUE` | Task queue the watcher dispatches to. Must match the worker's `TEMPORAL_TASK_QUEUE`.     |
+| Variable              | Description                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TEMPORAL_ADDRESS`    | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                                                                                                      |
+| `TEMPORAL_NAMESPACE`  | Temporal namespace the workflows execute in (for example `default`).                                                                                                       |
+| `TEMPORAL_TASK_QUEUE` | Workflow task queue the watcher dispatches to. Defaults to `media-processor` when unset; must match the worker's `TEMPORAL_TASK_QUEUE` (which is also the activity-queue prefix). |
 
-The watcher dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before the scan loop starts. Of the three variables, only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`), which production deployments will need to override so the dial and health check succeed.
+The watcher dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before the scan loop starts. All three of these variables are optional; unset values fall back to the Temporal Go SDK defaults (`localhost:7233`, namespace `default`) and the documented `media-processor` task queue. Production deployments will need to override the address and namespace so the dial and health check succeed.
 
 For the watcher, the health server (`/healthz` liveness, `/readyz` readiness) always runs on `:8081` by default; set `HEALTH_ADDR` to override the listen address. `METRICS_ADDR` (for example `:9090`) enables an optional Prometheus `/metrics` endpoint. See [configuration.md](configuration.md) for the full list of watcher and worker environment variables.
 
@@ -71,15 +71,16 @@ The worker polls a Temporal task queue, transcodes each file, writes the output 
 
 ### Required environment variables
 
-| Variable                       | Description                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| `TEMPORAL_ADDRESS`             | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                |
-| `TEMPORAL_NAMESPACE`           | Temporal namespace the workflows execute in (for example `default`).                 |
-| `TEMPORAL_TASK_QUEUE`          | Task queue the worker polls. Must match the watcher's `TEMPORAL_TASK_QUEUE`.         |
-| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                         |
-| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                         |
+| Variable                       | Description                                                                                                                                                                                                                                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TEMPORAL_ADDRESS`             | Temporal frontend `host:port` (for example `temporal-frontend:7233`).                                                                                                                                                                                                      |
+| `TEMPORAL_NAMESPACE`           | Temporal namespace the workflows execute in (for example `default`).                                                                                                                                                                                                       |
+| `TEMPORAL_TASK_QUEUE`          | Workflow task queue and activity-queue prefix. Defaults to `media-processor`; must match the watcher's `TEMPORAL_TASK_QUEUE`. Each enabled activity polls `{TEMPORAL_TASK_QUEUE}-{activity-token}`. See [configuration.md](configuration.md#activity-task-queues).         |
+| `WORKER_ACTIVITIES`            | Comma-separated tokens selecting which activities (and whether the workflow itself) this worker handles. Defaults to `all`. See [configuration.md](configuration.md#activity-task-queues) for the grammar and the set of known tokens.                                     |
+| `RADARR_URL`, `RADARR_API_KEY` | Radarr base URL and API key.                                                                                                                                                                                                                                               |
+| `SONARR_URL`, `SONARR_API_KEY` | Sonarr base URL and API key.                                                                                                                                                                                                                                               |
 
-As with the watcher, the worker dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before it starts polling. Only `TEMPORAL_TASK_QUEUE` is explicitly checked for non-emptiness at startup; an empty `TEMPORAL_ADDRESS` or `TEMPORAL_NAMESPACE` falls back to the Temporal Go SDK defaults (`localhost:7233` and `default`).
+As with the watcher, the worker dials Temporal with `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` and runs a `CheckHealth` request against the frontend before it starts polling. Unset `TEMPORAL_*` values fall back to documented defaults (`localhost:7233`, namespace `default`, task queue `media-processor`).
 
 See [configuration.md](configuration.md) for the full list of worker environment variables, including crop-detection tuning, webhook notifications, and quality settings.
 
