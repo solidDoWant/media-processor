@@ -48,8 +48,9 @@ const (
 // every activity task queue. Operators can override it via TEMPORAL_TASK_QUEUE
 // (the watcher dispatches workflows there, the worker polls there); tests pass
 // a per-test value through MediaWorkflowConfig.TaskQueuePrefix to keep parallel
-// runs from sharing queues.
-const DefaultTaskQueuePrefix = "media-processor"
+// runs from sharing queues. Re-exported from the types package so the watcher
+// can read it without pulling in libav.
+const DefaultTaskQueuePrefix = mediatypes.DefaultTaskQueuePrefix
 
 // KnownActivities lists every activity's kebab-case token in the order the
 // workflow invokes them. WORKER_ACTIVITIES references these tokens; the worker

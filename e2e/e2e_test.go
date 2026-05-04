@@ -38,21 +38,46 @@ const (
 	bbbZipURL  = "https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip"
 	bbbMP4Name = "bbb_sunflower_1080p_30fps_normal.mp4"
 
-	// Fixed host-side ports for the watcher and worker Prometheus endpoints,
-	// bound by the compose services (127.0.0.1:19090 and 127.0.0.1:19091).
-	watcherMetricsAddr = "127.0.0.1:19090"
-	workerMetricsAddr  = "127.0.0.1:19091"
+	// Fixed host-side ports for the watcher and the three worker pools'
+	// Prometheus endpoints, bound by the compose services. The compose file
+	// runs three worker containers — one polling the workflow queue, one the
+	// transcode activity queue, and one every other activity queue — so the
+	// workflow's metrics fan out across them and the e2e tests have to
+	// aggregate.
+	watcherMetricsAddr         = "127.0.0.1:19090"
+	workerWorkflowMetricsAddr  = "127.0.0.1:19091"
+	workerTranscodeMetricsAddr = "127.0.0.1:19094"
+	workerRestMetricsAddr      = "127.0.0.1:19096"
 
-	// Fixed host-side ports for the watcher and worker HTTP health endpoints,
-	// bound by the compose services (127.0.0.1:19092 and 127.0.0.1:19093).
-	watcherHealthBase = "http://127.0.0.1:19092"
-	workerHealthBase  = "http://127.0.0.1:19093"
+	// Fixed host-side ports for the watcher and worker pools' HTTP health
+	// endpoints, bound by the compose services.
+	watcherHealthBase         = "http://127.0.0.1:19092"
+	workerWorkflowHealthBase  = "http://127.0.0.1:19093"
+	workerTranscodeHealthBase = "http://127.0.0.1:19095"
+	workerRestHealthBase      = "http://127.0.0.1:19097"
 
 	// Host-mapped Temporal frontend port (compose binds 127.0.0.1:17233:7233).
 	// A non-default host port avoids colliding with a developer's local
 	// `make temporal-up` dev stack which binds host port 7233.
 	temporalHostPort  = "127.0.0.1:17233"
 	temporalNamespace = "default"
+)
+
+//nolint:gochecknoglobals // immutable side-by-side metadata for the worker pools.
+var (
+	// workerServiceNames lists the docker-compose service names for the three
+	// worker pools. Used to bring them up, stream their logs, and route compose
+	// commands.
+	workerServiceNames = []string{"worker-workflow", "worker-transcode", "worker-rest"}
+
+	// workerHealthBases lists every worker pool's /readyz base URL. Used by
+	// the health monitor to confirm all three pools are ready before tests
+	// proceed.
+	workerHealthBases = []string{workerWorkflowHealthBase, workerTranscodeHealthBase, workerRestHealthBase}
+
+	// workerMetricsAddrs lists every worker pool's Prometheus endpoint. Tests
+	// fetch metrics from each and merge — see fetchAllWorkerMetrics.
+	workerMetricsAddrs = []string{workerWorkflowMetricsAddr, workerTranscodeMetricsAddr, workerRestMetricsAddr}
 )
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness

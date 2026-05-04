@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -77,18 +76,19 @@ func TestSonarrHappyPath(t *testing.T) {
 	})
 	require.NoError(t, err, "Sonarr did not import any episode file within the timeout")
 
-	// preserveSource=false (default): source .mp4 must be deleted by the worker's cleanup step.
+	// preserveSource=false (default): source .mp4 must be deleted by the
+	// worker's cleanup step. Sonarr's import-detection poll can fire before
+	// the workflow has dispatched its post-Notify Cleanup activity to the
+	// rest worker pool, so wait briefly for the deletion rather than asserting
+	// it instantly.
 	sourceMp4 := filepath.Join(downloadsDir, "sonarr", releaseTitle, releaseTitle+".mp4")
-	_, statErr := os.Stat(sourceMp4)
-
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "source .mp4 should have been deleted after import (preserveSource=false)")
-
-	// retainEmptyDirectories=false (default): the release subdirectory must be pruned once
-	// it becomes empty after source-file deletion.
 	releaseDir := filepath.Join(downloadsDir, "sonarr", releaseTitle)
-	_, dirStatErr := os.Stat(releaseDir)
 
-	assert.ErrorIs(t, dirStatErr, os.ErrNotExist, "release subdirectory should have been pruned after source deletion (retainEmptyDirectories=false)")
+	assertPathRemoved(t, sourceMp4, "source .mp4 should have been deleted after import (preserveSource=false)")
+
+	// retainEmptyDirectories=false (default): the release subdirectory must
+	// be pruned once it becomes empty after source-file deletion.
+	assertPathRemoved(t, releaseDir, "release subdirectory should have been pruned after source deletion (retainEmptyDirectories=false)")
 
 	// .mkv must exist somewhere under the Sonarr library directory.
 	mkvPath := findMKV(t, filepath.Join(processedDir, "sonarr-library"))
@@ -123,12 +123,12 @@ func assertSonarrPipelineMetrics(t *testing.T) {
 	var workerSeries metricSeries
 
 	require.Eventually(t, func() bool {
-		workerSeries = fetchMetrics(t, workerMetricsAddr)
+		workerSeries = fetchAllWorkerMetrics(t)
 
 		return workerSeries.sum("media_workflow_transcode_duration_seconds_count", filter) >= 1 &&
 			workerSeries.sum("temporal_workflow_endtoend_latency_seconds_count", sdkFilter) >= 1
 	}, 30*time.Second, 500*time.Millisecond,
-		"expected worker to record one transcode-duration observation for the sonarr mapping AND one Media-workflow end-to-end latency observation")
+		"expected the worker pools to record one transcode-duration observation for the sonarr mapping AND one Media-workflow end-to-end latency observation")
 
 	watcherSeries := fetchMetrics(t, watcherMetricsAddr)
 	assert.Greater(t, watcherSeries.sum("watcher_scans_total", filter), 0.0,

@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -194,6 +196,34 @@ func labelsMatch(labels []*dto.LabelPair, filter map[string]string) bool {
 	return true
 }
 
+// fetchAllWorkerMetrics scrapes every worker pool's /metrics endpoint and
+// merges the results into a single metricSeries. Multi-worker deployments
+// emit each metric on the pool that ran the corresponding code path (the
+// transcode activity emits transcode metrics, the workflow function emits
+// workflow-lifecycle SDK metrics, etc.), so any assertion that spans the
+// whole pipeline must aggregate. Test fails on any per-pool fetch error.
+func fetchAllWorkerMetrics(t *testing.T) metricSeries {
+	t.Helper()
+
+	merged := metricSeries{}
+
+	for _, addr := range workerMetricsAddrs {
+		series := fetchMetrics(t, addr)
+
+		for name, family := range series {
+			existing, ok := merged[name]
+			if !ok {
+				merged[name] = family
+				continue
+			}
+
+			existing.Metric = append(existing.Metric, family.GetMetric()...)
+		}
+	}
+
+	return merged
+}
+
 // fetchMetrics GETs /metrics on addr, parses the Prometheus text exposition,
 // and returns the metric families keyed by base name. Network, protocol, and
 // parse errors fail the test immediately.
@@ -219,6 +249,21 @@ func fetchMetrics(t *testing.T, addr string) metricSeries {
 	require.NoError(t, err, "parse /metrics from %s", addr)
 
 	return metricSeries(families)
+}
+
+// assertPathRemoved waits up to 30 seconds for path to be removed, polling
+// every 250ms. Used after Sonarr/Radarr's import-detection poll returns:
+// because the import-detection poll can fire before the workflow's Cleanup
+// activity has been dispatched to the rest worker pool and run, asserting
+// the deletion instantly is racy. Fails the test (non-fatal) if the path is
+// still present at the deadline.
+func assertPathRemoved(t *testing.T, path, msg string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return errors.Is(err, fs.ErrNotExist)
+	}, 30*time.Second, 250*time.Millisecond, msg)
 }
 
 // findMKV walks dir and returns the path of the first .mkv file found.

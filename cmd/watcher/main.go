@@ -14,7 +14,7 @@ import (
 	"github.com/solidDoWant/media-processor/pkg/logging"
 	"github.com/solidDoWant/media-processor/pkg/metrics"
 	"github.com/solidDoWant/media-processor/pkg/temporalclient"
-	"github.com/solidDoWant/media-processor/workflows/media"
+	mediatypes "github.com/solidDoWant/media-processor/workflows/media/types"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func run(ctx context.Context, configPath string) error {
 
 	taskQueue := os.Getenv("TEMPORAL_TASK_QUEUE")
 	if taskQueue == "" {
-		taskQueue = media.DefaultTaskQueuePrefix
+		taskQueue = mediatypes.DefaultTaskQueuePrefix
 	}
 
 	const defaultHealthAddr = ":8081"
