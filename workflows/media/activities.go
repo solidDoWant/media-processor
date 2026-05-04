@@ -265,7 +265,9 @@ func (a *Activities) resolveHighCardinalityLabels(ctx context.Context, input Med
 // emitTranscodeMetrics reports the per-transcode observations to the SDK
 // metrics pipeline. File-size histograms use explicit buckets via the tally
 // scope obtained from the SDK handler; the artwork-fetch-skipped counter goes
-// through the standard MetricsHandler interface.
+// through the standard MetricsHandler interface. The transcode-duration
+// histogram is suppressed when no encoding ran (existing output reused), so
+// the metric reflects only real transcode work and is not skewed by reuses.
 func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe ProbeOutput, transcode TranscodeOutput, hcTags map[string]string) {
 	handler := activity.GetMetricsHandler(ctx)
 	tags := transcodeTags(input, probe, transcode, hcTags)
@@ -273,8 +275,11 @@ func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe ProbeOutp
 	scope := scopedHistograms(handler, tags)
 	scope.Histogram(metricSourceFileSizeBytes, fileSizeBuckets).RecordValue(float64(transcode.SourceFileSizeBytes))
 	scope.Histogram(metricDestFileSizeBytes, fileSizeBuckets).RecordValue(float64(transcode.DestFileSizeBytes))
-	scope.Histogram(metricTranscodeDurationSecs, durationBuckets).
-		RecordDuration(time.Duration(transcode.TranscodeDurationSeconds * float64(time.Second)))
+
+	if transcode.TranscodeDurationSeconds > 0 {
+		scope.Histogram(metricTranscodeDurationSecs, durationBuckets).
+			RecordDuration(time.Duration(transcode.TranscodeDurationSeconds * float64(time.Second)))
+	}
 
 	if transcode.ArtworkFetchSkipped {
 		handler.Counter(metricArtworkFetchSkipped).Inc(1)

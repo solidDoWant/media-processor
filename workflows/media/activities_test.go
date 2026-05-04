@@ -399,6 +399,45 @@ func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
 	}
 }
 
+// TestEmitTranscodeMetrics_DurationHistogramSuppressedOnReuse verifies that
+// when RunTranscode reuses an existing output (signalled by
+// TranscodeDurationSeconds == 0), the duration histogram is not emitted, so
+// the metric reflects only real transcode work. The file-size histograms
+// still fire because the corpus shape is meaningful regardless of reuse.
+func TestEmitTranscodeMetrics_DurationHistogramSuppressedOnReuse(t *testing.T) {
+	scope := tally.NewTestScope("", nil)
+	suite := &testsuite.WorkflowTestSuite{}
+	suite.SetMetricsHandler(contribtally.NewMetricsHandler(scope))
+	env := suite.NewTestActivityEnvironment()
+
+	input := MediaInput{MediaType: medialib.MovieType, MappingName: "downloads"}
+	probe := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4"}
+	out := TranscodeOutput{
+		DestCodec:                "h264",
+		DestContainer:            "mkv",
+		SourceFileSizeBytes:      5_000_000_000,
+		DestFileSizeBytes:        2_000_000_000,
+		TranscodeDurationSeconds: 0,
+	}
+
+	wrap := func(ctx context.Context) error {
+		emitTranscodeMetrics(ctx, input, probe, out, nil)
+		return nil
+	}
+	env.RegisterActivity(wrap)
+	_, err := env.ExecuteActivity(wrap)
+	require.NoError(t, err)
+
+	snap := scope.Snapshot()
+
+	assert.NotEmpty(t, findHistograms(snap, "media_workflow_source_file_size_bytes"),
+		"source-size histogram should still fire on reuse so corpus stats remain accurate")
+	assert.NotEmpty(t, findHistograms(snap, "media_workflow_destination_file_size_bytes"),
+		"destination-size histogram should still fire on reuse so corpus stats remain accurate")
+	assert.Empty(t, findHistograms(snap, "media_workflow_transcode_duration_seconds"),
+		"transcode-duration histogram must be suppressed when no encoding ran")
+}
+
 // findCounters returns every counter snapshot whose metric name matches
 // (after the _total suffix is appended by the naming scope, the on-snapshot
 // name is "media_workflow_artwork_fetch_skipped+..." with no suffix because
