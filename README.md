@@ -12,7 +12,7 @@ Two binaries run as separate processes and coordinate through [Temporal](https:/
 - **The watcher** (`bin/watcher`) — scans configured filesystem paths on a configurable interval and starts a media-processing workflow execution on Temporal for each file found.
 - **The worker** (`bin/worker`) — polls a Temporal task queue and processes the workflows it receives. It probes each file with FFmpeg, transcodes it, and notifies Radarr or Sonarr when the output is ready.
 
-Hardware-accelerated encoding is supported via NVIDIA NVENC, Intel QSV (oneVPL), and VAAPI on Linux.
+Hardware-accelerated encoding is supported via Intel QSV (oneVPL) and VAAPI on Linux.
 
 ### The bind-mount arrangement
 
@@ -101,7 +101,7 @@ For the full list of network connections made by each pod (required when writing
 
 ## Hardware acceleration
 
-NVIDIA NVENC, Intel QSV, and VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
+Intel QSV and VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
 
 ## Development
 

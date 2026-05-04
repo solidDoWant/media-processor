@@ -41,18 +41,14 @@ type videoDecoderState struct {
 }
 
 // videoProcessingPlan captures the outputs of the decoder and crop-filter setup
-// phases. It is populated by tryCuvidCropOption and setupCropFilter, then
-// consumed by configureEncoderPixelFormat, setupVideoConversion, and
-// encodeVideoFrame. Grouping these inter-phase values makes the data flow
-// between setup stages explicit rather than relying on implicit field mutation
-// order across videoStreamState.
+// phases. It is populated by setupCropFilter and consumed by
+// configureEncoderPixelFormat, setupVideoConversion, and encodeVideoFrame.
+// Grouping these inter-phase values makes the data flow between setup stages
+// explicit rather than relying on implicit field mutation order across
+// videoStreamState.
 type videoProcessingPlan struct {
-	// cuvidCropApplied is true when NVDEC hardware applied the crop at decode
-	// time via the cuvid AVOption (set by tryCuvidCropOption); setupCropFilter
-	// skips the filter graph when this is true.
-	cuvidCropApplied bool
 	// cropFilter is the active libavfilter graph, or nil when no spatial crop
-	// filter is needed (no crop requested, or cuvid handled it).
+	// filter is needed (no crop requested).
 	cropFilter *videoCropFilterState
 	// effectiveDecodedPixFmt is the pixel format of frames entering the encoder
 	// pipeline. Set by setupCropFilter to the filter output format (e.g.
@@ -76,8 +72,8 @@ type videoStreamState struct {
 	// cropParams is the requested spatial crop region, or nil when no crop is needed.
 	cropParams *CropParams
 	// h265CRF is the constant-quality value for H.265 encoders. 0 means use the
-	// encoder's default. For libx265 this is the CRF; for hevc_nvenc it is the CQ
-	// value; for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value.
+	// encoder's default. For libx265 this is the CRF; for hevc_qsv and
+	// hevc_vaapi it is the global_quality (ICQ) value.
 	h265CRF int
 	// plan captures the outputs of the decoder and crop-filter setup phases and
 	// is consumed by the encoder setup and per-frame processing. See videoProcessingPlan.
@@ -134,8 +130,7 @@ func (vss *videoStreamState) free() {
 // Falls back silently to software decoding if HW decode is unavailable.
 //
 // setupDecoder allocates and configures the context but does not open it; the
-// caller (buildStreamStates) opens the context, either via tryCuvidCropOption
-// for NVENC with a crop region, or directly with Open(nil) otherwise.
+// caller (buildStreamStates) opens the context with Open(nil).
 func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) error {
 	var codec *astiav.Codec
 
@@ -201,8 +196,7 @@ func (vss *videoStreamState) setupDecoder(inStream *astiav.Stream, inputFmt *ast
 
 // allocAndConfigDecoderContext allocates and configures a fresh decoder codec
 // context using vss.decoder.codec. Any previously allocated context is freed
-// first. Called by setupDecoder and tryCuvidCropOption (which needs a fresh
-// context when the cuvid Open attempt fails).
+// first.
 func (vss *videoStreamState) allocAndConfigDecoderContext(inStream *astiav.Stream, inputFmt *astiav.FormatContext) error {
 	codec := vss.decoder.codec
 
@@ -247,57 +241,6 @@ func (vss *videoStreamState) allocAndConfigDecoderContext(inStream *astiav.Strea
 	return nil
 }
 
-// tryCuvidCropOption attempts to apply the cuvid decoder's built-in crop
-// dictionary option (crop=TxBxLxR) for NVENC hardware acceleration with an
-// active crop region. It must be called after setupDecoder (so that
-// vss.decoder.codecContext is allocated and configured) and before
-// setupCropFilter.
-//
-// On success the context is opened with the crop dict, plan.cuvidCropApplied
-// is set to true, and (true, nil) is returned; the caller must NOT open the
-// context again. On failure (unsupported codec or driver), the context is
-// rebuilt into a freshly configured, unopened state so the caller can open it
-// normally; setupCropFilter will use the hwdownload→crop→hwupload path instead.
-//
-// Returns (false, nil) when the conditions for cuvid crop are not met (no HW
-// decode, not NVENC, or no crop region).
-func (vss *videoStreamState) tryCuvidCropOption(inStream *astiav.Stream, inputFmt *astiav.FormatContext, hwAccel HWAccel) (applied bool, err error) {
-	if vss.decoder.hwDevCtx == nil || hwAccel != HWAccelNVENC || vss.cropParams == nil {
-		return false, nil
-	}
-
-	cp := vss.cropParams
-	inW := inStream.CodecParameters().Width()
-	inH := inStream.CodecParameters().Height()
-	top := cp.Y
-	bottom := inH - cp.Y - cp.H
-	left := cp.X
-	right := inW - cp.X - cp.W
-
-	cropDict := astiav.NewDictionary()
-	defer cropDict.Free()
-
-	if setErr := cropDict.Set("crop", fmt.Sprintf("%dx%dx%dx%d", top, bottom, left, right), astiav.NewDictionaryFlags()); setErr != nil {
-		return false, fmt.Errorf("ffmpeg: setting cuvid crop dictionary option: %w", setErr)
-	}
-
-	if openErr := vss.decoder.codecContext.Open(vss.decoder.codec, cropDict); openErr == nil {
-		vss.plan.cuvidCropApplied = true
-		return true, nil
-	} else {
-		slog.Debug("ffmpeg: cuvid crop dict option unsupported, will use hwdownload/crop/hwupload filter",
-			"error", openErr)
-	}
-
-	// Open() leaves the context in an undefined state on failure; rebuild it so
-	// the caller can perform a normal Open(nil).
-	if err := vss.allocAndConfigDecoderContext(inStream, inputFmt); err != nil {
-		return false, err
-	}
-
-	return false, nil
-}
-
 // cropFilterConfig describes the libavfilter graph used to apply a spatial crop.
 // The strategy is chosen per hardware accelerator by selectCropFilterConfig.
 type cropFilterConfig struct {
@@ -320,17 +263,6 @@ func selectCropFilterConfig(hwAccel HWAccel, hwDecodeActive bool, decoderPixFmt 
 	cropStr := fmt.Sprintf("crop=%d:%d:%d:%d", cp.W, cp.H, cp.X, cp.Y)
 
 	switch {
-	case hwAccel == HWAccelNVENC && hwDecodeActive:
-		// CUDA fallback: cuvid is active but its crop dict option was unsupported.
-		// Download frames to CPU, crop in software, re-upload to CUDA.
-		return cropFilterConfig{
-			str:         fmt.Sprintf("hwdownload,%s,hwupload", cropStr),
-			srcPixFmt:   astiav.PixelFormatCuda,
-			useHWFrames: true,
-			hwFilters:   []string{"hwupload"},
-			outPixFmt:   astiav.PixelFormatCuda,
-		}
-
 	case hwAccel == HWAccelVAAPI && hwDecodeActive:
 		// VAAPI HW decode: download to CPU, apply SW crop, re-upload via scale_vaapi.
 		return cropFilterConfig{
@@ -361,7 +293,7 @@ func selectCropFilterConfig(hwAccel HWAccel, hwDecodeActive bool, decoderPixFmt 
 		}
 
 	default:
-		// Software path (SW hwAccel, QSV/NVENC without HW decode, or explicit fallback).
+		// Software path (SW hwAccel, QSV without HW decode, or explicit fallback).
 		return cropFilterConfig{
 			str:       cropStr,
 			srcPixFmt: decoderPixFmt,
@@ -382,11 +314,6 @@ func selectCropFilterConfig(hwAccel HWAccel, hwDecodeActive bool, decoderPixFmt 
 // this to enable the zero-copy GPU path when the filter already outputs HW frames.
 func (vss *videoStreamState) setupCropFilter(inStream *astiav.Stream, hwAccel HWAccel) error {
 	cp := vss.cropParams // guaranteed non-nil by caller
-
-	// CUDA: crop was already applied by the cuvid decoder's dict option.
-	if vss.plan.cuvidCropApplied {
-		return nil
-	}
 
 	hwDecodeActive := vss.decoder.hwDevCtx != nil
 
@@ -678,14 +605,6 @@ func (vss *videoStreamState) openVideoEncoderContext(enc *astiav.Codec, profile 
 			return fmt.Errorf("setting x265-params: %w", err)
 		}
 
-	case "hevc_nvenc":
-		if vss.h265CRF > 0 {
-			openDict = astiav.NewDictionary()
-			if err := openDict.Set("cq", strconv.Itoa(vss.h265CRF), astiav.NewDictionaryFlags()); err != nil {
-				return fmt.Errorf("setting hevc_nvenc cq: %w", err)
-			}
-		}
-
 	case "hevc_qsv", "hevc_vaapi":
 		if vss.h265CRF > 0 {
 			openDict = astiav.NewDictionary()
@@ -722,9 +641,7 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 	}
 
 	// HW encode with HW decode and no crop filter: decoded frames are already
-	// in GPU memory — share those surfaces directly with the encoder. This also
-	// covers the CUDA cuvid crop-dict path where the crop is applied by the
-	// decoder itself (plan.cuvidCropApplied=true, plan.cropFilter=nil).
+	// in GPU memory — share those surfaces directly with the encoder.
 	if vss.decoder.hwDevCtx != nil && vss.decoder.hwPixFmt == profile.hwPixFmt && vss.plan.cropFilter == nil {
 		vss.plan.encoderReceivesHWFrames = true
 		// Allocate an encoder-owned hw_frames_ctx with initial_pool_size=0.
@@ -740,8 +657,8 @@ func (vss *videoStreamState) configureEncoderPixelFormat(enc *astiav.Codec, prof
 		// q->frames_ctx.mids=NULL. submit_frame then skips ff_qsv_find_surface_idx
 		// entirely, avoiding the AVERROR_BUG that occurs when it tries to look up
 		// a decoded frame whose QSVMid pointer belongs to the decoder's own pool.
-		// VAAPI and NVENC do not perform a pool surface lookup, so pool size 0 is
-		// equally safe for those accelerators.
+		// VAAPI does not perform a pool surface lookup, so pool size 0 is
+		// equally safe for that accelerator.
 		if err := vss.setupHWFramesContext(profile, 0); err != nil {
 			return err
 		}

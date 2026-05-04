@@ -129,14 +129,6 @@ func TestValidateHardwareDevicePath(t *testing.T) {
 			setupPath: func(*testing.T) string { return "" },
 		},
 		{
-			name:      "cuda ordinal zero is accepted without stat",
-			setupPath: func(*testing.T) string { return "0" },
-		},
-		{
-			name:      "cuda ordinal nonzero is accepted without stat",
-			setupPath: func(*testing.T) string { return "1" },
-		},
-		{
 			name: "missing path errors and names the path",
 			setupPath: func(t *testing.T) string {
 				return filepath.Join(t.TempDir(), "renderD128")

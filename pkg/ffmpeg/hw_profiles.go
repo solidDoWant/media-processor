@@ -17,7 +17,7 @@ type hwProfile struct {
 // hwAccelPriority defines the order in which hardware accelerators are
 // selected when multiple are available. The first entry has the highest
 // priority.
-var hwAccelPriority = []HWAccel{HWAccelQSV, HWAccelNVENC, HWAccelVAAPI}
+var hwAccelPriority = []HWAccel{HWAccelQSV, HWAccelVAAPI}
 
 var hwProfiles = map[HWAccel]hwProfile{
 	HWAccelQSV: {
@@ -41,27 +41,6 @@ var hwProfiles = map[HWAccel]hwProfile{
 			astiav.CodecIDMpeg2Video: "mpeg2_qsv",
 			astiav.CodecIDVc1:        "vc1_qsv",
 			astiav.CodecIDMjpeg:      "mjpeg_qsv",
-		},
-	},
-	HWAccelNVENC: {
-		deviceType: astiav.HardwareDeviceTypeCUDA,
-		hwPixFmt:   astiav.PixelFormatCuda,
-		swPixFmt:   astiav.PixelFormatNv12,
-		encoders: map[astiav.CodecID]string{
-			astiav.CodecIDH264: "h264_nvenc",
-			astiav.CodecIDH265: "hevc_nvenc",
-			astiav.CodecIDAv1:  "av1_nvenc",
-		},
-		decoders: map[astiav.CodecID]string{
-			astiav.CodecIDH264:       "h264_cuvid",
-			astiav.CodecIDH265:       "hevc_cuvid",
-			astiav.CodecIDVp8:        "vp8_cuvid",
-			astiav.CodecIDVp9:        "vp9_cuvid",
-			astiav.CodecIDAv1:        "av1_cuvid",
-			astiav.CodecIDMpeg2Video: "mpeg2_cuvid",
-			astiav.CodecIDMjpeg:      "mjpeg_cuvid",
-			astiav.CodecIDMpeg4:      "mpeg4_cuvid",
-			astiav.CodecIDVc1:        "vc1_cuvid",
 		},
 	},
 	HWAccelVAAPI: {

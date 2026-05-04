@@ -58,8 +58,6 @@ func cliArgsForHW(hw ffmpeg.HWAccel) (preInputArgs []string, encoderName string,
 	switch hw {
 	case ffmpeg.HWAccelQSV:
 		return []string{"-hwaccel", "qsv"}, "hevc_qsv", nil
-	case ffmpeg.HWAccelNVENC:
-		return []string{"-hwaccel", "cuda"}, "hevc_nvenc", nil
 	case ffmpeg.HWAccelVAAPI:
 		// VAAPI requires explicit frame upload on the CLI; the library handles
 		// this internally via its software scale context.

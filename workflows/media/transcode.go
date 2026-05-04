@@ -131,8 +131,8 @@ type TranscodeOutput struct {
 	// CropApplied is true when a crop filter was applied during transcoding.
 	CropApplied bool `json:"crop_applied,omitempty"`
 	// HardwareAccelerated is true when at least one video stream was encoded
-	// using a hardware encoder (e.g. NVENC, QSV, VAAPI) at runtime. False when
-	// the encoder fell back to software (e.g. libx265) even if
+	// using a hardware encoder (e.g. QSV, VAAPI) at runtime. False when the
+	// encoder fell back to software (e.g. libx265) even if
 	// MEDIA_HARDWARE_DEVICE_PATH is set.
 	HardwareAccelerated bool `json:"hardware_accelerated,omitempty"`
 }
@@ -172,9 +172,9 @@ type TranscodeRequest struct {
 	HardwareDevicePath string
 	// H265CRF is the constant-quality value for H.265 encoders. 0 means use the
 	// encoder's built-in default; valid explicit values are 1–51 (lower = higher
-	// quality). For libx265 this is the CRF; for hevc_nvenc it is the CQ value;
-	// for hevc_qsv and hevc_vaapi it is the global_quality (ICQ) value. Values
-	// outside 1–51 are silently ignored and the encoder default is used.
+	// quality). For libx265 this is the CRF; for hevc_qsv and hevc_vaapi it is
+	// the global_quality (ICQ) value. Values outside 1–51 are silently ignored
+	// and the encoder default is used.
 	H265CRF int
 	// ProgressLogInterval controls how often a progress log line is emitted during
 	// transcoding. Zero disables progress logging.

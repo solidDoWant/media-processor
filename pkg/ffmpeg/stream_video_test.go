@@ -8,7 +8,7 @@ import (
 )
 
 // TestSelectCropFilterConfig verifies that selectCropFilterConfig returns the
-// correct filter graph string and buffersrc configuration for each of the six
+// correct filter graph string and buffersrc configuration for each of the
 // hardware-accelerator crop paths. The function is pure (no FFmpeg state) so
 // all paths can be covered without real hardware.
 func TestSelectCropFilterConfig(t *testing.T) {
@@ -29,25 +29,6 @@ func TestSelectCropFilterConfig(t *testing.T) {
 		{
 			name:           "software path",
 			hwAccel:        HWAccelNone,
-			hwDecodeActive: false,
-			decoderPixFmt:  swPixFmt,
-			wantStr:        "crop=1920:800:0:140",
-			wantSrcPixFmt:  swPixFmt,
-		},
-		{
-			name:            "CUDA cuvid fallback (hwdownload/crop/hwupload)",
-			hwAccel:         HWAccelNVENC,
-			hwDecodeActive:  true,
-			decoderPixFmt:   astiav.PixelFormatCuda,
-			wantStr:         "hwdownload,crop=1920:800:0:140,hwupload",
-			wantSrcPixFmt:   astiav.PixelFormatCuda,
-			wantUseHWFrames: true,
-			wantHWFilters:   []string{"hwupload"},
-			wantOutPixFmt:   astiav.PixelFormatCuda,
-		},
-		{
-			name:           "CUDA without HW decode falls back to SW",
-			hwAccel:        HWAccelNVENC,
 			hwDecodeActive: false,
 			decoderPixFmt:  swPixFmt,
 			wantStr:        "crop=1920:800:0:140",

@@ -4,8 +4,8 @@ import "github.com/asticode/go-astiav"
 
 // detectHardwareEncoders returns all HWAccel values for which a hardware
 // encoder is registered in libavcodec for the given output codec, in priority
-// order (QSV > NVENC > VAAPI). It probes libavcodec directly — no device is
-// opened, only codec registration is checked.
+// order (QSV > VAAPI). It probes libavcodec directly — no device is opened,
+// only codec registration is checked.
 func detectHardwareEncoders(codec Codec) []HWAccel {
 	accelerators := make([]HWAccel, 0, len(hwAccelPriority))
 	for _, accelerator := range hwAccelPriority {

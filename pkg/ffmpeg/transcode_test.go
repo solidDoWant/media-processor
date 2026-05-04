@@ -1199,7 +1199,6 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 func TestGetHardwareEncoder_ValidResult(t *testing.T) {
 	validValues := []ffmpeg.HWAccel{
 		ffmpeg.HWAccelNone,
-		ffmpeg.HWAccelNVENC,
 		ffmpeg.HWAccelVAAPI,
 		ffmpeg.HWAccelQSV,
 	}
