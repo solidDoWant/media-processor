@@ -8,13 +8,51 @@
 {{- $temporalTLSRoot    := "/etc/temporal-tls" -}}
 {{- $temporalConfigFile := printf "%s/temporal.toml" $temporalConfigDir -}}
 
+{{/* The container name inside every worker controller. Fixed because controller
+   names are operator-defined (workers.<name>) so a stable container name keeps
+   per-worker overrides simple — the user always writes
+   resources.controllers.<workerName>.containers.main. */}}
+{{- $workerContainerName := "main" -}}
+
 {{/* ============================================================ */}}
-{{/* Image tag: evaluate tpl strings (e.g. {{ .Chart.AppVersion }}) */}}
+{{/* Watcher image tag: evaluate tpl strings (e.g. {{ .Chart.AppVersion }}) */}}
+{{/* Worker tags are evaluated post-merge per-worker (see below).  */}}
 {{/* ============================================================ */}}
 {{- $wc := index .Values "resources" "controllers" "watcher" "containers" "watcher" -}}
 {{- $_ := set (index $wc "image") "tag" (tpl ((index $wc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
-{{- $wkc := index .Values "resources" "controllers" "worker" "containers" "worker" -}}
-{{- $_ := set (index $wkc "image") "tag" (tpl ((index $wkc "image" "tag") | default "" | toString) . | default .Chart.AppVersion) -}}
+
+{{/* ============================================================ */}}
+{{/* Workers validation                                            */}}
+{{/* ============================================================ */}}
+{{/*
+The chart treats an empty (or missing) workers map as the default single-
+controller layout — one worker named "main" running every activity.
+
+The default lives here in the template (rather than as a populated map in
+values.yaml) so a user-supplied workers map fully replaces the default. With
+a values.yaml default like `workers: { main: {...} }`, Helm's map deep-merge
+would keep "main" alongside any user-defined entries, forcing operators to
+write `main: null` to remove it. The empty-by-default + template-fallback
+pattern avoids that footgun.
+*/}}
+{{- $workers := .Values.workers | default dict -}}
+{{- if eq (len $workers) 0 -}}
+  {{- $workers = dict "main" (dict "activities" (list "all")) -}}
+{{- end -}}
+{{- $workerNames := keys $workers | sortAlpha -}}
+{{- range $name := $workerNames -}}
+  {{- $entry := index $workers $name -}}
+  {{- if not (kindIs "map" $entry) -}}
+    {{- fail (printf "workers.%s must be a map (got %s)" $name (kindOf $entry)) -}}
+  {{- end -}}
+  {{- $activities := index $entry "activities" -}}
+  {{- if not (kindIs "slice" $activities) -}}
+    {{- fail (printf "workers.%s.activities must be a list (got %s)" $name (kindOf $activities)) -}}
+  {{- end -}}
+  {{- if eq (len $activities) 0 -}}
+    {{- fail (printf "workers.%s.activities must be a non-empty list" $name) -}}
+  {{- end -}}
+{{- end -}}
 
 {{/* ============================================================ */}}
 {{/* Temporal connection values                                    */}}
@@ -130,94 +168,134 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 
 
 {{/* ============================================================ */}}
-{{/* Worker env vars                                              */}}
+{{/* Shared worker env vars (same for every worker controller)    */}}
+{{/* WORKER_ACTIVITIES is added per-worker below.                 */}}
 {{/* ============================================================ */}}
-{{- $workerEnv := dict -}}
+{{- $sharedWorkerEnv := dict -}}
 
 {{/* TEMPORAL_TASK_QUEUE / TEMPORAL_CONFIG_FILE — see watcher block above. */}}
-{{- $_ := set $workerEnv "TEMPORAL_TASK_QUEUE"  $temporalTaskQueue -}}
-{{- $_ := set $workerEnv "TEMPORAL_CONFIG_FILE" $temporalConfigFile -}}
-
-{{/* WORKER_ACTIVITIES — controls which workflow + activity tokens this pod
-     handles. See docs/configuration.md#activity-task-queues. */}}
-{{- if .Values.config.worker.activities -}}
-  {{- $_ := set $workerEnv "WORKER_ACTIVITIES" .Values.config.worker.activities -}}
-{{- end -}}
+{{- $_ := set $sharedWorkerEnv "TEMPORAL_TASK_QUEUE"  $temporalTaskQueue -}}
+{{- $_ := set $sharedWorkerEnv "TEMPORAL_CONFIG_FILE" $temporalConfigFile -}}
 
 {{/* LOG_LEVEL */}}
-{{- $_ := set $workerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
+{{- $_ := set $sharedWorkerEnv "LOG_LEVEL" .Values.config.worker.logLevel -}}
 
 {{/* MEDIA_WEBHOOK_URL */}}
 {{- if .Values.config.worker.media.webhookUrl -}}
-  {{- $_ := set $workerEnv "MEDIA_WEBHOOK_URL" .Values.config.worker.media.webhookUrl -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_WEBHOOK_URL" .Values.config.worker.media.webhookUrl -}}
 {{- end -}}
 
 {{/* MEDIA_HARDWARE_DEVICE_PATH */}}
 {{- if .Values.config.worker.media.hardware.devicePath -}}
-  {{- $_ := set $workerEnv "MEDIA_HARDWARE_DEVICE_PATH" .Values.config.worker.media.hardware.devicePath -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_HARDWARE_DEVICE_PATH" .Values.config.worker.media.hardware.devicePath -}}
 {{- end -}}
 
 {{/* RADARR_URL */}}
 {{- if .Values.config.worker.radarr.url -}}
-  {{- $_ := set $workerEnv "RADARR_URL" .Values.config.worker.radarr.url -}}
+  {{- $_ := set $sharedWorkerEnv "RADARR_URL" .Values.config.worker.radarr.url -}}
 {{- end -}}
 
 {{/* RADARR_API_KEY */}}
 {{- if $radarrSecretName -}}
-  {{- $_ := set $workerEnv "RADARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $radarrSecretName "key" $radarrSecretKey))) -}}
+  {{- $_ := set $sharedWorkerEnv "RADARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $radarrSecretName "key" $radarrSecretKey))) -}}
 {{- else if .Values.config.worker.radarr.apiKey.value -}}
-  {{- $_ := set $workerEnv "RADARR_API_KEY" .Values.config.worker.radarr.apiKey.value -}}
+  {{- $_ := set $sharedWorkerEnv "RADARR_API_KEY" .Values.config.worker.radarr.apiKey.value -}}
 {{- end -}}
 
 {{/* SONARR_URL */}}
 {{- if .Values.config.worker.sonarr.url -}}
-  {{- $_ := set $workerEnv "SONARR_URL" .Values.config.worker.sonarr.url -}}
+  {{- $_ := set $sharedWorkerEnv "SONARR_URL" .Values.config.worker.sonarr.url -}}
 {{- end -}}
 
 {{/* SONARR_API_KEY */}}
 {{- if $sonarrSecretName -}}
-  {{- $_ := set $workerEnv "SONARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $sonarrSecretName "key" $sonarrSecretKey))) -}}
+  {{- $_ := set $sharedWorkerEnv "SONARR_API_KEY" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $sonarrSecretName "key" $sonarrSecretKey))) -}}
 {{- else if .Values.config.worker.sonarr.apiKey.value -}}
-  {{- $_ := set $workerEnv "SONARR_API_KEY" .Values.config.worker.sonarr.apiKey.value -}}
+  {{- $_ := set $sharedWorkerEnv "SONARR_API_KEY" .Values.config.worker.sonarr.apiKey.value -}}
 {{- end -}}
 
 {{/* MEDIA_MIN_CROP_X / MEDIA_MIN_CROP_Y */}}
-{{- $_ := set $workerEnv "MEDIA_MIN_CROP_X" (.Values.config.worker.media.blackBarRemoval.minimumPixels.horizontal | toString) -}}
-{{- $_ := set $workerEnv "MEDIA_MIN_CROP_Y" (.Values.config.worker.media.blackBarRemoval.minimumPixels.vertical | toString) -}}
+{{- $_ := set $sharedWorkerEnv "MEDIA_MIN_CROP_X" (.Values.config.worker.media.blackBarRemoval.minimumPixels.horizontal | toString) -}}
+{{- $_ := set $sharedWorkerEnv "MEDIA_MIN_CROP_Y" (.Values.config.worker.media.blackBarRemoval.minimumPixels.vertical | toString) -}}
 
 {{/* MEDIA_DETECT_CROP_TIMEOUT */}}
 {{- if .Values.config.worker.media.blackBarRemoval.detectTimeout -}}
-  {{- $_ := set $workerEnv "MEDIA_DETECT_CROP_TIMEOUT" .Values.config.worker.media.blackBarRemoval.detectTimeout -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_DETECT_CROP_TIMEOUT" .Values.config.worker.media.blackBarRemoval.detectTimeout -}}
 {{- end -}}
 
 {{/* MEDIA_TRANSCODE_TIMEOUT */}}
 {{- if .Values.config.worker.media.transcode.timeout -}}
-  {{- $_ := set $workerEnv "MEDIA_TRANSCODE_TIMEOUT" .Values.config.worker.media.transcode.timeout -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_TRANSCODE_TIMEOUT" .Values.config.worker.media.transcode.timeout -}}
 {{- end -}}
 
 {{/* MEDIA_PROGRESS_LOG_INTERVAL */}}
 {{- if .Values.config.worker.media.transcode.progressLogInterval -}}
-  {{- $_ := set $workerEnv "MEDIA_PROGRESS_LOG_INTERVAL" .Values.config.worker.media.transcode.progressLogInterval -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_PROGRESS_LOG_INTERVAL" .Values.config.worker.media.transcode.progressLogInterval -}}
 {{- end -}}
 
 {{/* WORKER_STOP_TIMEOUT */}}
 {{- if .Values.config.worker.stopTimeout -}}
-  {{- $_ := set $workerEnv "WORKER_STOP_TIMEOUT" .Values.config.worker.stopTimeout -}}
+  {{- $_ := set $sharedWorkerEnv "WORKER_STOP_TIMEOUT" .Values.config.worker.stopTimeout -}}
 {{- end -}}
 
 {{/* MEDIA_H265_CRF */}}
 {{- if .Values.config.worker.media.transcode.videoQuality -}}
-  {{- $_ := set $workerEnv "MEDIA_H265_CRF" (.Values.config.worker.media.transcode.videoQuality | toString) -}}
+  {{- $_ := set $sharedWorkerEnv "MEDIA_H265_CRF" (.Values.config.worker.media.transcode.videoQuality | toString) -}}
 {{- end -}}
 
 {{/* METRICS_HIGH_CARDINALITY_LABELS */}}
 {{- if .Values.config.worker.metrics.highCardinalityLabels -}}
-  {{- $_ := set $workerEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
+  {{- $_ := set $sharedWorkerEnv "METRICS_HIGH_CARDINALITY_LABELS" "true" -}}
 {{- end -}}
 
 {{/* METRICS_SCRAPE_WAIT_TIMEOUT */}}
 {{- if .Values.config.worker.metrics.scrapeWaitTimeout -}}
-  {{- $_ := set $workerEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.worker.metrics.scrapeWaitTimeout -}}
+  {{- $_ := set $sharedWorkerEnv "METRICS_SCRAPE_WAIT_TIMEOUT" .Values.config.worker.metrics.scrapeWaitTimeout -}}
+{{- end -}}
+
+{{/* TEMPORAL_API_KEY (watcher + every worker): mirrors the radarr/sonarr pattern.
+   Setting this as an env var lets the SDK's env-over-file precedence keep the
+   value out of the ConfigMap-rendered TOML. Added to $sharedWorkerEnv so it
+   propagates to every worker controller. */}}
+{{- if $temporalAPIKeySecretName -}}
+  {{- $apiKeyEnvValue := dict "valueFrom" (dict "secretKeyRef" (dict "name" $temporalAPIKeySecretName "key" $temporalAPIKeySecretKey)) -}}
+  {{- $_ := set $watcherEnv      "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
+  {{- $_ := set $sharedWorkerEnv "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
+{{- else if $temporalAPIKeyValue -}}
+  {{- $_ := set $watcherEnv      "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
+  {{- $_ := set $sharedWorkerEnv "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Per-worker env: shared + WORKER_ACTIVITIES                   */}}
+{{/* ============================================================ */}}
+{{- $workerEnvByName := dict -}}
+{{- range $name := $workerNames -}}
+  {{- $entry := index $workers $name -}}
+  {{- $env := mustDeepCopy $sharedWorkerEnv -}}
+  {{- $activitiesList := index $entry "activities" -}}
+  {{- $tokens := list -}}
+  {{- range $tok := $activitiesList -}}
+    {{- $tokens = append $tokens (toString $tok) -}}
+  {{- end -}}
+  {{- $_ := set $env "WORKER_ACTIVITIES" (join "," $tokens) -}}
+  {{- $_ := set $workerEnvByName $name $env -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Per-worker advancedMounts helper                              */}}
+{{/* Returns an advancedMounts subtree (one entry per worker name) */}}
+{{/* keyed on worker name → container "main" → list of mounts.    */}}
+{{/* ============================================================ */}}
+{{- define "media-processor.workersAdvancedMounts" -}}
+{{- $names := index . "names" -}}
+{{- $mounts := index . "mounts" -}}
+{{- $container := index . "container" -}}
+{{- $out := dict -}}
+{{- range $name := $names -}}
+  {{- $_ := set $out $name (dict $container $mounts) -}}
+{{- end -}}
+{{- toYaml $out -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
@@ -225,7 +303,7 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* ============================================================ */}}
 {{- $computedPersistence := dict -}}
 
-{{/* Input volume (RO in watcher, RW in worker) */}}
+{{/* Input volume (RO in watcher, RW in every worker) */}}
 {{- $inputVolBase := omit .Values.config.inputVolume "subPath" -}}
 {{- if $inputVolBase -}}
   {{- $watcherMount := dict "path" $inputMountPath "readOnly" true -}}
@@ -234,14 +312,13 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
     {{- $watcherMount = dict "path" $inputMountPath "readOnly" true "subPath" .Values.config.inputVolume.subPath -}}
     {{- $workerMount  = dict "path" $inputMountPath "subPath"  .Values.config.inputVolume.subPath -}}
   {{- end -}}
-  {{- $_ := set $inputVolBase "advancedMounts" (dict
-    "watcher" (dict "watcher" (list $watcherMount))
-    "worker"  (dict "worker"  (list $workerMount))
-  ) -}}
+  {{- $workerSide := include "media-processor.workersAdvancedMounts" (dict "names" $workerNames "mounts" (list $workerMount) "container" $workerContainerName) | fromYaml -}}
+  {{- $advanced := mustMergeOverwrite (dict "watcher" (dict "watcher" (list $watcherMount))) $workerSide -}}
+  {{- $_ := set $inputVolBase "advancedMounts" $advanced -}}
   {{- $_ := set $computedPersistence "input" $inputVolBase -}}
 {{- end -}}
 
-{{/* Per-watch-entry output volumes (worker only) */}}
+{{/* Per-watch-entry output volumes (every worker) */}}
 {{/* Build mount map: volumeName -> (mountPath -> mountSpec), deduped by mountPath per volume */}}
 {{- $outputVolMounts := dict -}}
 {{- range .Values.config.watcher.watches -}}
@@ -297,17 +374,19 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- range $mp := keys $volMounts | sortAlpha -}}
     {{- $sortedMounts = append $sortedMounts (index $volMounts $mp) -}}
   {{- end -}}
-  {{- $_ := set $volBase "advancedMounts" (dict "worker" (dict "worker" $sortedMounts)) -}}
+  {{- $advanced := include "media-processor.workersAdvancedMounts" (dict "names" $workerNames "mounts" $sortedMounts "container" $workerContainerName) | fromYaml -}}
+  {{- $_ := set $volBase "advancedMounts" $advanced -}}
   {{- $_ := set $computedPersistence $volName $volBase -}}
 {{- end -}}
 
 {{/* Hardware device hostPath (conditional) */}}
 {{- if and .Values.config.worker.media.hardware.devicePath .Values.config.worker.media.hardware.mountHostDevice -}}
   {{- $hwMount := dict "path" .Values.config.worker.media.hardware.devicePath -}}
+  {{- $advanced := include "media-processor.workersAdvancedMounts" (dict "names" $workerNames "mounts" (list $hwMount) "container" $workerContainerName) | fromYaml -}}
   {{- $_ := set $computedPersistence "hardware-device" (dict
     "type"     "hostPath"
     "hostPath" .Values.config.worker.media.hardware.devicePath
-    "advancedMounts" (dict "worker" (dict "worker" (list $hwMount)))
+    "advancedMounts" $advanced
   ) -}}
 {{- end -}}
 
@@ -362,7 +441,7 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 
 {{/* ============================================================ */}}
 {{/* Temporal client config: temporal.toml ConfigMap, TLS Secret  */}}
-{{/* mounts, and TEMPORAL_API_KEY env (both controllers)          */}}
+{{/* mounts (watcher + every worker)                              */}}
 {{/* ============================================================ */}}
 
 {{/* Build the profile dict in camelCase, then snake-case its keys via the helper.
@@ -414,52 +493,182 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{- $_ := set $computedConfigMaps "temporal-config" (dict "data" (dict "temporal.toml" $temporalToml)) -}}
 
 {{- $temporalConfigMount := dict "path" $temporalConfigDir "readOnly" true -}}
+{{- $temporalConfigWorkerSide := include "media-processor.workersAdvancedMounts" (dict "names" $workerNames "mounts" (list $temporalConfigMount) "container" $workerContainerName) | fromYaml -}}
+{{- $temporalConfigAdvanced := mustMergeOverwrite (dict "watcher" (dict "watcher" (list $temporalConfigMount))) $temporalConfigWorkerSide -}}
 {{- $_ := set $computedPersistence "temporal-config" (dict
   "type" "configMap"
   "identifier" "temporal-config"
-  "advancedMounts" (dict
-    "watcher" (dict "watcher" (list $temporalConfigMount))
-    "worker"  (dict "worker"  (list $temporalConfigMount))
-  )
+  "advancedMounts" $temporalConfigAdvanced
 ) -}}
 
-{{/* TLS Secret mounts (one per unique Secret name), mounted RO on both controllers.
-   Each mount projects the entire Secret as a directory under <tls-root>/<secret>/;
-   the TOML references individual keys by full file path. */}}
+{{/* TLS Secret mounts (one per unique Secret name), mounted RO on watcher and
+   every worker. Each mount projects the entire Secret as a directory under
+   <tls-root>/<secret>/; the TOML references individual keys by full file path. */}}
 {{- range $secretName, $mountDir := $tlsSecretMounts -}}
   {{- $persistenceKey := printf "temporal-tls-%s" $secretName -}}
   {{- $tlsMount := dict "path" $mountDir "readOnly" true -}}
+  {{- $tlsWorkerSide := include "media-processor.workersAdvancedMounts" (dict "names" $workerNames "mounts" (list $tlsMount) "container" $workerContainerName) | fromYaml -}}
+  {{- $tlsAdvanced := mustMergeOverwrite (dict "watcher" (dict "watcher" (list $tlsMount))) $tlsWorkerSide -}}
   {{- $_ := set $computedPersistence $persistenceKey (dict
     "type" "secret"
     "name" $secretName
-    "advancedMounts" (dict
-      "watcher" (dict "watcher" (list $tlsMount))
-      "worker"  (dict "worker"  (list $tlsMount))
+    "advancedMounts" $tlsAdvanced
+  ) -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Per-worker controller defaults                               */}}
+{{/* ============================================================ */}}
+{{/*
+For each entry in .Values.workers, build a chart-default controller block keyed
+on the worker name. The user's resources.controllers.<name> is deep-merged on
+top of this default below, so anything they set takes precedence (replicas,
+nodeSelector, container resources, additional env, etc.).
+
+Defaults match the pre-multi-worker chart: image (worker repo + AppVersion),
+named metrics port :9090, /healthz + /readyz on :8080, hardened securityContext,
+PDB enabled when replicas > 1, and 120s terminationGracePeriodSeconds (covers
+config.worker.stopTimeout=30s + binary METRICS_SCRAPE_WAIT_TIMEOUT=60s + 30s
+buffer; operators running long transcodes must raise this together with
+config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
+*/}}
+{{- $userControllers := index .Values.resources "controllers" | default dict -}}
+{{- $computedWorkerControllers := dict -}}
+{{- range $name := $workerNames -}}
+  {{/* PDB.enabled computed as a literal bool from the user-supplied replicas
+     value (or 1 when unset). Done at chart-build time rather than as a deferred
+     tpl string because resources.controllers.<workerName> may be absent in the
+     user values entirely (the default case), and chained index on missing keys
+     panics. */}}
+  {{- $userCtrl := index $userControllers $name | default dict -}}
+  {{- $reps := index $userCtrl "replicas" | default 1 -}}
+  {{- $pdbEnabled := gt ($reps | int) 1 -}}
+  {{- $controller := dict
+    "strategy" "RollingUpdate"
+    "containers" (dict $workerContainerName (dict
+      "image" (dict
+        "repository" "ghcr.io/soliddowant/media-processor/worker"
+        "tag" $.Chart.AppVersion
+      )
+      "ports" (list (dict
+        "name" "metrics"
+        "containerPort" 9090
+        "protocol" "TCP"
+      ))
+      "probes" (dict
+        "liveness" (dict
+          "enabled" true
+          "custom" true
+          "spec" (dict
+            "httpGet" (dict "path" "/healthz" "port" 8080)
+            "initialDelaySeconds" 0
+            "periodSeconds" 10
+            "failureThreshold" 3
+          )
+        )
+        "readiness" (dict
+          "enabled" true
+          "custom" true
+          "spec" (dict
+            "httpGet" (dict "path" "/readyz" "port" 8080)
+            "initialDelaySeconds" 0
+            "periodSeconds" 10
+            "failureThreshold" 3
+          )
+        )
+      )
+      "securityContext" (dict
+        "allowPrivilegeEscalation" false
+        "capabilities" (dict "drop" (list "ALL"))
+        "readOnlyRootFilesystem" true
+        "runAsNonRoot" true
+        "runAsUser" 1000
+        "runAsGroup" 1000
+      )
+      "env" (index $workerEnvByName $name)
+    ))
+    "podDisruptionBudget" (dict
+      "enabled" $pdbEnabled
+      "minAvailable" 1
+    )
+    "pod" (dict
+      "terminationGracePeriodSeconds" 120
+    )
+  -}}
+  {{- $_ := set $computedWorkerControllers $name $controller -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Per-worker metrics Service + PodMonitor                      */}}
+{{/* ============================================================ */}}
+{{/*
+The watcher and worker binaries always expose /metrics. The
+config.worker.metrics.enabled toggle controls whether the chart emits the
+worker-side scrape infrastructure. One Service and one PodMonitor are emitted
+per worker controller, suffixed by the worker name (so resource names match the
+controller they target). PodMonitor (not ServiceMonitor) is used because the
+worker's activity drain can run for the full WORKER_STOP_TIMEOUT, during which
+a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
+*/}}
+{{- $computedServices    := dict -}}
+{{- $computedRawResources := dict -}}
+{{- $workerMetricsEnabledTpl := printf "{{ .Values.config.worker.metrics.enabled }}" -}}
+{{- range $name := $workerNames -}}
+  {{- $svcKey := printf "%s-metrics" $name -}}
+  {{- $_ := set $computedServices $svcKey (dict
+    "enabled" $workerMetricsEnabledTpl
+    "controller" $name
+    "ports" (dict
+      "metrics" (dict
+        "port" 9090
+        "protocol" "TCP"
+      )
+    )
+  ) -}}
+  {{/* Use the worker name as both the rawResource key and the suffix so the
+     bjw-s naming helper (lib/common/_valuesToObject.tpl) renders a clean
+     `<chart>-<workerName>` name regardless of how many workers are defined.
+     With itemCount > 1, identifier is appended; the suffix-equals-identifier
+     case suppresses a second appendage. With itemCount == 1, identifier is
+     not appended and the suffix supplies the final segment. */}}
+  {{- $_ := set $computedRawResources $name (dict
+    "enabled" $workerMetricsEnabledTpl
+    "suffix" $name
+    "apiVersion" "monitoring.coreos.com/v1"
+    "kind" "PodMonitor"
+    "spec" (dict
+      "spec" (dict
+        "selector" (dict
+          "matchLabels" (dict
+            "app.kubernetes.io/name" (printf "{{ include \"bjw-s.common.lib.chart.names.name\" $ }}")
+            "app.kubernetes.io/instance" "{{ .Release.Name }}"
+            "app.kubernetes.io/controller" $name
+          )
+        )
+        "podMetricsEndpoints" (list (dict
+          "port" "metrics"
+          "interval" "1m"
+          "scrapeTimeout" "10s"
+        ))
+      )
     )
   ) -}}
 {{- end -}}
 
-{{/* TEMPORAL_API_KEY (both controllers): mirrors the radarr/sonarr pattern. Setting
-   this as an env var lets the SDK's env-over-file precedence keep the value out of
-   the ConfigMap-rendered TOML. */}}
-{{- if $temporalAPIKeySecretName -}}
-  {{- $apiKeyEnvValue := dict "valueFrom" (dict "secretKeyRef" (dict "name" $temporalAPIKeySecretName "key" $temporalAPIKeySecretKey)) -}}
-  {{- $_ := set $watcherEnv "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
-  {{- $_ := set $workerEnv  "TEMPORAL_API_KEY" $apiKeyEnvValue -}}
-{{- else if $temporalAPIKeyValue -}}
-  {{- $_ := set $watcherEnv "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
-  {{- $_ := set $workerEnv  "TEMPORAL_API_KEY" $temporalAPIKeyValue -}}
+{{/* ============================================================ */}}
+{{/* Build computed additions (env + persistence + controllers +  */}}
+{{/* per-worker services + per-worker rawResources)              */}}
+{{/* ============================================================ */}}
+{{- $computedControllers := dict "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv))) -}}
+{{- range $name, $ctrl := $computedWorkerControllers -}}
+  {{- $_ := set $computedControllers $name $ctrl -}}
 {{- end -}}
 
-{{/* ============================================================ */}}
-{{/* Build computed additions (env + persistence only)            */}}
-{{/* ============================================================ */}}
 {{- $computedAdditions := dict
-  "controllers" (dict
-    "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv)))
-    "worker"  (dict "containers" (dict "worker"  (dict "env" $workerEnv)))
-  )
+  "controllers" $computedControllers
   "persistence" $computedPersistence
+  "service"     $computedServices
+  "rawResources" $computedRawResources
 -}}
 {{- if $computedConfigMaps -}}
   {{- $_ := set $computedAdditions "configMaps" $computedConfigMaps -}}
@@ -472,6 +681,23 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* Deep-merge user resources over computed additions            */}}
 {{/* ============================================================ */}}
 {{- $mergedResources := mustMergeOverwrite $computedAdditions (mustDeepCopy .Values.resources) -}}
+
+{{/* ============================================================ */}}
+{{/* Worker image tags: evaluate tpl strings post-merge so user   */}}
+{{/* overrides of containers.main.image.tag are honoured.        */}}
+{{/* ============================================================ */}}
+{{- range $name := $workerNames -}}
+  {{- $ctrl := index $mergedResources "controllers" $name -}}
+  {{- $containers := index $ctrl "containers" | default dict -}}
+  {{- $cnt := index $containers $workerContainerName -}}
+  {{- if $cnt -}}
+    {{- $img := index $cnt "image" | default dict -}}
+    {{- $rawTag := index $img "tag" | default "" | toString -}}
+    {{- $resolved := tpl $rawTag $ | default $.Chart.AppVersion -}}
+    {{- $_ := set $img "tag" $resolved -}}
+    {{- $_ := set $cnt "image" $img -}}
+  {{- end -}}
+{{- end -}}
 
 {{/* ============================================================ */}}
 {{/* Evaluate enabled template strings                            */}}
@@ -501,7 +727,7 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{/* Inject into .Values; strip chart-specific keys               */}}
 {{/* ============================================================ */}}
 {{- $mergedValues := mustDeepCopy .Values -}}
-{{- $mergedValues = omit $mergedValues "config" "resources" -}}
+{{- $mergedValues = omit $mergedValues "config" "resources" "workers" -}}
 {{- $mergedValues = mustMergeOverwrite $mergedValues $mergedResources -}}
 {{- $_ := set . "Values" $mergedValues -}}
 
