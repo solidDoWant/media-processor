@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,6 +23,9 @@ import (
 // privileged port with no listener in any normal environment).
 const unreachableURL = "http://127.0.0.1:1"
 
+// fastPollInterval keeps tests that exercise the command polling loop snappy.
+const fastPollInterval = time.Millisecond
+
 // parseResponse mirrors the shape of Radarr's /api/v3/parse response.
 type parseResponse struct {
 	Movie *radarrlib.Movie `json:"movie"`
@@ -32,6 +37,20 @@ type testServerConfig struct {
 	movieByID *radarrlib.Movie // response for /api/v3/movie/{id}
 	imageBody []byte           // raw bytes served at image paths
 	imageType string           // Content-Type for image responses
+	// commandStatuses is the sequence of status values returned by GET
+	// /api/v3/command/{id} on successive polls. The last entry is reused for
+	// further polls. Empty defaults to a single "completed" entry.
+	commandStatuses []string
+	// commandResult is the value of the response's "result" field. Radarr
+	// returns "unsuccessful" when a command finishes but reports no useful
+	// work (e.g. import that found nothing eligible). Empty leaves the field
+	// out of the response.
+	commandResult string
+	// commandStatusMessage is the message attached to status responses.
+	commandStatusMessage string
+	// commandStatusHTTPStatus, when non-zero, is returned by GET
+	// /api/v3/command/{id} instead of the JSON body.
+	commandStatusHTTPStatus int
 	// onCommand is called with the raw command request when /api/v3/command is hit.
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
@@ -64,6 +83,43 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.CommandResponse{ID: 1, Status: "queued"}))
+	})
+
+	// /api/v3/command/{id} drives the post-submit polling loop. Default
+	// behavior is to immediately return a terminal "completed" so existing
+	// tests don't have to opt in.
+	var commandStatusCalls atomic.Int32
+
+	mux.HandleFunc("/api/v3/command/", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.commandStatusHTTPStatus != 0 {
+			w.WriteHeader(cfg.commandStatusHTTPStatus)
+			return
+		}
+
+		statuses := cfg.commandStatuses
+		if len(statuses) == 0 {
+			statuses = []string{"completed"}
+		}
+
+		idx := int(commandStatusCalls.Add(1) - 1)
+		if idx >= len(statuses) {
+			idx = len(statuses) - 1
+		}
+
+		// starr's typed CommandResponse doesn't carry the Result field, so
+		// build the body manually to include it.
+		body := map[string]any{
+			"id":      1,
+			"status":  statuses[idx],
+			"message": cfg.commandStatusMessage,
+		}
+
+		if cfg.commandResult != "" {
+			body["result"] = cfg.commandResult
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(body))
 	})
 
 	mux.HandleFunc("/api/v3/movie/", func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +170,7 @@ func TestImportByFilePath(t *testing.T) {
 			})
 			t.Cleanup(srv.Close)
 
-			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
 			err := client.ImportByFilePath(t.Context(), tc.path)
 
@@ -128,6 +184,78 @@ func TestImportByFilePath(t *testing.T) {
 			if err == nil {
 				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
 				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
+			}
+		})
+	}
+}
+
+func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
+	tests := []struct {
+		name             string
+		commandStatuses  []string
+		commandResult    string
+		commandHTTPError int
+		commandMessage   string
+		errFunc          require.ErrorAssertionFunc
+		errSubstring     string
+	}{
+		{
+			name:            "transitions queued then started then completed",
+			commandStatuses: []string{"queued", "started", "completed"},
+			errFunc:         require.NoError,
+		},
+		{
+			name:            "completed with successful result is treated as success",
+			commandStatuses: []string{"completed"},
+			commandResult:   "successful",
+			errFunc:         require.NoError,
+		},
+		{
+			name:            "completed with unsuccessful result surfaces as error",
+			commandStatuses: []string{"completed"},
+			commandResult:   "unsuccessful",
+			commandMessage:  "no eligible files",
+			errFunc:         require.Error,
+			errSubstring:    "no successful imports",
+		},
+		{
+			name:            "terminal failed surfaces as error",
+			commandStatuses: []string{"failed"},
+			commandMessage:  "import rejected",
+			errFunc:         require.Error,
+			errSubstring:    "failed",
+		},
+		{
+			name:            "terminal aborted surfaces as error",
+			commandStatuses: []string{"started", "aborted"},
+			errFunc:         require.Error,
+			errSubstring:    "aborted",
+		},
+		{
+			name:             "polling endpoint failure surfaces as error",
+			commandHTTPError: http.StatusInternalServerError,
+			errFunc:          require.Error,
+			errSubstring:     "get radarr command status",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServerWithConfig(t, testServerConfig{
+				commandStatuses:         tc.commandStatuses,
+				commandResult:           tc.commandResult,
+				commandStatusMessage:    tc.commandMessage,
+				commandStatusHTTPStatus: tc.commandHTTPError,
+			})
+			t.Cleanup(srv.Close)
+
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
+			tc.errFunc(t, err)
+
+			if tc.errSubstring != "" && err != nil {
+				assert.Contains(t, err.Error(), tc.errSubstring)
 			}
 		})
 	}

@@ -97,7 +97,7 @@ func TestCleanup_DeletesSource(t *testing.T) {
 
 	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
-	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
@@ -113,7 +113,7 @@ func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
 		FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true,
-	})
+	}, TranscodeOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
@@ -132,8 +132,70 @@ func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 
 	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
-	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{})
 	require.NoError(t, err, "cleanup must be idempotent so retries do not fail when the file is already gone")
+}
+
+// TestCleanup_PrunesOutputDirAfterImport verifies that the mirrored output
+// subdirectory is removed once Notify has drained the transcoded file (so by
+// the time Cleanup runs, the file is gone and the directory is empty).
+func TestCleanup_PrunesOutputDirAfterImport(t *testing.T) {
+	srcRoot := t.TempDir()
+	srcSub := filepath.Join(srcRoot, "Show.S01E01")
+	require.NoError(t, os.MkdirAll(srcSub, 0o755))
+
+	srcPath := filepath.Join(srcSub, "video.mkv")
+	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
+
+	outputRoot := t.TempDir()
+	outSub := filepath.Join(outputRoot, "Show.S01E01")
+	require.NoError(t, os.MkdirAll(outSub, 0o755))
+	// destFilePath points at the (now-moved) transcoded file. The directory
+	// is empty, mirroring the post-import state.
+	destFilePath := filepath.Join(outSub, "video.mkv")
+
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
+		FilePath:   srcPath,
+		MediaType:  medialib.MovieType,
+		WatchRoot:  srcRoot,
+		OutputPath: outputRoot,
+	}, TranscodeOutput{DestFilePath: destFilePath})
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(outSub)
+	assert.True(t, os.IsNotExist(statErr), "empty output subdir should be pruned after Notify drains the file")
+
+	_, statErr = os.Stat(outputRoot)
+	assert.NoError(t, statErr, "output root must not be removed")
+}
+
+// TestCleanup_RetainEmptyDirsSkipsOutputPruning verifies that when the user
+// has opted to retain empty directories, the output side is also skipped.
+func TestCleanup_RetainEmptyDirsSkipsOutputPruning(t *testing.T) {
+	srcRoot := t.TempDir()
+	srcPath := filepath.Join(srcRoot, "video.mkv")
+	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
+
+	outputRoot := t.TempDir()
+	outSub := filepath.Join(outputRoot, "release")
+	require.NoError(t, os.MkdirAll(outSub, 0o755))
+	destFilePath := filepath.Join(outSub, "video.mkv")
+
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
+		FilePath:               srcPath,
+		MediaType:              medialib.MovieType,
+		WatchRoot:              srcRoot,
+		OutputPath:             outputRoot,
+		RetainEmptyDirectories: true,
+	}, TranscodeOutput{DestFilePath: destFilePath})
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(outSub)
+	assert.NoError(t, statErr, "output subdir must be kept when RetainEmptyDirectories is true")
 }
 
 func TestNotifyFailure_SendsWebhookPayload(t *testing.T) {

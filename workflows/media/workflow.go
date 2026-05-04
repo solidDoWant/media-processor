@@ -76,10 +76,11 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		// Invalid path. Probe has already removed the source file and emitted
 		// the invalid-files counter; Cleanup here is a near-no-op for the file
 		// (RunCleanup tolerates ErrNotExist) but still writes the .done
-		// sentinel when PreserveSource is set.
+		// sentinel when PreserveSource is set. No transcode happened, so an
+		// empty TranscodeOutput suppresses output-side pruning.
 		invalidCleanupCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
 
-		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input).Get(invalidCleanupCtx, nil); err != nil {
+		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input, TranscodeOutput{}).Get(invalidCleanupCtx, nil); err != nil {
 			return err
 		}
 
@@ -102,7 +103,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		return err
 	}
 
-	notifyCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
+	notifyCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultNotifyTimeout, retryableMaxAttempts))
 
 	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
 		return err
@@ -110,7 +111,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	cleanupCtx := workflow.WithActivityOptions(ctx, defaultActivityOptions(defaultFinalizeTimeout, retryableMaxAttempts))
 
-	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input).Get(cleanupCtx, nil); err != nil {
+	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input, transcode).Get(cleanupCtx, nil); err != nil {
 		return err
 	}
 

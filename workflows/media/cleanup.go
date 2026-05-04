@@ -37,6 +37,23 @@ func RunCleanup(filePath, watchRoot string, retainEmptyDirs bool) error {
 	return nil
 }
 
+// PruneOutputDirs removes the parent directories of destFilePath bottom-up
+// while each directory is empty, stopping at outputRoot. Intended for use
+// after Sonarr/Radarr has moved the transcoded file into its library, leaving
+// the mirrored subdirectory tree under outputRoot empty. When the file is
+// still present (e.g. Sonarr copied rather than moved, or the import was
+// rejected), pruning halts at the first non-empty directory and is a no-op.
+// Removal errors are logged and do not propagate; pruning is best-effort.
+// outputRoot itself is never removed. If outputRoot is empty or destFilePath
+// is empty, no pruning is performed.
+func PruneOutputDirs(destFilePath, outputRoot string) {
+	if destFilePath == "" {
+		return
+	}
+
+	pruneEmptyParents(destFilePath, outputRoot)
+}
+
 // pruneEmptyParents removes parent directories of filePath bottom-up as long as each
 // directory is empty, stopping when it reaches watchRoot or a non-empty directory.
 // The watch root itself is never removed. If watchRoot is empty, no pruning is performed.

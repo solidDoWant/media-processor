@@ -44,7 +44,7 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(cropOut, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -60,7 +60,7 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).
 		Return(ProbeOutput{IsValidMedia: false}, nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	// DetectCrop, Transcode, and Notify must NOT be invoked. The mock fails
 	// the test if any unexpected call arrives because no .Return was
@@ -151,8 +151,8 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 			return nil
 		})
 
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput) error {
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, mock.Anything).
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
 			cleanupAttempts++
 			if cleanupAttempts < 3 {
 				return errors.New("transient cleanup failure")
@@ -349,7 +349,7 @@ func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
 		}).Once()
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
