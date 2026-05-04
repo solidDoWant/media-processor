@@ -102,12 +102,12 @@ func TestWait(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			id := int64(1)
-			if tc.name == "zero id short-circuits without polling" {
+			if test.name == "zero id short-circuits without polling" {
 				id = 0
 			}
 
@@ -115,26 +115,26 @@ func TestWait(t *testing.T) {
 			fetcher := func(_ context.Context, _ int64) (arrcommand.Status, error) {
 				calls++
 
-				if tc.fetchErr != nil {
-					return arrcommand.Status{}, tc.fetchErr
+				if test.fetchErr != nil {
+					return arrcommand.Status{}, test.fetchErr
 				}
 
 				idx := calls - 1
-				if idx >= len(tc.statuses) {
-					idx = len(tc.statuses) - 1
+				if idx >= len(test.statuses) {
+					idx = len(test.statuses) - 1
 				}
 
-				return tc.statuses[idx], nil
+				return test.statuses[idx], nil
 			}
 
 			err := arrcommand.Wait(t.Context(), fetcher, id, fastInterval, "arrtest")
-			tc.errFunc(t, err)
+			test.errFunc(t, err)
 
-			if tc.errSubstring != "" && err != nil {
-				assert.Contains(t, err.Error(), tc.errSubstring)
+			if test.errSubstring != "" && err != nil {
+				assert.Contains(t, err.Error(), test.errSubstring)
 			}
 
-			assert.Equal(t, tc.wantCalls, calls, "unexpected fetcher invocation count")
+			assert.Equal(t, test.wantCalls, calls, "unexpected fetcher invocation count")
 		})
 	}
 }

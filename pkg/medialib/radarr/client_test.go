@@ -156,8 +156,8 @@ func TestImportByFilePath(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			var gotCmd struct {
 				Name string `json:"name"`
 				Path string `json:"path"`
@@ -172,9 +172,9 @@ func TestImportByFilePath(t *testing.T) {
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), tc.path)
+			err := client.ImportByFilePath(t.Context(), test.path)
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
@@ -182,8 +182,8 @@ func TestImportByFilePath(t *testing.T) {
 			errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.wantCmdName, gotCmd.Name)
-				assert.Equal(t, tc.wantCmdPath, gotCmd.Path)
+				assert.Equal(t, test.wantCmdName, gotCmd.Name)
+				assert.Equal(t, test.wantCmdPath, gotCmd.Path)
 			}
 		})
 	}
@@ -239,23 +239,23 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			srv := newTestServerWithConfig(t, testServerConfig{
-				commandStatuses:         tc.commandStatuses,
-				commandResult:           tc.commandResult,
-				commandStatusMessage:    tc.commandMessage,
-				commandStatusHTTPStatus: tc.commandHTTPError,
+				commandStatuses:         test.commandStatuses,
+				commandResult:           test.commandResult,
+				commandStatusMessage:    test.commandMessage,
+				commandStatusHTTPStatus: test.commandHTTPError,
 			})
 			t.Cleanup(srv.Close)
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
 			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
-			tc.errFunc(t, err)
+			test.errFunc(t, err)
 
-			if tc.errSubstring != "" && err != nil {
-				assert.Contains(t, err.Error(), tc.errSubstring)
+			if test.errSubstring != "" && err != nil {
+				assert.Contains(t, err.Error(), test.errSubstring)
 			}
 		})
 	}
@@ -323,16 +323,16 @@ func TestGetInfo(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newTestServer(t, tc.parseResp)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newTestServer(t, test.parseResp)
 			t.Cleanup(srv.Close)
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key"})
 
 			info, err := client.GetInfo(t.Context(), "/movies/some.file.mkv")
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
@@ -340,9 +340,9 @@ func TestGetInfo(t *testing.T) {
 			errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.wantID, info.GetID())
-				assert.Equal(t, tc.wantTitle, info.GetTitle())
-				assert.Equal(t, tc.wantYear, info.GetYear())
+				assert.Equal(t, test.wantID, info.GetID())
+				assert.Equal(t, test.wantTitle, info.GetTitle())
+				assert.Equal(t, test.wantYear, info.GetYear())
 				assert.Equal(t, "", info.GetSeriesTitle())
 				assert.Equal(t, 0, info.GetSeasonNumber())
 				assert.Equal(t, 0, info.GetEpisodeNumber())
@@ -420,13 +420,13 @@ func TestGetPosterImage(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			srv := newTestServerWithConfig(t, testServerConfig{
 				parseResp: &parseResponse{Movie: knownMovie},
-				movieByID: tc.movieByID,
-				imageBody: tc.imageBody,
-				imageType: tc.imageType,
+				movieByID: test.movieByID,
+				imageBody: test.imageBody,
+				imageType: test.imageType,
 			})
 			t.Cleanup(srv.Close)
 
@@ -434,14 +434,14 @@ func TestGetPosterImage(t *testing.T) {
 
 			gotBytes, gotMime, err := client.GetPosterImage(t.Context(), "/movies/The.Matrix.1999.mkv")
 
-			errFunc := tc.errFunc
+			errFunc := test.errFunc
 			if errFunc == nil {
 				errFunc = require.NoError
 			}
 
 			errFunc(t, err)
-			assert.Equal(t, tc.wantBytes, gotBytes)
-			assert.Equal(t, tc.wantMime, gotMime)
+			assert.Equal(t, test.wantBytes, gotBytes)
+			assert.Equal(t, test.wantMime, gotMime)
 		})
 	}
 }

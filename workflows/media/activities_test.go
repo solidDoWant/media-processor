@@ -272,9 +272,9 @@ func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
 
 	wantKeys := []string{"episode_number", "id", "season_number", "series_title", "title", "year"}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			a, err := NewActivities(MediaWorkflowConfig{HighCardinalityLabels: true}, tc.stub, &stubLibraryClient{}, &webhook.Client{})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, err := NewActivities(MediaWorkflowConfig{HighCardinalityLabels: true}, test.stub, &stubLibraryClient{}, &webhook.Client{})
 			require.NoError(t, err)
 
 			// resolveHighCardinalityLabels is a method, not a registered
@@ -282,14 +282,14 @@ func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
 			// activity.GetMetricsHandler / GetLogger calls find a real
 			// activity context.
 			wrap := func(ctx context.Context, in MediaInput) (map[string]string, error) {
-				return a.resolveHighCardinalityLabels(ctx, in, tc.stub), nil
+				return a.resolveHighCardinalityLabels(ctx, in, test.stub), nil
 			}
 
 			suite := &testsuite.WorkflowTestSuite{}
 			env := suite.NewTestActivityEnvironment()
 			env.RegisterActivity(wrap)
 
-			val, err := env.ExecuteActivity(wrap, tc.input)
+			val, err := env.ExecuteActivity(wrap, test.input)
 			require.NoError(t, err)
 
 			var got map[string]string
@@ -297,7 +297,7 @@ func TestResolveHighCardinalityLabels_StableKeySetAcrossOutcomes(t *testing.T) {
 
 			assert.Equal(t, wantKeys, slices.Sorted(maps.Keys(got)),
 				"key set must be identical across all GetInfo outcomes")
-			tc.assert(t, got)
+			test.assert(t, got)
 		})
 	}
 }
@@ -335,8 +335,8 @@ func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			scope := tally.NewTestScope("", nil)
 			suite := &testsuite.WorkflowTestSuite{}
 			suite.SetMetricsHandler(contribtally.NewMetricsHandler(scope))
@@ -351,11 +351,11 @@ func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
 				DestFileSizeBytes:        2_000_000_000,
 				TranscodeDurationSeconds: 1800,
 				HardwareAccelerated:      true,
-				ArtworkFetchSkipped:      tc.artworkSkipped,
+				ArtworkFetchSkipped:      test.artworkSkipped,
 			}
 
 			wrap := func(ctx context.Context) error {
-				emitTranscodeMetrics(ctx, input, probe, out, tc.hcTags)
+				emitTranscodeMetrics(ctx, input, probe, out, test.hcTags)
 				return nil
 			}
 			env.RegisterActivity(wrap)
@@ -383,13 +383,13 @@ func TestEmitTranscodeMetrics_FullTagSetAndArtworkCounter(t *testing.T) {
 				h := findHistogram(t, snap, name, expectedBaseTags)
 				assertHistogramSampleCount(t, h, 1)
 
-				if tc.extraTagAssertion != nil {
-					tc.extraTagAssertion(t, h.Tags())
+				if test.extraTagAssertion != nil {
+					test.extraTagAssertion(t, h.Tags())
 				}
 			}
 
 			counters := findCounters(snap, "media_workflow_artwork_fetch_skipped")
-			if tc.artworkSkipped {
+			if test.artworkSkipped {
 				require.Len(t, counters, 1, "artwork-fetch-skipped counter should fire when flag is set")
 				assert.EqualValues(t, 1, counters[0].Value())
 			} else {
