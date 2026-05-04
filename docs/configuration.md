@@ -130,6 +130,12 @@ Variables marked **Required** cause the binary to exit immediately if unset or e
 | `METRICS_ADDR`                           | string       | `:9090` (worker) / `:9091` (watcher)        | Optional     | TCP address for the Prometheus `/metrics` pull endpoint. Always exposed; override to change the listen address. The two binaries default to distinct ports so they can run side-by-side on the same host.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `METRICS_SCRAPE_WAIT_TIMEOUT`            | duration     | `60s`                                       | Optional     | After drain (worker `Run` returns or watcher scan loop exits), the process holds the `/metrics` endpoint open until Prometheus collects one final scrape or this timeout elapses. Set this to at least 2x your Prometheus scrape interval so a missed first scrape still has time to retry before the deadline. Set to `0s` to disable the gate (the process exits immediately after drain without waiting for a scrape). On Kubernetes, this and `WORKER_STOP_TIMEOUT` must both fit within the pod's `terminationGracePeriodSeconds`; see [helm.md](helm.md#termination-and-drain) for the relationship.                                    |
 
+### Watcher only
+
+| Variable                                      | Type   | Default | Required | Description |
+| --------------------------------------------- | ------ | ------- | -------- | ----------- |
+| `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED`  | bool   | `true`  | Optional | When `true`, each dispatched workflow is started with the five custom Temporal search attributes listed in [Temporal search attributes](#temporal-search-attributes). The attributes must be pre-registered in the namespace (see below) before the watcher starts; if they are not registered, dispatch fails and the watcher logs the registration command. When `false`, search attributes are skipped entirely and Memo is still attached. Disable this when running against a Temporal server without advanced visibility (no Elasticsearch backend). Parsed via Go's `strconv.ParseBool`, which accepts `1`, `t`, `T`, `TRUE`, `true`, `True`, `0`, `f`, `F`, `FALSE`, `false`, `False`. |
+
 ### Worker only
 
 | Variable                          | Type           | Default                              | Required     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -168,3 +174,39 @@ watches:
 An output file at `/processed/radarr/sub/Movie.mkv` is sent to Radarr as `/media/radarr/sub/Movie.mkv`.
 
 When the worker and the arr service already see the output volume at the same path, omit `output.remotePath` — the local output path is used as-is.
+
+## Temporal search attributes
+
+When `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED` is `true` (the default), the watcher attaches five custom search attributes to every dispatched media workflow. These make workflows filterable in the Temporal Web UI and queryable via the visibility API using expressions like `MediaMappingName = "movies"` or `MediaFilePath STARTS_WITH "/downloads/"`.
+
+Every dispatched workflow also receives a **Memo** with the same five fields. Memo is always attached regardless of the search-attribute setting, and its fields are visible in the Temporal Web UI's per-run detail pane without any namespace-level registration.
+
+### Attribute names and types
+
+| Attribute name      | Type      | Value |
+| ------------------- | --------- | ----- |
+| `MediaFilePath`     | `Keyword` | Absolute path of the input file |
+| `MediaTitle`        | `Text`    | Basename of the input file (full-text searchable) |
+| `MediaType`         | `Keyword` | `movie` or `show` |
+| `MediaMappingName`  | `Keyword` | Name of the watch mapping that matched the file |
+| `MediaWatchRoot`    | `Keyword` | Absolute path of the watch root directory |
+
+Note: both `MediaFilePath` and `MediaTitle` reflect the original input path. When `output.remotePath` is set in the watcher config, the rewritten path is **not** used here.
+
+### One-time registration
+
+Custom search attributes are namespace-scoped and must be registered once before the watcher starts with `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=true`. Registration requires advanced visibility (an Elasticsearch-backed self-hosted Temporal server, or Temporal Cloud). Run:
+
+```sh
+temporal operator search-attribute create \
+  --namespace <namespace> \
+  --name MediaFilePath --type Keyword \
+  --name MediaTitle --type Text \
+  --name MediaType --type Keyword \
+  --name MediaMappingName --type Keyword \
+  --name MediaWatchRoot --type Keyword
+```
+
+Replace `<namespace>` with the Temporal namespace the watcher connects to (the value of `TEMPORAL_NAMESPACE`, default `default`).
+
+If the attributes are not registered and the watcher starts with `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=true`, every workflow dispatch will fail. The watcher logs a clear error message including the full registration command and the attribute names. Set `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=false` to skip search attributes (e.g. when running against a basic-visibility Temporal server).

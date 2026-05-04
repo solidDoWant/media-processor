@@ -109,6 +109,15 @@ config:
       # binary default of 60s applies. The chart's terminationGracePeriodSeconds (120s)
       # must accommodate this value plus a buffer.
       scrapeWaitTimeout: ""
+    searchAttributes:
+      # enabled controls whether the watcher attaches custom Temporal search attributes
+      # to dispatched media workflows. Sets WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED
+      # on the watcher container. When true (the default), the five custom search
+      # attributes (MediaFilePath, MediaTitle, MediaType, MediaMappingName, MediaWatchRoot)
+      # must be pre-registered in the Temporal namespace. See docs/configuration.md for
+      # the registration command. Set to false when running against a Temporal server
+      # without advanced visibility (no Elasticsearch backend).
+      enabled: true
 
   worker:
     logLevel: info

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/solidDoWant/media-processor/internal/envvar"
@@ -83,14 +84,23 @@ func run(ctx context.Context, configPath string) error {
 	}
 	defer shutdownTemporal()
 
+	searchAttrsEnabled := true
+	if v := os.Getenv("WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED"); v != "" {
+		searchAttrsEnabled, err = strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED %q: %w", v, err)
+		}
+	}
+
 	slog.InfoContext(ctx, "connected to Temporal, starting scan loop",
 		slog.String("task_queue", taskQueue),
 		slog.Duration("interval", cfg.ScanInterval.Duration()),
+		slog.Bool("search_attributes_enabled", searchAttrsEnabled),
 	)
 
 	healthServer.SetReady()
 
-	dispatch := newTemporalDispatch(temporalClient, taskQueue)
+	dispatch := newTemporalDispatch(temporalClient, taskQueue, searchAttrsEnabled)
 	runScanLoop(ctx, cfg, instruments, dispatch)
 
 	// Hold the /metrics endpoint open for one Prometheus scrape after the scan
