@@ -35,7 +35,17 @@ would keep "main" alongside any user-defined entries, forcing operators to
 write `main: null` to remove it. The empty-by-default + template-fallback
 pattern avoids that footgun.
 */}}
-{{- $workers := .Values.workers | default dict -}}
+{{/* Reject non-map root types explicitly; `| default dict` would otherwise
+   coerce `workers: []`, `workers: ""`, etc. to an empty value and silently
+   fall into the implicit-main branch. */}}
+{{- $rawWorkers := .Values.workers -}}
+{{- $workers := dict -}}
+{{- if not (kindIs "invalid" $rawWorkers) -}}
+  {{- if not (kindIs "map" $rawWorkers) -}}
+    {{- fail (printf "workers must be a map (got %s)" (kindOf $rawWorkers)) -}}
+  {{- end -}}
+  {{- $workers = $rawWorkers -}}
+{{- end -}}
 {{- if eq (len $workers) 0 -}}
   {{- $workers = dict "main" (dict "activities" (list "all")) -}}
 {{- end -}}
