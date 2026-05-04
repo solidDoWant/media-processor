@@ -68,3 +68,39 @@ while :; do
   attempt=$((attempt + 1))
   sleep "$SLEEP_SECONDS"
 done
+
+echo "Creating search attributes for namespace '$NAMESPACE'..."
+SEARCH_ATTRIBUTES="MediaFilePath:Keyword MediaTitle:Text MediaType:Keyword MediaMappingName:Keyword MediaWatchRoot:Keyword"
+attempt=1
+while :; do
+  existing=$(temporal operator search-attribute list --namespace "$NAMESPACE" --address "$TEMPORAL_ADDRESS" 2>/dev/null || true)
+
+  missing_args=""
+  for attr in $SEARCH_ATTRIBUTES; do
+    name=${attr%:*}
+    type=${attr#*:}
+    if ! echo "$existing" | grep -wq "$name"; then
+      missing_args="$missing_args --name $name --type $type"
+    fi
+  done
+
+  if [ -z "$missing_args" ]; then
+    echo "Search attributes already exist"
+    break
+  fi
+
+  # shellcheck disable=SC2086
+  if temporal operator search-attribute create --namespace "$NAMESPACE" --address "$TEMPORAL_ADDRESS" $missing_args >/dev/null 2>&1; then
+    echo "Search attributes created:$missing_args"
+    break
+  fi
+
+  if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+    echo "Failed to create search attributes after $MAX_ATTEMPTS attempts"
+    exit 1
+  fi
+
+  echo "Search attribute creation not ready yet, waiting... (attempt $attempt/$MAX_ATTEMPTS)"
+  attempt=$((attempt + 1))
+  sleep "$SLEEP_SECONDS"
+done
