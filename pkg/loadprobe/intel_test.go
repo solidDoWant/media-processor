@@ -290,55 +290,47 @@ func TestNewIntelProbe_OpensOneFDPerEngine(t *testing.T) {
 	assert.Equal(t, uint64(0x2010), openCalls[1].config)
 }
 
-func TestNewIntelProbe_PerfOpenEACCESPropagates(t *testing.T) {
-	root := buildSysfs(t,
-		[]renderNodeFixture{{node: "renderD128", bdf: "0000:00:02.0"}},
-		[]pmuFixture{{
-			name:       "i915",
-			pmuType:    31,
-			cpumask:    "0",
-			vcsConfigs: map[string]any{"vcs0-busy": uint64(0x2000)},
-		}},
-	)
-
-	syscalls := intelSyscalls{
-		open: func(uint32, uint64, int) (int, error) { return -1, syscall.EACCES },
-		read: func(int) (uint64, error) { return 0, nil },
-		close: func(int) error {
-			require.FailNow(t, "close must not be called when no fds were opened")
-			return nil
-		},
+func TestNewIntelProbe_PerfOpenErrorsPropagate(t *testing.T) {
+	// Each case represents an errno the kernel can return from
+	// perf_event_open that callers (the supplier in #199 group 6) need to
+	// observe verbatim:
+	//   - EACCES: paranoid > 1 with no CAP_PERFMON.
+	//   - ENOTSUP: kernel does not expose the requested PMU capability.
+	tests := []struct {
+		name    string
+		openErr error
+	}{
+		{name: "eacces", openErr: syscall.EACCES},
+		{name: "enotsup", openErr: syscall.ENOTSUP},
 	}
 
-	_, err := newIntelProbe("/dev/dri/renderD128", IntelOptions{SysRoot: root}, syscalls)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, syscall.EACCES)
-	assert.Contains(t, err.Error(), "perf_event_open")
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := buildSysfs(t,
+				[]renderNodeFixture{{node: "renderD128", bdf: "0000:00:02.0"}},
+				[]pmuFixture{{
+					name:       "i915",
+					pmuType:    31,
+					cpumask:    "0",
+					vcsConfigs: map[string]any{"vcs0-busy": uint64(0x2000)},
+				}},
+			)
 
-func TestNewIntelProbe_PerfOpenENOTSUPPropagates(t *testing.T) {
-	root := buildSysfs(t,
-		[]renderNodeFixture{{node: "renderD128", bdf: "0000:00:02.0"}},
-		[]pmuFixture{{
-			name:       "i915",
-			pmuType:    31,
-			cpumask:    "0",
-			vcsConfigs: map[string]any{"vcs0-busy": uint64(0x2000)},
-		}},
-	)
+			syscalls := intelSyscalls{
+				open: func(uint32, uint64, int) (int, error) { return -1, test.openErr },
+				read: func(int) (uint64, error) { return 0, nil },
+				close: func(int) error {
+					require.FailNow(t, "close must not be called when no fds were opened")
+					return nil
+				},
+			}
 
-	// ENOTSUP is what perf_event_open returns when the running kernel does
-	// not expose the requested PMU capability — we want it surfaced verbatim
-	// so operators can act on it.
-	syscalls := intelSyscalls{
-		open:  func(uint32, uint64, int) (int, error) { return -1, syscall.ENOTSUP },
-		read:  func(int) (uint64, error) { return 0, nil },
-		close: func(int) error { return nil },
+			_, err := newIntelProbe("/dev/dri/renderD128", IntelOptions{SysRoot: root}, syscalls)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, test.openErr)
+			assert.Contains(t, err.Error(), "perf_event_open")
+		})
 	}
-
-	_, err := newIntelProbe("/dev/dri/renderD128", IntelOptions{SysRoot: root}, syscalls)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, syscall.ENOTSUP)
 }
 
 func TestNewIntelProbe_SecondOpenFailureClosesFirstFD(t *testing.T) {
