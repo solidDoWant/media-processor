@@ -63,22 +63,22 @@ func buildSysfs(t *testing.T, nodes []renderNodeFixture, pmus []pmuFixture) stri
 		eventsDir := filepath.Join(pmuDir, "events")
 		require.NoError(t, os.MkdirAll(eventsDir, 0o755))
 
-		for name, raw := range pmu.vcsConfigs {
+		for vcsConfigName, vcsConfigRaw := range pmu.vcsConfigs {
 			var content string
 
-			switch v := raw.(type) {
+			switch vcsConfigValue := vcsConfigRaw.(type) {
 			case uint64:
-				content = "config=0x" + strconv.FormatUint(v, 16) + "\n"
+				content = "config=0x" + strconv.FormatUint(vcsConfigValue, 16) + "\n"
 			case string:
-				content = v
+				content = vcsConfigValue
 			default:
-				require.FailNowf(t, "buildSysfs: unsupported event content type", "type=%T", raw)
+				require.FailNowf(t, "buildSysfs: unsupported event content type", "type=%T", vcsConfigRaw)
 			}
 
-			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, name),
+			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, vcsConfigName),
 				[]byte(content), 0o644))
 			// Companion .unit file: present on real hosts but irrelevant to parsing.
-			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, name+".unit"),
+			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, vcsConfigName+".unit"),
 				[]byte("ns\n"), 0o644))
 		}
 
