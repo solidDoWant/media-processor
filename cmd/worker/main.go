@@ -268,9 +268,12 @@ func startTranscodeLimiter(ctx context.Context, hardwareDevicePath string, cfg t
 	limiter, err := transcodelimiter.New(cfg.Limiter, sampler, reg, transcodelimiter.WithLogger(slog.Default()))
 	if err != nil {
 		// The only error path is "nil sampler", which we never produce. Log
-		// the surprise and fall through with a nil limiter — the workers
-		// will run with Temporal's default tuner.
+		// the surprise, close the sampler (which would otherwise leak the
+		// probe and the sampling goroutine), and fall through with a nil
+		// limiter — the workers will run with Temporal's default tuner.
 		slog.ErrorContext(ctx, "transcodelimiter.New failed unexpectedly", slog.Any("error", err))
+
+		_ = sampler.Close()
 
 		return &transcodeLimiterRuntime{}
 	}
@@ -279,6 +282,7 @@ func startTranscodeLimiter(ctx context.Context, hardwareDevicePath string, cfg t
 	if err != nil {
 		slog.ErrorContext(ctx, "build transcode tuner failed unexpectedly", slog.Any("error", err))
 		limiter.Close()
+		_ = sampler.Close()
 
 		return &transcodeLimiterRuntime{}
 	}
