@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/solidDoWant/media-processor/internal/envvar"
 	"github.com/solidDoWant/media-processor/pkg/medialib/radarr"
 	"github.com/solidDoWant/media-processor/pkg/medialib/sonarr"
+	"github.com/solidDoWant/media-processor/pkg/transcodelimiter"
 	"github.com/solidDoWant/media-processor/workflows/media"
 )
 
@@ -37,7 +39,30 @@ type workerConfig struct {
 	Radarr                     radarr.Config
 	Sonarr                     sonarr.Config
 	Workflow                   media.MediaWorkflowConfig
+	// TranscodeLimiter holds the slot-supplier tuning for transcode-enabled
+	// workers. Read from MEDIA_TRANSCODE_LIMITER_* env vars; the values are
+	// only consulted when the worker actually polls the transcode queue.
+	TranscodeLimiter transcodeLimiterConfig
 }
+
+// transcodeLimiterConfig bundles the operator-tunable parameters for the
+// transcode admission controller. Mirrors transcodelimiter.Config plus the
+// sampler-side knobs (interval, smoothing window) so a single struct
+// describes the full surface area.
+type transcodeLimiterConfig struct {
+	Limiter         transcodelimiter.Config
+	SampleInterval  time.Duration
+	SmoothingWindow int
+}
+
+// Defaults for the transcode limiter, mirrored in docs/configuration.md.
+const (
+	defaultLimiterStaticCap             = 5
+	defaultLimiterGPUThreshold          = 0.8
+	defaultLimiterPostAdmissionCooldown = 3 * time.Second
+	defaultLimiterSampleInterval        = 500 * time.Millisecond
+	defaultLimiterSmoothingWindow       = 5
+)
 
 // defaultHealthAddr is the fallback HTTP listen address for the health server
 // when HEALTH_ADDR is unset.
@@ -129,7 +154,119 @@ func loadConfig() (workerConfig, error) {
 
 	cfg.WorkerStopTimeout = workerStopTimeout
 
+	limiter, err := loadTranscodeLimiterConfig()
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	cfg.TranscodeLimiter = limiter
+
 	return cfg, nil
+}
+
+// loadTranscodeLimiterConfig reads the five MEDIA_TRANSCODE_LIMITER_* env vars
+// and applies the documented defaults when a variable is unset. Each override
+// is logged so operators can confirm the values that took effect; the values
+// are only consulted when the worker actually polls the transcode queue, so
+// non-transcode workers pay no attention to them.
+func loadTranscodeLimiterConfig() (transcodeLimiterConfig, error) {
+	staticCap, err := parsePositiveInt("MEDIA_TRANSCODE_LIMITER_STATIC_CAP", defaultLimiterStaticCap)
+	if err != nil {
+		return transcodeLimiterConfig{}, err
+	}
+
+	gpuThreshold, err := parseUnitFloat("MEDIA_TRANSCODE_LIMITER_GPU_THRESHOLD", defaultLimiterGPUThreshold)
+	if err != nil {
+		return transcodeLimiterConfig{}, err
+	}
+
+	cooldown, err := parseTimeout("MEDIA_TRANSCODE_LIMITER_POST_ADMISSION_COOLDOWN", defaultLimiterPostAdmissionCooldown)
+	if err != nil {
+		return transcodeLimiterConfig{}, err
+	}
+
+	sampleInterval, err := parseTimeout("MEDIA_TRANSCODE_LIMITER_SAMPLE_INTERVAL", defaultLimiterSampleInterval)
+	if err != nil {
+		return transcodeLimiterConfig{}, err
+	}
+
+	smoothingWindow, err := parsePositiveInt("MEDIA_TRANSCODE_LIMITER_SMOOTHING_WINDOW", defaultLimiterSmoothingWindow)
+	if err != nil {
+		return transcodeLimiterConfig{}, err
+	}
+
+	logLimiterOverride("MEDIA_TRANSCODE_LIMITER_STATIC_CAP", staticCap, defaultLimiterStaticCap)
+	logLimiterOverride("MEDIA_TRANSCODE_LIMITER_GPU_THRESHOLD", gpuThreshold, defaultLimiterGPUThreshold)
+	logLimiterOverride("MEDIA_TRANSCODE_LIMITER_POST_ADMISSION_COOLDOWN", cooldown, defaultLimiterPostAdmissionCooldown)
+	logLimiterOverride("MEDIA_TRANSCODE_LIMITER_SAMPLE_INTERVAL", sampleInterval, defaultLimiterSampleInterval)
+	logLimiterOverride("MEDIA_TRANSCODE_LIMITER_SMOOTHING_WINDOW", smoothingWindow, defaultLimiterSmoothingWindow)
+
+	return transcodeLimiterConfig{
+		Limiter: transcodelimiter.Config{
+			StaticCap:             staticCap,
+			GPUThreshold:          gpuThreshold,
+			PostAdmissionCooldown: cooldown,
+		},
+		SampleInterval:  sampleInterval,
+		SmoothingWindow: smoothingWindow,
+	}, nil
+}
+
+// logLimiterOverride emits an info log line when the resolved value differs
+// from the documented default. The comparison uses the comparable interface
+// so the same helper handles ints, durations, and floats.
+func logLimiterOverride[T comparable](envVar string, value, defaultValue T) {
+	if value == defaultValue {
+		return
+	}
+
+	slog.Info("transcode limiter override",
+		slog.String("env_var", envVar),
+		slog.Any("value", value),
+		slog.Any("default", defaultValue),
+	)
+}
+
+// parsePositiveInt reads a positive integer from the named env var. Empty
+// input returns defaultVal; non-integer or non-positive values are a fatal
+// error naming the var and the offending value.
+func parsePositiveInt(envVar string, defaultVal int) (int, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a positive integer (got %q): %w", envVar, raw, err)
+	}
+
+	if v <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer (got %q)", envVar, raw)
+	}
+
+	return v, nil
+}
+
+// parseUnitFloat reads a float in the half-open interval (0, 1] from the
+// named env var. Empty input returns defaultVal; out-of-range or non-numeric
+// values are a fatal error naming the var and the offending value.
+func parseUnitFloat(envVar string, defaultVal float64) (float64, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a float in (0, 1] (got %q): %w", envVar, raw, err)
+	}
+
+	if v <= 0 || v > 1 {
+		return 0, fmt.Errorf("%s must be a float in (0, 1] (got %q)", envVar, raw)
+	}
+
+	return v, nil
 }
 
 // loadWorkflowConfig reads the media-workflow tuning env vars and returns a

@@ -228,6 +228,130 @@ func TestValidateHardwareDevicePath(t *testing.T) {
 	}
 }
 
+func TestParsePositiveInt(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal int
+		expected   int
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{name: "unset returns default", envValue: "", defaultVal: 5, expected: 5},
+		{name: "valid positive integer", envValue: "12", defaultVal: 5, expected: 12},
+		{name: "zero rejected", envValue: "0", defaultVal: 5, errFunc: require.Error},
+		{name: "negative rejected", envValue: "-3", defaultVal: 5, errFunc: require.Error},
+		{name: "non-integer rejected", envValue: "five", defaultVal: 5, errFunc: require.Error},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_POSITIVE_INT_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parsePositiveInt(envVar, test.defaultVal)
+			errFunc(t, err)
+
+			if err != nil {
+				assert.Contains(t, err.Error(), envVar)
+				assert.Contains(t, err.Error(), test.envValue)
+
+				return
+			}
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
+func TestParseUnitFloat(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal float64
+		expected   float64
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{name: "unset returns default", envValue: "", defaultVal: 0.8, expected: 0.8},
+		{name: "valid mid-range", envValue: "0.6", defaultVal: 0.8, expected: 0.6},
+		{name: "upper bound accepted", envValue: "1", defaultVal: 0.8, expected: 1},
+		{name: "below lower bound rejected", envValue: "0", defaultVal: 0.8, errFunc: require.Error},
+		{name: "above upper bound rejected", envValue: "1.5", defaultVal: 0.8, errFunc: require.Error},
+		{name: "negative rejected", envValue: "-0.1", defaultVal: 0.8, errFunc: require.Error},
+		{name: "non-numeric rejected", envValue: "high", defaultVal: 0.8, errFunc: require.Error},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_UNIT_FLOAT_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parseUnitFloat(envVar, test.defaultVal)
+			errFunc(t, err)
+
+			if err != nil {
+				assert.Contains(t, err.Error(), envVar)
+				assert.Contains(t, err.Error(), test.envValue)
+
+				return
+			}
+
+			assert.InDelta(t, test.expected, got, 0.0001)
+		})
+	}
+}
+
+// TestLoadTranscodeLimiterConfigDefaults verifies that loadTranscodeLimiterConfig
+// returns the documented defaults — static_cap=5, gpu_threshold=0.8,
+// post_admission_cooldown=3s, sample_interval=500ms, smoothing_window=5 —
+// when no MEDIA_TRANSCODE_LIMITER_* variables are set.
+func TestLoadTranscodeLimiterConfigDefaults(t *testing.T) {
+	for _, key := range []string{
+		"MEDIA_TRANSCODE_LIMITER_STATIC_CAP",
+		"MEDIA_TRANSCODE_LIMITER_GPU_THRESHOLD",
+		"MEDIA_TRANSCODE_LIMITER_POST_ADMISSION_COOLDOWN",
+		"MEDIA_TRANSCODE_LIMITER_SAMPLE_INTERVAL",
+		"MEDIA_TRANSCODE_LIMITER_SMOOTHING_WINDOW",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := loadTranscodeLimiterConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 5, cfg.Limiter.StaticCap)
+	assert.InDelta(t, 0.8, cfg.Limiter.GPUThreshold, 0.0001)
+	assert.Equal(t, 3*time.Second, cfg.Limiter.PostAdmissionCooldown)
+	assert.Equal(t, 500*time.Millisecond, cfg.SampleInterval)
+	assert.Equal(t, 5, cfg.SmoothingWindow)
+}
+
+// TestLoadTranscodeLimiterConfigOverrides verifies that operator overrides
+// flow through to the resolved struct.
+func TestLoadTranscodeLimiterConfigOverrides(t *testing.T) {
+	t.Setenv("MEDIA_TRANSCODE_LIMITER_STATIC_CAP", "12")
+	t.Setenv("MEDIA_TRANSCODE_LIMITER_GPU_THRESHOLD", "0.65")
+	t.Setenv("MEDIA_TRANSCODE_LIMITER_POST_ADMISSION_COOLDOWN", "5s")
+	t.Setenv("MEDIA_TRANSCODE_LIMITER_SAMPLE_INTERVAL", "250ms")
+	t.Setenv("MEDIA_TRANSCODE_LIMITER_SMOOTHING_WINDOW", "10")
+
+	cfg, err := loadTranscodeLimiterConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 12, cfg.Limiter.StaticCap)
+	assert.InDelta(t, 0.65, cfg.Limiter.GPUThreshold, 0.0001)
+	assert.Equal(t, 5*time.Second, cfg.Limiter.PostAdmissionCooldown)
+	assert.Equal(t, 250*time.Millisecond, cfg.SampleInterval)
+	assert.Equal(t, 10, cfg.SmoothingWindow)
+}
+
 func TestParseTimeout(t *testing.T) {
 	tests := []struct {
 		name       string
