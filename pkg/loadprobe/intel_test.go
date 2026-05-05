@@ -489,11 +489,15 @@ func TestIntelProbe_SampleAfterCloseReturnsError(t *testing.T) {
 		}},
 	)
 
-	closed := false
+	closeCalls := 0
 	syscalls := intelSyscalls{
-		open:  func(uint32, uint64, int) (int, error) { return 50, nil },
-		read:  func(int) (uint64, error) { return 0, nil },
-		close: func(int) error { closed = true; return nil },
+		open: func(uint32, uint64, int) (int, error) { return 50, nil },
+		read: func(int) (uint64, error) { return 0, nil },
+		close: func(int) error {
+			closeCalls++
+
+			return nil
+		},
 	}
 
 	probe, err := newIntelProbe("/dev/dri/renderD128", IntelOptions{SysRoot: root}, syscalls)
@@ -504,7 +508,7 @@ func TestIntelProbe_SampleAfterCloseReturnsError(t *testing.T) {
 
 	_, err = probe.Sample(t.Context())
 	require.Error(t, err)
-	assert.True(t, closed, "Close on probe must close the underlying fd")
+	assert.Equal(t, 1, closeCalls, "Close must close the underlying fd exactly once across repeated calls")
 }
 
 func TestIntelProbe_SampleReadErrorPropagates(t *testing.T) {

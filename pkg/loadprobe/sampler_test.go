@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,6 +236,69 @@ func TestSampler_MidStreamFailureClosesChannel(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, beforeCount, fp.callCount.Load(), "probe Sample called after fallback")
+}
+
+// blockingProbe blocks the configured number of initial Sample calls until
+// the per-call context fires, then returns valid samples. Used to exercise
+// the per-iteration timeout path in the sampler loop.
+type blockingProbe struct {
+	mu          sync.Mutex
+	blockUntil  int
+	callCount   atomic.Int32
+	deadlineHit atomic.Int32
+	closed      atomic.Bool
+}
+
+func (b *blockingProbe) Sample(ctx context.Context) (float64, error) {
+	n := int(b.callCount.Add(1))
+
+	b.mu.Lock()
+	shouldBlock := n <= b.blockUntil
+	b.mu.Unlock()
+
+	if shouldBlock {
+		<-ctx.Done()
+		b.deadlineHit.Add(1)
+
+		return 0, ctx.Err()
+	}
+
+	return 0.5, nil
+}
+
+func (b *blockingProbe) Close() error {
+	b.closed.Store(true)
+
+	return nil
+}
+
+func TestSampler_PerIterationTimeoutSkipsRoundWithoutFallback(t *testing.T) {
+	// First two Sample calls block until the per-iteration context fires,
+	// then the probe returns valid data. The sampler must treat the
+	// timeouts as skipped rounds (FailedC stays open) and recover when the
+	// probe starts responding.
+	bp := &blockingProbe{blockUntil: 2}
+
+	s := loadprobe.NewSampler(bp, loadprobe.SamplerConfig{
+		Interval:        20 * time.Millisecond,
+		SmoothingWindow: 3,
+		Logger:          slog.New(slog.DiscardHandler),
+	})
+
+	t.Cleanup(func() { _ = s.Close() })
+	s.Start(t.Context())
+
+	require.Eventually(t, func() bool {
+		return s.Value() > 0
+	}, 2*time.Second, 5*time.Millisecond, "Sampler did not recover after per-iteration timeouts")
+
+	select {
+	case <-s.FailedC():
+		t.Fatal("per-iteration timeout must not trigger fallback")
+	default:
+	}
+
+	assert.GreaterOrEqual(t, bp.deadlineHit.Load(), int32(1), "blockingProbe never observed the per-iteration deadline")
 }
 
 func TestSampler_ContextCancellationDoesNotFail(t *testing.T) {
