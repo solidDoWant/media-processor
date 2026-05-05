@@ -87,4 +87,12 @@ Used in workers running in software-only mode. Reads `cpu.stat` and `cpu.max` fr
 - Cgroup v2 must be mounted (the unified hierarchy — most modern container runtimes provide this by default).
 - The container must have a CPU quota set (`cpu.max` cannot be `max <period>`). When the quota is unset, the probe initialization fails so the supplier falls back to its static cap; pin a CPU quota in your container runtime / Kubernetes resource limits to keep the load probe active.
 
-The fallback behavior — what the supplier does when a probe is unavailable or fails — is documented alongside the supplier itself once it lands.
+The fallback behavior — what the supplier does when a probe is unavailable or fails — is described in [Static-cap fallback](#static-cap-fallback) below.
+
+## Static-cap fallback
+
+When the load probe cannot initialize (missing capability, missing kernel feature, unconstrained cgroup) or fails mid-stream (`perf_event_open` returns an error after start, the device disappears, etc.), the transcode supplier falls back to a static cap and stops consulting the probe. The static cap is `MEDIA_TRANSCODE_LIMITER_STATIC_CAP` (default `5`); reservation requests are admitted as long as the in-flight count is below the cap, and blocked otherwise.
+
+The transition is observable through metrics: `media_worker_transcode_admission_mode{mode="probe"}` flips from `1` to `0` and `mode="static"` flips from `0` to `1` within one sample interval of the probe failure. The underlying error is logged once at `warn`. See [metrics.md](metrics.md#worker--transcode-admission-controller) for the full per-pod metric set and [configuration.md](configuration.md#transcode-admission-controller) for the limiter knobs.
+
+A failed probe is **not** a fatal startup error — the worker boots in static-cap-only mode rather than refusing to start. This means a worker without the right capabilities (or running in a host with cgroup v1, no CPU quota, etc.) still admits transcodes up to the configured cap; admission control just stops being load-aware.

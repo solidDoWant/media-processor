@@ -42,6 +42,23 @@ For Kubernetes, ensure `terminationGracePeriodSeconds` on the worker pod is at l
 
 End-to-end workflow latency, schedule-to-start latency, retry counts, and worker poll metrics are emitted by the Temporal SDK — see the [Temporal SDK metrics section](#worker--temporal-sdk) below. Per-activity execution latency is also available there, but only with SDK tags; the application-side `media_workflow_transcode_duration_seconds` above carries the media-domain tags needed to slice runtime by codec, hardware acceleration, and crop.
 
+### Worker — transcode admission controller
+
+These metrics describe the GPU-aware Temporal slot supplier that gates transcode-activity admission. They are **only emitted on workers whose `WORKER_ACTIVITIES` set includes `transcode`**; pods that don't run the transcode activity register no `media_worker_transcode_*` series. See [configuration.md](configuration.md#transcode-admission-controller) for the operator-tunable inputs and [hardware-acceleration.md](hardware-acceleration.md#static-cap-fallback) for the fallback rules.
+
+| Metric                                                | Type    | Unit    | Labels  | Description                                                                                                                                                                                       |
+| ----------------------------------------------------- | ------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_worker_transcode_slots_in_flight`              | gauge   | slots   | —       | Number of transcodes currently holding a slot on this worker.                                                                                                                                      |
+| `media_worker_transcode_slots_blocked_seconds_total`  | counter | seconds | —       | Cumulative seconds reservations spent blocked on the admission controller before being admitted or cancelled.                                                                                       |
+| `media_worker_transcode_load_utilization`             | gauge   | ratio   | —       | EWMA-smoothed load probe reading, in `[0, 1]`. Source depends on the probe in use: i915 GPU video-engine busy ratio on hardware-accelerated workers, container CPU utilization in software mode. |
+| `media_worker_transcode_admission_mode`               | gauge   | —       | `mode`  | Active admission mode. `mode="probe"` is `1` when the load probe drives admission; `mode="static"` is `1` when the supplier has fallen back to static-cap-only mode. The two series are inverse.   |
+
+`media_worker_activity_enabled` is a complementary gauge emitted on **every** worker pod regardless of activity set:
+
+| Metric                          | Type  | Labels    | Description                                                                                                                                                                          |
+| ------------------------------- | ----- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_worker_activity_enabled` | gauge | `activity`| `1` if this pod has the named activity enabled, `0` otherwise. One series per known activity. Use `sum by (activity) (media_worker_activity_enabled == 1)` for per-activity pod counts. |
+
 ### Worker — Temporal SDK
 
 The Temporal Go SDK emits its own set of counters and histograms onto the same `/metrics` endpoint. A few that are especially useful operationally:
