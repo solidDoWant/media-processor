@@ -418,7 +418,11 @@ func TestIntelProbe_SampleRisesUnderLoad(t *testing.T) {
 	defer cancel()
 
 	for deadline.Err() == nil {
-		v, err := probe.Sample(t.Context())
+		v, err := probe.Sample(deadline)
+		if errors.Is(err, context.DeadlineExceeded) {
+			break
+		}
+
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, v, 0.0, "Sample produced a negative value")
 		require.LessOrEqual(t, v, 1.0, "Sample exceeded probe contract upper bound")

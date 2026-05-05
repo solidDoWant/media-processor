@@ -170,6 +170,44 @@ func TestSampler_FailedConstructor(t *testing.T) {
 	assert.Equal(t, 0.0, s.Value())
 }
 
+func TestSampler_NilProbeYieldsFailedSampler(t *testing.T) {
+	// Passing a nil probe must not silently produce a sampler that never
+	// samples and never fails — callers need an observable signal.
+	s := loadprobe.NewSampler(nil, loadprobe.SamplerConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+
+	t.Cleanup(func() { _ = s.Close() })
+
+	select {
+	case <-s.FailedC():
+	default:
+		t.Fatal("NewSampler(nil, ...) must return a sampler in the failed state")
+	}
+
+	require.Error(t, s.FailureReason())
+	assert.Contains(t, s.FailureReason().Error(), "nil probe")
+
+	// Start must remain a no-op since there is no probe to sample.
+	s.Start(t.Context())
+}
+
+func TestFailed_NilReasonReplacedWithDefault(t *testing.T) {
+	// Failed(nil, ...) must still expose a non-nil FailureReason so callers
+	// observing FailedC() can rely on a usable error.
+	s := loadprobe.Failed(nil, slog.New(slog.DiscardHandler))
+
+	t.Cleanup(func() { _ = s.Close() })
+
+	select {
+	case <-s.FailedC():
+	default:
+		t.Fatal("FailedC must be closed on a Failed-constructed sampler even with nil reason")
+	}
+
+	require.Error(t, s.FailureReason())
+}
+
 func TestSampler_MidStreamFailureClosesChannel(t *testing.T) {
 	fp := newFakeProbe(2)
 	fp.push(0.5, nil)

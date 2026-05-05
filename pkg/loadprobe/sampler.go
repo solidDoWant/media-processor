@@ -2,6 +2,7 @@ package loadprobe
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"sync"
@@ -59,9 +60,15 @@ type Sampler struct {
 }
 
 // NewSampler constructs a Sampler around probe. The sampling loop does not
-// start until Start is called.
+// start until Start is called. A nil probe is treated as a construction
+// failure: the returned sampler is already in the failed state with a
+// descriptive reason, so callers don't need a separate nil check.
 func NewSampler(probe Probe, cfg SamplerConfig) *Sampler {
 	cfg = applySamplerDefaults(cfg)
+
+	if probe == nil {
+		return Failed(errors.New("loadprobe: nil probe"), cfg.Logger)
+	}
 
 	return &Sampler{
 		probe:  probe,
@@ -75,7 +82,14 @@ func NewSampler(probe Probe, cfg SamplerConfig) *Sampler {
 // given reason. Callers use this constructor when probe construction itself
 // failed, so init failures and mid-stream failures share a single observation
 // surface. Close on the returned sampler is a no-op.
+//
+// A nil reason is replaced with a generic placeholder so FailureReason() is
+// guaranteed non-nil whenever FailedC() is closed.
 func Failed(reason error, log *slog.Logger) *Sampler {
+	if reason == nil {
+		reason = errors.New("loadprobe: unspecified failure")
+	}
+
 	if log == nil {
 		log = slog.Default()
 	}
