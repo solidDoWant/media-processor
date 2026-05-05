@@ -21,11 +21,11 @@ import (
 // constructs and samples against a real i915 PMU on the host.
 //
 // The test deliberately covers only initialization and bounded-sampling
-// behaviour. The "value increases when an active transcode is running"
-// assertion (issue 199 / 204 AC-20) requires driving an actual ffmpeg
-// transcode against the device, which lives at the worker e2e layer where
-// this probe is wired into the slot supplier. This integration test verifies
-// only that NewIntelProbe + Sample work end-to-end against hardware.
+// behaviour. Verifying that the value actually rises while a transcode is
+// running requires driving an ffmpeg transcode against the device, which
+// lives at the worker end-to-end layer where this probe is wired into the
+// slot supplier. This integration test verifies only that NewIntelProbe +
+// Sample work end-to-end against hardware.
 //
 // Skips with a specific reason when:
 //   - No /dev/dri/renderD* nodes exist (no DRM-capable GPU on the host).
@@ -43,8 +43,9 @@ func TestIntelProbe_Integration_BindsToRealHardware(t *testing.T) {
 	sort.Strings(nodes)
 
 	var (
-		probe    *loadprobe.IntelProbe
-		attempts []string
+		probe      *loadprobe.IntelProbe
+		attempts   []string
+		unexpected []string
 	)
 
 	for _, node := range nodes {
@@ -59,15 +60,22 @@ func TestIntelProbe_Integration_BindsToRealHardware(t *testing.T) {
 
 		attempts = append(attempts, node+": "+openErr.Error())
 
-		// EACCES / ENOTSUP / ENOENT from perf_event_open mean we lack the
-		// permission or the kernel does not expose the requested counter.
-		// Try the next render node before giving up.
+		// Expected skip conditions: EACCES/ENOTSUP/ENOENT from
+		// perf_event_open mean the kernel forbids the call or the device is
+		// not an i915 render node. Anything else is a real regression in
+		// NewIntelProbe and must fail the test rather than silently skip.
 		if errors.Is(openErr, syscall.EACCES) ||
 			errors.Is(openErr, syscall.ENOTSUP) ||
 			errors.Is(openErr, syscall.ENOENT) ||
 			errors.Is(openErr, os.ErrNotExist) {
 			continue
 		}
+
+		unexpected = append(unexpected, node+": "+openErr.Error())
+	}
+
+	if probe == nil && len(unexpected) > 0 {
+		t.Fatalf("unexpected NewIntelProbe failures (not the documented skip conditions):\n%s", joinLines(unexpected))
 	}
 
 	if probe == nil {

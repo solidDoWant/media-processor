@@ -112,11 +112,11 @@ func TestResolveI915PMU_MultiGPU_MatchesVerifiedHostLayout(t *testing.T) {
 		{"/dev/dri/renderD128", "i915"},
 		{"/dev/dri/renderD129", "i915_0000_03_00.0"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.device, func(t *testing.T) {
-			pmuDir, err := resolveI915PMU(tc.device, root)
+	for _, test := range tests {
+		t.Run(test.device, func(t *testing.T) {
+			pmuDir, err := resolveI915PMU(test.device, root)
 			require.NoError(t, err)
-			assert.Equal(t, filepath.Join(root, "sys/bus/event_source/devices", tc.wantSuffix), pmuDir)
+			assert.Equal(t, filepath.Join(root, "sys/bus/event_source/devices", test.wantSuffix), pmuDir)
 		})
 	}
 }
@@ -233,22 +233,22 @@ func TestReadPMUCPU(t *testing.T) {
 		{name: "invalid", content: "garbage\n", write: true, errFunc: require.Error},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.errFunc == nil {
-				tc.errFunc = require.NoError
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.errFunc == nil {
+				test.errFunc = require.NoError
 			}
 
 			path := filepath.Join(t.TempDir(), "cpumask")
-			if tc.write {
-				require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o644))
+			if test.write {
+				require.NoError(t, os.WriteFile(path, []byte(test.content), 0o644))
 			}
 
 			got, err := readPMUCPU(path)
-			tc.errFunc(t, err)
+			test.errFunc(t, err)
 
 			if err == nil {
-				assert.Equal(t, tc.want, got)
+				assert.Equal(t, test.want, got)
 			}
 		})
 	}
@@ -411,15 +411,17 @@ func TestIntelProbe_SampleRisesUnderLoad(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, first, "first sample seeds reference state and returns 0")
 
-	// Sleep so wall-time elapses; deltaNs (800ms) >> wallNs gives a value
-	// well above 0 — the Sampler caller is responsible for clamping to
-	// [0, 1] before mixing into the EWMA.
+	// The fake counter rises by 800ms-of-busy per call. Once enough wall
+	// time has elapsed the sample should be positive; busy time well above
+	// wall time must clamp to 1.0 rather than overshoot the probe contract.
 	deadline, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	for deadline.Err() == nil {
 		v, err := probe.Sample(t.Context())
 		require.NoError(t, err)
+		require.GreaterOrEqual(t, v, 0.0, "Sample produced a negative value")
+		require.LessOrEqual(t, v, 1.0, "Sample exceeded probe contract upper bound")
 
 		if v > 0 {
 			return
@@ -427,6 +429,49 @@ func TestIntelProbe_SampleRisesUnderLoad(t *testing.T) {
 	}
 
 	t.Fatal("Sample did not produce a positive value within deadline")
+}
+
+func TestIntelProbe_SampleNonMonotonicCounterReturnsZero(t *testing.T) {
+	root := buildSysfs(t,
+		[]renderNodeFixture{{node: "renderD128", bdf: "0000:00:02.0"}},
+		[]pmuFixture{{
+			name:       "i915",
+			pmuType:    31,
+			cpumask:    "0",
+			vcsConfigs: map[string]any{"vcs0-busy": uint64(0x2000)},
+		}},
+	)
+
+	// First read: counter at 1_000_000_000 ns. Second read: counter has
+	// regressed (e.g. PMU reset). The probe must not underflow uint64.
+	values := []uint64{1_000_000_000, 100_000_000}
+	idx := 0
+	syscalls := intelSyscalls{
+		open: func(uint32, uint64, int) (int, error) { return 1, nil },
+		read: func(int) (uint64, error) {
+			v := values[idx%len(values)]
+			idx++
+
+			return v, nil
+		},
+		close: func(int) error { return nil },
+	}
+
+	probe, err := newIntelProbe("/dev/dri/renderD128", IntelOptions{SysRoot: root}, syscalls)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probe.Close() })
+
+	// Seed.
+	_, err = probe.Sample(t.Context())
+	require.NoError(t, err)
+
+	// Sleep to advance wall time so the divisor isn't zero; the regressed
+	// counter must produce 0, not a wrap-around utilization.
+	time.Sleep(2 * time.Millisecond)
+
+	v, err := probe.Sample(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, v)
 }
 
 func TestIntelProbe_SampleAfterCloseReturnsError(t *testing.T) {

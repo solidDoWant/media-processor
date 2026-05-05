@@ -117,18 +117,20 @@ func TestCgroupProbe_QuotaSaturation(t *testing.T) {
 			want:      1.0,
 		},
 		{
-			name:      "over_quota_returns_above_one",
+			// Probe contract is [0, 1] — over-quota readings clamp at the
+			// probe boundary so callers don't have to special-case >1.
+			name:      "over_quota_clamps_to_one",
 			cpuMax:    "100000 100000\n",
 			usageUsec: 2_000_000,
 			wallUs:    1_000_000,
-			want:      2.0, // caller (Sampler) clamps
+			want:      1.0,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeCgroupFiles(t, root, tc.cpuMax, "usage_usec 0\n")
+			writeCgroupFiles(t, root, test.cpuMax, "usage_usec 0\n")
 
 			clock := newFakeClock(time.Unix(0, 0))
 			probe, err := newCgroupProbe(CgroupOptions{CgroupRoot: root}, clock.Now)
@@ -141,14 +143,38 @@ func TestCgroupProbe_QuotaSaturation(t *testing.T) {
 
 			// Bump usage and wall time, then sample again.
 			require.NoError(t, os.WriteFile(filepath.Join(root, "cpu.stat"),
-				[]byte("usage_usec "+strconv.FormatUint(tc.usageUsec, 10)+"\n"), 0o644))
-			clock.Advance(time.Duration(tc.wallUs) * time.Microsecond)
+				[]byte("usage_usec "+strconv.FormatUint(test.usageUsec, 10)+"\n"), 0o644))
+			clock.Advance(time.Duration(test.wallUs) * time.Microsecond)
 
 			v, err := probe.Sample(t.Context())
 			require.NoError(t, err)
-			assert.InDelta(t, tc.want, v, 1e-9)
+			assert.InDelta(t, test.want, v, 1e-9)
 		})
 	}
+}
+
+func TestCgroupProbe_NonMonotonicUsageReturnsZero(t *testing.T) {
+	root := t.TempDir()
+	writeCgroupFiles(t, root, "100000 100000\n", "usage_usec 1000000\n")
+
+	clock := newFakeClock(time.Unix(0, 0))
+	probe, err := newCgroupProbe(CgroupOptions{CgroupRoot: root}, clock.Now)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probe.Close() })
+
+	// Seed at usage_usec=1_000_000.
+	_, err = probe.Sample(t.Context())
+	require.NoError(t, err)
+
+	// Counter regresses (e.g. unexpected reset). The probe must not underflow
+	// uint64 — return 0 instead.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cpu.stat"),
+		[]byte("usage_usec 100000\n"), 0o644))
+	clock.Advance(time.Second)
+
+	v, err := probe.Sample(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, v)
 }
 
 func TestCgroupProbe_RisesUnderUsage(t *testing.T) {

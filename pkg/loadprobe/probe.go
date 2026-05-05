@@ -35,8 +35,9 @@ var ErrCgroupUnconstrained = errors.New("loadprobe: cgroup cpu quota unconstrain
 // meaningful (the convention in this package is to return 0 on the first
 // sample and an actual delta-based reading from the second onward).
 type Probe interface {
-	// Sample returns the instantaneous load value, ideally in the closed
-	// interval [0, 1]. Callers should clamp out-of-range readings.
+	// Sample returns the instantaneous load value, in the closed interval
+	// [0, 1]. Implementations clamp at the boundary so callers can rely on
+	// the bound; the Sampler also clamps as defense in depth.
 	Sample(ctx context.Context) (float64, error)
 
 	// Close releases any kernel resources held by the probe. After Close

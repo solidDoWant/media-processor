@@ -100,7 +100,15 @@ func (p *CgroupProbe) Sample(ctx context.Context) (float64, error) {
 		return 0, nil
 	}
 
-	deltaUs := usage - p.lastUsg
+	// Guard against counter regression — cgroup v2 cpu.stat usage_usec is
+	// monotonic in normal operation, but treat any unexpected non-monotonic
+	// reading as a zero-busy interval rather than letting uint64 subtraction
+	// wrap.
+	var deltaUs uint64
+	if usage >= p.lastUsg {
+		deltaUs = usage - p.lastUsg
+	}
+
 	wallUs := now.Sub(p.lastTime).Microseconds()
 	p.lastUsg = usage
 	p.lastTime = now
@@ -110,7 +118,12 @@ func (p *CgroupProbe) Sample(ctx context.Context) (float64, error) {
 	}
 
 	// utilization = Δusage_us × period_us / (quota_us × Δwall_us)
-	return (float64(deltaUs) * float64(p.periodUs)) / (float64(p.quotaUs) * float64(wallUs)), nil
+	utilization := (float64(deltaUs) * float64(p.periodUs)) / (float64(p.quotaUs) * float64(wallUs))
+	if utilization > 1 {
+		utilization = 1
+	}
+
+	return utilization, nil
 }
 
 // Close marks the probe closed. The cgroup probe holds no kernel resources;

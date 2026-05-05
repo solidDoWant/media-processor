@@ -48,13 +48,14 @@ type Sampler struct {
 	failOnce sync.Once
 	reason   atomic.Pointer[error]
 
-	startMu sync.Mutex
-	started bool
-	cancel  context.CancelFunc
-	done    chan struct{}
-
-	closeMu sync.Mutex
-	closed  bool
+	// lifecycleMu serializes Start and Close. Without a single lock the two
+	// routines could race: Close could return before Start published cancel,
+	// leaving the sampling goroutine running past Close.
+	lifecycleMu sync.Mutex
+	started     bool
+	closed      bool
+	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
 // NewSampler constructs a Sampler around probe. The sampling loop does not
@@ -90,22 +91,21 @@ func Failed(reason error, log *slog.Logger) *Sampler {
 	return s
 }
 
-// Start launches the sampling goroutine. Repeated calls are no-ops. The
-// goroutine exits when ctx is cancelled, when Close is called, or when the
-// probe returns an error.
+// Start launches the sampling goroutine. Repeated calls are no-ops, as are
+// calls after Close. The goroutine exits when ctx is cancelled, when Close
+// is called, or when the probe returns an error.
 func (s *Sampler) Start(ctx context.Context) {
-	s.startMu.Lock()
-	defer s.startMu.Unlock()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 
-	if s.started || s.probe == nil {
+	if s.started || s.closed || s.probe == nil {
 		return
 	}
 
+	loopCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
 	s.started = true
 
-	loopCtx, cancel := context.WithCancel(ctx)
-
-	s.cancel = cancel
 	go s.loop(loopCtx)
 }
 
@@ -132,24 +132,29 @@ func (s *Sampler) FailureReason() error {
 }
 
 // Close stops the sampling loop and closes the underlying probe. Safe to
-// call multiple times.
+// call multiple times. After Close, subsequent Start calls are no-ops.
 func (s *Sampler) Close() error {
-	s.closeMu.Lock()
-	defer s.closeMu.Unlock()
+	s.lifecycleMu.Lock()
 
 	if s.closed {
+		s.lifecycleMu.Unlock()
+
 		return nil
 	}
 
 	s.closed = true
+	cancel := s.cancel
+	done := s.done
+	probe := s.probe
+	s.lifecycleMu.Unlock()
 
-	if s.cancel != nil {
-		s.cancel()
-		<-s.done
+	if cancel != nil {
+		cancel()
+		<-done
 	}
 
-	if s.probe != nil {
-		return s.probe.Close()
+	if probe != nil {
+		return probe.Close()
 	}
 
 	return nil

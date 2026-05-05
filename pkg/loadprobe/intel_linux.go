@@ -182,7 +182,14 @@ func (p *IntelProbe) Sample(ctx context.Context) (float64, error) {
 		return 0, nil
 	}
 
-	deltaNs := sum - p.lastVal
+	// Guard against counter underflow when the kernel resets the PMU (e.g.
+	// after a GPU reset / runtime PM cycle): treat a non-monotonic counter
+	// as a fresh interval with zero busy time rather than wrapping uint64.
+	var deltaNs uint64
+	if sum >= p.lastVal {
+		deltaNs = sum - p.lastVal
+	}
+
 	wallNs := now.Sub(p.lastTime).Nanoseconds()
 	p.lastVal = sum
 	p.lastTime = now
@@ -191,7 +198,12 @@ func (p *IntelProbe) Sample(ctx context.Context) (float64, error) {
 		return 0, nil
 	}
 
-	return float64(deltaNs) / float64(wallNs), nil
+	utilization := float64(deltaNs) / float64(wallNs)
+	if utilization > 1 {
+		utilization = 1
+	}
+
+	return utilization, nil
 }
 
 // Close releases all perf event fds. Safe to call multiple times.
