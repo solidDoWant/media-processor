@@ -13,14 +13,16 @@ This page documents every network connection made by the watcher and worker pods
 
 ### Ingress
 
-| Source          | Protocol   | Port                                       | Notes                                                                   |
-| --------------- | ---------- | ------------------------------------------ | ----------------------------------------------------------------------- |
-| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8081`)             | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
-| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9091`)           | `/metrics` endpoint. Always enabled.                                    |
+| Source          | Protocol   | Port                             | Notes                                                                   |
+| --------------- | ---------- | -------------------------------- | ----------------------------------------------------------------------- |
+| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8081`)   | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
+| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9091`) | `/metrics` endpoint. Always enabled.                                    |
 
 ## Worker
 
 ### Egress
+
+The table below lists the union of destinations across every activity. A worker pod registering only a subset of activities (helm `workers:` map, `WORKER_ACTIVITIES`) needs only the subset of destinations its activities use — see [Per-activity egress](#per-activity-egress).
 
 | Destination         | Protocol            | Port                                            | Required | Controlled by                     |
 | ------------------- | ------------------- | ----------------------------------------------- | -------- | --------------------------------- |
@@ -33,12 +35,27 @@ This page documents every network connection made by the watcher and worker pods
 
 **Poster images:** the worker fetches artwork from URLs returned by the Radarr/Sonarr API. These URLs are typically relative paths served by the arr instance itself (same host and port as `RADARR_URL`/`SONARR_URL`), so no additional egress rule is needed in the common case. Some arr configurations include an external `RemoteURL` pointing to a CDN — if artwork fetch is enabled and your arr instance returns external image URLs, the worker will also connect to those hosts on port `443`.
 
+### Per-activity egress
+
+Every worker pod talks to Temporal and DNS; those rows are omitted from the matrix below. The remaining destinations are only needed when the listed activities are registered on the pod.
+
+| Activity (token) | Radarr / Sonarr | Poster image server | Webhook endpoint | Notes                                                                                            |
+| ---------------- | --------------- | ------------------- | ---------------- | ------------------------------------------------------------------------------------------------ |
+| `probe`          | No              | No                  | No               | Local FFmpeg only.                                                                               |
+| `detect-crop`    | No              | No                  | No               | Local FFmpeg only.                                                                               |
+| `transcode`      | Yes             | Yes (if external)   | No               | Fetches cover art via `GetPosterImage`; also `GetInfo` when high-cardinality labels are enabled. |
+| `notify`         | Yes             | No                  | No               | Triggers the arr library import via `ImportByFilePath`.                                          |
+| `cleanup`        | No              | No                  | No               | Filesystem operations only.                                                                      |
+| `notify-failure` | No              | No                  | Yes              | Sends the failure event to `MEDIA_WEBHOOK_URL`.                                                  |
+
+A worker pod that registers only `probe`, `detect-crop`, or `cleanup` (alone or in combination) does not need Radarr/Sonarr or webhook egress. A worker that registers `notify-failure` is the only one that needs webhook egress.
+
 ### Ingress
 
-| Source          | Protocol   | Port                                       | Notes                                                                   |
-| --------------- | ---------- | ------------------------------------------ | ----------------------------------------------------------------------- |
-| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8080`)             | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
-| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9090`)           | `/metrics` endpoint. Always enabled.                                    |
+| Source          | Protocol   | Port                             | Notes                                                                   |
+| --------------- | ---------- | -------------------------------- | ----------------------------------------------------------------------- |
+| Kubelet         | HTTP (TCP) | `HEALTH_ADDR` (default `8080`)   | Liveness (`/healthz`) and readiness (`/readyz`) probes. Always enabled. |
+| Metrics scraper | HTTP (TCP) | `METRICS_ADDR` (default `:9090`) | `/metrics` endpoint. Always enabled.                                    |
 
 ## TLS notes
 
