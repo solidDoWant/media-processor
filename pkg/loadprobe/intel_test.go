@@ -72,7 +72,7 @@ func buildSysfs(t *testing.T, nodes []renderNodeFixture, pmus []pmuFixture) stri
 			case string:
 				content = v
 			default:
-				t.Fatalf("buildSysfs: unsupported event content type %T", raw)
+				require.FailNowf(t, "buildSysfs: unsupported event content type", "type=%T", raw)
 			}
 
 			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, name),
@@ -305,7 +305,7 @@ func TestNewIntelProbe_PerfOpenEACCESPropagates(t *testing.T) {
 		open: func(uint32, uint64, int) (int, error) { return -1, syscall.EACCES },
 		read: func(int) (uint64, error) { return 0, nil },
 		close: func(int) error {
-			t.Fatal("close must not be called when no fds were opened")
+			require.FailNow(t, "close must not be called when no fds were opened")
 			return nil
 		},
 	}
@@ -432,7 +432,7 @@ func TestIntelProbe_SampleRisesUnderLoad(t *testing.T) {
 		}
 	}
 
-	t.Fatal("Sample did not produce a positive value within deadline")
+	require.FailNow(t, "Sample did not produce a positive value within deadline")
 }
 
 func TestIntelProbe_SampleNonMonotonicCounterReturnsZero(t *testing.T) {

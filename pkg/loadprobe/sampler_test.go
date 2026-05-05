@@ -128,7 +128,7 @@ func TestSampler_BoundsClamping(t *testing.T) {
 
 	select {
 	case <-s.FailedC():
-		t.Fatal("out-of-range probe outputs must not trigger fallback")
+		require.FailNow(t, "out-of-range probe outputs must not trigger fallback")
 	default:
 	}
 }
@@ -164,7 +164,7 @@ func TestSampler_FailedConstructor(t *testing.T) {
 	select {
 	case <-s.FailedC():
 	default:
-		t.Fatal("FailedC must be closed immediately on a Failed-constructed sampler")
+		require.FailNow(t, "FailedC must be closed immediately on a Failed-constructed sampler")
 	}
 
 	assert.ErrorIs(t, s.FailureReason(), cause)
@@ -183,7 +183,7 @@ func TestSampler_NilProbeYieldsFailedSampler(t *testing.T) {
 	select {
 	case <-s.FailedC():
 	default:
-		t.Fatal("NewSampler(nil, ...) must return a sampler in the failed state")
+		require.FailNow(t, "NewSampler(nil, ...) must return a sampler in the failed state")
 	}
 
 	require.Error(t, s.FailureReason())
@@ -203,7 +203,7 @@ func TestFailed_NilReasonReplacedWithDefault(t *testing.T) {
 	select {
 	case <-s.FailedC():
 	default:
-		t.Fatal("FailedC must be closed on a Failed-constructed sampler even with nil reason")
+		require.FailNow(t, "FailedC must be closed on a Failed-constructed sampler even with nil reason")
 	}
 
 	require.Error(t, s.FailureReason())
@@ -225,7 +225,7 @@ func TestSampler_MidStreamFailureClosesChannel(t *testing.T) {
 	select {
 	case <-s.FailedC():
 	case <-time.After(time.Second):
-		t.Fatal("FailedC did not close after probe sample failure")
+		require.FailNow(t, "FailedC did not close after probe sample failure")
 	}
 
 	require.Error(t, s.FailureReason())
@@ -272,6 +272,38 @@ func (b *blockingProbe) Close() error {
 	return nil
 }
 
+// internalTimeoutProbe returns context.DeadlineExceeded synthesized from its
+// own internal logic — it does NOT consume the context the sampler passes
+// in. The sampler must distinguish this from its own per-iteration timeout
+// and route this through the fallback path rather than skipping rounds
+// indefinitely.
+type internalTimeoutProbe struct{}
+
+func (p *internalTimeoutProbe) Sample(_ context.Context) (float64, error) {
+	return 0, context.DeadlineExceeded
+}
+
+func (p *internalTimeoutProbe) Close() error { return nil }
+
+func TestSampler_ProbeInternalTimeoutTriggersFallback(t *testing.T) {
+	s := loadprobe.NewSampler(&internalTimeoutProbe{}, loadprobe.SamplerConfig{
+		Interval:        100 * time.Millisecond,
+		SmoothingWindow: 3,
+		Logger:          slog.New(slog.DiscardHandler),
+	})
+
+	t.Cleanup(func() { _ = s.Close() })
+	s.Start(t.Context())
+
+	select {
+	case <-s.FailedC():
+	case <-time.After(time.Second):
+		require.FailNow(t, "FailedC did not close on probe-internal DeadlineExceeded — sampler must distinguish its own timeout from a probe-emitted one")
+	}
+
+	require.ErrorIs(t, s.FailureReason(), context.DeadlineExceeded)
+}
+
 func TestSampler_PerIterationTimeoutSkipsRoundWithoutFallback(t *testing.T) {
 	// First two Sample calls block until the per-iteration context fires,
 	// then the probe returns valid data. The sampler must treat the
@@ -294,7 +326,7 @@ func TestSampler_PerIterationTimeoutSkipsRoundWithoutFallback(t *testing.T) {
 
 	select {
 	case <-s.FailedC():
-		t.Fatal("per-iteration timeout must not trigger fallback")
+		require.FailNow(t, "per-iteration timeout must not trigger fallback")
 	default:
 	}
 
@@ -322,7 +354,7 @@ func TestSampler_ContextCancellationDoesNotFail(t *testing.T) {
 
 	select {
 	case <-s.FailedC():
-		t.Fatal("FailedC closed on context cancellation — only probe errors should fail")
+		require.FailNow(t, "FailedC closed on context cancellation — only probe errors should fail")
 	default:
 	}
 

@@ -188,9 +188,12 @@ func (s *Sampler) loop(ctx context.Context) {
 		// stalls (or ignores ctx) cannot hang Close indefinitely on <-done.
 		// A per-iteration timeout is a skip — not a fallback — so a single
 		// slow sample doesn't permanently knock the sampler out of probe
-		// mode.
+		// mode. Capture sampleCtx.Err() *before* cancel so we can tell our
+		// own WithTimeout firing apart from a probe-internal deadline; only
+		// the former should be treated as a skipped round.
 		sampleCtx, cancel := context.WithTimeout(ctx, s.cfg.Interval)
 		raw, err := s.probe.Sample(sampleCtx)
+		ourTimeout := errors.Is(sampleCtx.Err(), context.DeadlineExceeded)
 
 		cancel()
 
@@ -199,7 +202,7 @@ func (s *Sampler) loop(ctx context.Context) {
 				return
 			}
 
-			if errors.Is(err, context.DeadlineExceeded) {
+			if ourTimeout && errors.Is(err, context.DeadlineExceeded) {
 				select {
 				case <-ctx.Done():
 					return
