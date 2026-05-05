@@ -20,6 +20,7 @@ func TestRegisterActivityEnabledMetric(t *testing.T) {
 		name           string
 		enabled        []string
 		expectedActive map[string]bool
+		errFunc        require.ErrorAssertionFunc
 	}{
 		{
 			name:    "transcode-only worker",
@@ -55,51 +56,56 @@ func TestRegisterActivityEnabledMetric(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
 			reg := prometheus.NewRegistry()
 			registerActivityEnabledMetric(reg, test.enabled)
 
 			families, err := reg.Gather()
-			require.NoError(t, err)
+			errFunc(t, err)
 
-			var family *dto.MetricFamily
+			var metricFamily *dto.MetricFamily
 
-			for _, candidate := range families {
-				if candidate.GetName() == "media_worker_activity_enabled" {
-					family = candidate
+			for _, family := range families {
+				if family.GetName() == "media_worker_activity_enabled" {
+					metricFamily = family
 					break
 				}
 			}
 
-			require.NotNil(t, family, "media_worker_activity_enabled gauge not registered")
+			require.NotNil(t, metricFamily, "media_worker_activity_enabled gauge not registered")
 
-			seenTokens := map[string]float64{}
+			seenSeries := map[string]float64{}
 
-			for _, metric := range family.GetMetric() {
-				var token string
+			for _, metric := range metricFamily.GetMetric() {
+				var activity string
 
 				for _, label := range metric.GetLabel() {
 					if label.GetName() == "activity" {
-						token = label.GetValue()
+						activity = label.GetValue()
 						break
 					}
 				}
 
-				require.NotEmpty(t, token, "metric series missing activity label")
-				seenTokens[token] = metric.GetGauge().GetValue()
+				require.NotEmpty(t, activity, "metric series missing activity label")
+				seenSeries[activity] = metric.GetGauge().GetValue()
 			}
 
 			// One series per known activity.
-			assert.Len(t, seenTokens, len(media.KnownActivities))
+			assert.Len(t, seenSeries, len(media.KnownActivities))
 
-			for _, token := range media.KnownActivities {
+			for _, activity := range media.KnownActivities {
 				expected := 0.0
-				if test.expectedActive[token] {
+				if test.expectedActive[activity] {
 					expected = 1
 				}
 
-				value, ok := seenTokens[token]
-				assert.True(t, ok, "missing series for activity %q", token)
-				assert.InDelta(t, expected, value, 0.0001, "activity %q expected value %v, got %v", token, expected, value)
+				value, ok := seenSeries[activity]
+				assert.True(t, ok, "missing series for activity %q", activity)
+				assert.Equal(t, expected, value, "activity %q expected value %v, got %v", activity, expected, value)
 			}
 		})
 	}

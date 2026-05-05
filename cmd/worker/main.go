@@ -351,12 +351,12 @@ func registerActivityEnabledMetric(reg prometheus.Registerer, enabledTokens []st
 
 	reg.MustRegister(gauge)
 
-	for _, token := range media.KnownActivities {
+	for _, activity := range media.KnownActivities {
 		value := 0.0
-		if slices.Contains(enabledTokens, token) {
+		if slices.Contains(enabledTokens, activity) {
 			value = 1
 		}
 
-		gauge.WithLabelValues(token).Set(value)
+		gauge.WithLabelValues(activity).Set(value)
 	}
 }
