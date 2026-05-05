@@ -148,7 +148,7 @@ func TestCgroupProbe_QuotaSaturation(t *testing.T) {
 
 			v, err := probe.Sample(t.Context())
 			require.NoError(t, err)
-			assert.InDelta(t, test.want, v, 1e-9)
+			assert.Equal(t, test.want, v)
 		})
 	}
 }

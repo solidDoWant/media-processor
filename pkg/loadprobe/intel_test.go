@@ -82,8 +82,8 @@ func buildSysfs(t *testing.T, nodes []renderNodeFixture, pmus []pmuFixture) stri
 				[]byte("ns\n"), 0o644))
 		}
 
-		for _, extra := range pmu.extraEvents {
-			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, extra),
+		for _, extraEvent := range pmu.extraEvents {
+			require.NoError(t, os.WriteFile(filepath.Join(eventsDir, extraEvent),
 				[]byte("config=0x100\n"), 0o644))
 		}
 	}

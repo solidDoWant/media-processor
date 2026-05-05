@@ -32,9 +32,9 @@ const (
 
 // Sampler runs a Probe in a background loop and exposes an EWMA-smoothed
 // reading plus a fallback signal. The first sample failure (init or
-// mid-stream) closes the channel returned by Failed and stops the sampling
-// loop; callers can observe the transition either by selecting on Failed or
-// by calling FailureReason.
+// mid-stream) closes the channel returned by FailedC and stops the sampling
+// loop; callers can observe the transition either by selecting on FailedC
+// or by calling FailureReason.
 //
 // Probe values outside [0, 1] are clamped before being mixed into the EWMA;
 // out-of-range readings do not trigger fallback. Sample errors do.
