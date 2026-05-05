@@ -311,8 +311,9 @@ func TestParseUnitFloat(t *testing.T) {
 }
 
 // TestLoadTranscodeLimiterConfigDefaults verifies that loadTranscodeLimiterConfig
-// returns the documented AC-35 defaults when no MEDIA_TRANSCODE_LIMITER_*
-// variables are set.
+// returns the documented defaults — static_cap=5, gpu_threshold=0.8,
+// post_admission_cooldown=3s, sample_interval=500ms, smoothing_window=5 —
+// when no MEDIA_TRANSCODE_LIMITER_* variables are set.
 func TestLoadTranscodeLimiterConfigDefaults(t *testing.T) {
 	for _, key := range []string{
 		"MEDIA_TRANSCODE_LIMITER_STATIC_CAP",

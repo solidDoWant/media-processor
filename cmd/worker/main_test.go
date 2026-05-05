@@ -13,8 +13,8 @@ import (
 
 // TestRegisterActivityEnabledMetric verifies that media_worker_activity_enabled
 // emits one series per known activity, with value 1 for tokens in the
-// enabled set and 0 for the rest. Verifies AC-33: the metric is present on
-// every worker pod regardless of which activities it runs.
+// enabled set and 0 for the rest. The metric is present on every worker pod
+// regardless of which activities it runs.
 func TestRegisterActivityEnabledMetric(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -88,7 +88,7 @@ func TestRegisterActivityEnabledMetric(t *testing.T) {
 				seenTokens[token] = metric.GetGauge().GetValue()
 			}
 
-			// One series per known activity (AC-33).
+			// One series per known activity.
 			assert.Len(t, seenTokens, len(media.KnownActivities))
 
 			for _, token := range media.KnownActivities {

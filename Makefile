@@ -73,6 +73,13 @@ test-integration: temporal-up ## Run integration tests against the local Tempora
 	TEMPORAL_TASK_QUEUE=media-processor-test \
 	go test -v -race -count=1 -tags=integration ./...
 
+.PHONY: test-integration-gpu
+test-integration-gpu: temporal-up ## Run GPU-dependent integration tests (requires an Intel i915 render node and CAP_PERFMON or kernel.perf_event_paranoid<=1).
+	TEMPORAL_ADDRESS=localhost:7233 \
+	TEMPORAL_NAMESPACE=default \
+	TEMPORAL_TASK_QUEUE=media-processor-test \
+	go test -v -race -count=1 -tags=integration,gpu ./...
+
 .PHONY: test-e2e
 test-e2e: build-images ## Run end-to-end tests (requires Docker; downloads ~700 MB BBB fixture on first run).
 	go test -v -timeout 2h -tags=e2e -count=1 ./e2e/

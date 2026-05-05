@@ -35,6 +35,11 @@ type Sampler interface {
 // Defaults are applied by New when fields are zero-valued: StaticCap=5,
 // GPUThreshold=0.8, PostAdmissionCooldown=3s. Sampler-side fields
 // (sample interval, smoothing window) live on loadprobe.SamplerConfig.
+//
+// PostAdmissionCooldown is treated specially: a zero value means "use the
+// default" (so a Config{} struct boots with the documented defaults), and a
+// strictly negative value also normalises to the default. Operators wanting
+// no cooldown should set a small positive value (e.g. one nanosecond).
 type Config struct {
 	// StaticCap is the maximum number of in-flight activities, regardless
 	// of probe value. Acts as a defensive backstop in probe mode and as the
@@ -77,6 +82,12 @@ type Limiter struct {
 	inFlight  int
 	lastAdmit time.Time
 	fallback  bool
+	// marked tracks permits that MarkSlotUsed has been called for. Only a
+	// release of a marked permit decrements inFlight; releases of unmarked
+	// permits (Temporal's SlotReleaseReasonUnused path) are ignored. Without
+	// this set a release of an unused permit would cancel out an unrelated
+	// in-flight transcode and let admission overshoot StaticCap.
+	marked map[*worker.SlotPermit]struct{}
 
 	closeC    chan struct{}
 	closeOnce sync.Once
@@ -139,7 +150,7 @@ func New(cfg Config, sampler Sampler, reg prometheus.Registerer, opts ...Option)
 		cfg.GPUThreshold = defaultGPUThreshold
 	}
 
-	if cfg.PostAdmissionCooldown < 0 {
+	if cfg.PostAdmissionCooldown <= 0 {
 		cfg.PostAdmissionCooldown = defaultPostAdmissionCooldown
 	}
 
@@ -150,6 +161,7 @@ func New(cfg Config, sampler Sampler, reg prometheus.Registerer, opts ...Option)
 		now:          time.Now,
 		pollInterval: defaultPollInterval,
 		closeC:       make(chan struct{}),
+		marked:       make(map[*worker.SlotPermit]struct{}),
 	}
 
 	for _, opt := range opts {
@@ -291,22 +303,73 @@ func (l *Limiter) TryReserveSlot(_ worker.SlotReservationInfo) *worker.SlotPermi
 // Temporal calls this once per reserved slot that is actually used; reserved
 // slots that are released without use (SlotReleaseReasonUnused) skip this
 // call so the cooldown is not consumed by no-op poll cycles.
-func (l *Limiter) MarkSlotUsed(_ worker.SlotMarkUsedInfo) {
+func (l *Limiter) MarkSlotUsed(info worker.SlotMarkUsedInfo) {
+	var permit *worker.SlotPermit
+	if info != nil {
+		permit = info.Permit()
+	}
+
+	l.markUsed(permit)
+}
+
+// ReleaseSlot decrements the in-flight count when the permit was previously
+// passed through MarkSlotUsed; releases of unmarked permits (Temporal's
+// "unused" reservation path) leave the counter alone so they cannot cancel
+// out an unrelated in-flight transcode.
+func (l *Limiter) ReleaseSlot(info worker.SlotReleaseInfo) {
+	var permit *worker.SlotPermit
+	if info != nil {
+		permit = info.Permit()
+	}
+
+	l.release(permit)
+}
+
+// markUsed performs the cooldown stamp and in-flight increment. The permit
+// argument is recorded in the marked set so the matching ReleaseSlot can be
+// distinguished from an unused-permit release. A nil permit (legitimate only
+// in tests that exercise the in-flight counter through the public surface)
+// still increments the counter — the regression test for permit-level
+// bookkeeping uses non-nil permits to verify the marked-set behaviour.
+func (l *Limiter) markUsed(permit *worker.SlotPermit) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if permit != nil {
+		if _, dup := l.marked[permit]; dup {
+			return
+		}
+
+		l.marked[permit] = struct{}{}
+	}
 
 	l.lastAdmit = l.now()
 	l.inFlight++
 }
 
-// ReleaseSlot decrements the in-flight count. Safe regardless of whether
-// MarkSlotUsed was called for this permit (Temporal calls ReleaseSlot for
-// both used and unused reservations).
-func (l *Limiter) ReleaseSlot(info worker.SlotReleaseInfo) {
-	_ = info
-
+// release decrements the in-flight count when permit is in the marked set
+// (or when permit is nil — the test-only path used by callers passing nil
+// info). Otherwise the call is a no-op: it represents a release of a permit
+// that Temporal never used, and inFlight was never incremented for it.
+func (l *Limiter) release(permit *worker.SlotPermit) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if permit == nil {
+		// Test-only path: callers driving the limiter without SDK info
+		// stubs rely on inc/dec semantics directly.
+		if l.inFlight > 0 {
+			l.inFlight--
+		}
+
+		return
+	}
+
+	if _, used := l.marked[permit]; !used {
+		return
+	}
+
+	delete(l.marked, permit)
 
 	if l.inFlight > 0 {
 		l.inFlight--

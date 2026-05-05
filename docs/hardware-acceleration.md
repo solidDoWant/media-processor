@@ -96,3 +96,5 @@ When the load probe cannot initialize (missing capability, missing kernel featur
 The transition is observable through metrics: `media_worker_transcode_admission_mode{mode="probe"}` flips from `1` to `0` and `mode="static"` flips from `0` to `1` within one sample interval of the probe failure. The underlying error is logged once at `warn`. See [metrics.md](metrics.md#worker--transcode-admission-controller) for the full per-pod metric set and [configuration.md](configuration.md#transcode-admission-controller) for the limiter knobs.
 
 A failed probe is **not** a fatal startup error — the worker boots in static-cap-only mode rather than refusing to start. This means a worker without the right capabilities (or running in a host with cgroup v1, no CPU quota, etc.) still admits transcodes up to the configured cap; admission control just stops being load-aware.
+
+End-to-end admission control with the i915 probe can be exercised on a GPU-equipped runner via `make test-integration-gpu`, which adds the `gpu` build tag to the integration test suite. The default `make test-integration` does not compile the GPU-dependent tests so it can run on any host.

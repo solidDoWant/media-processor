@@ -55,7 +55,7 @@ type transcodeLimiterConfig struct {
 	SmoothingWindow int
 }
 
-// Defaults for the transcode limiter (AC-35).
+// Defaults for the transcode limiter, mirrored in docs/configuration.md.
 const (
 	defaultLimiterStaticCap             = 5
 	defaultLimiterGPUThreshold          = 0.8
@@ -165,10 +165,10 @@ func loadConfig() (workerConfig, error) {
 }
 
 // loadTranscodeLimiterConfig reads the five MEDIA_TRANSCODE_LIMITER_* env vars
-// and applies AC-35 defaults when a variable is unset. Each override is
-// logged so operators can confirm the values that took effect (AC-36); the
-// values are only consulted when the worker actually polls the transcode
-// queue, so non-transcode workers pay no attention to them.
+// and applies the documented defaults when a variable is unset. Each override
+// is logged so operators can confirm the values that took effect; the values
+// are only consulted when the worker actually polls the transcode queue, so
+// non-transcode workers pay no attention to them.
 func loadTranscodeLimiterConfig() (transcodeLimiterConfig, error) {
 	staticCap, err := parsePositiveInt("MEDIA_TRANSCODE_LIMITER_STATIC_CAP", defaultLimiterStaticCap)
 	if err != nil {

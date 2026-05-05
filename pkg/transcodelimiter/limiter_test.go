@@ -76,7 +76,7 @@ func TestLimiterAdmitsBelowThreshold(t *testing.T) {
 	lim, err := transcodelimiter.New(transcodelimiter.Config{
 		StaticCap:             5,
 		GPUThreshold:          0.8,
-		PostAdmissionCooldown: 0,
+		PostAdmissionCooldown: time.Nanosecond,
 	}, sampler, nil, transcodelimiter.WithPollInterval(time.Millisecond))
 	require.NoError(t, err)
 
@@ -92,7 +92,7 @@ func TestLimiterBlocksAtOrAboveThreshold(t *testing.T) {
 	lim, err := transcodelimiter.New(transcodelimiter.Config{
 		StaticCap:             5,
 		GPUThreshold:          0.8,
-		PostAdmissionCooldown: 0,
+		PostAdmissionCooldown: time.Nanosecond,
 	}, sampler, nil, transcodelimiter.WithPollInterval(time.Millisecond))
 	require.NoError(t, err)
 
@@ -132,7 +132,7 @@ func TestLimiterBlocksWhenInFlightAtCap(t *testing.T) {
 	lim, err := transcodelimiter.New(transcodelimiter.Config{
 		StaticCap:             1,
 		GPUThreshold:          0.8,
-		PostAdmissionCooldown: 0,
+		PostAdmissionCooldown: time.Nanosecond,
 	}, sampler, nil, transcodelimiter.WithPollInterval(time.Millisecond))
 	require.NoError(t, err)
 
