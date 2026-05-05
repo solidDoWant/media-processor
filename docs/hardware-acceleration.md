@@ -71,12 +71,41 @@ Transcode-enabled workers can sample worker load to gate concurrency. Two probe 
 
 Reads per-engine VCS busy counters from the i915 PMU via `perf_event_open`. The probe binds to the same i915 device the worker transcodes against — on hosts with multiple Intel GPUs the matching per-device PMU is selected automatically by mapping the transcode device path through its PCI bus address (see Device selection above) to the kernel-registered PMU. Single-GPU hosts use the legacy bare `i915` PMU; multi-GPU hosts use BDF-suffixed names like `i915_0000_03_00.0`.
 
-**Permission requirements** — the worker process must satisfy at least one of:
+**Permission requirements** — the worker process must hold `CAP_PERFMON` in its **Effective** set when `perf_event_open` is called. Kubernetes does not populate the OCI ambient-capabilities set, and Linux clears Effective during the root → non-root UID transition runc performs to enter the container. The result is that simply adding `CAP_PERFMON` via `securityContext.capabilities.add` on a non-root pod does **not** deliver the cap to the worker process. The supported configuration for this probe is:
 
-- Hold `CAP_PERFMON` (preferred for containerized deployments — grant via the container runtime's capabilities mechanism).
-- Run on a host with `kernel.perf_event_paranoid` ≤ 1.
+- **Run the worker container as root (UID 0).** For UID 0, the kernel automatically sets `CapPrm = CapEff = CapBnd` at process start, so any cap remaining in the bounding set is also Effective.
+- **Drop all capabilities except `PERFMON`.** The kernel enforces capability checks against the Effective set, not against UID — a UID-0 process whose Effective set contains only `CAP_PERFMON` cannot do anything else privileged (no `chown`, no `mknod`, no DAC override, no setuid, no module load, etc.). The "root-ness" reduces to the integer 0 in `getuid()` plus a few corner cases (file ownership of any output it writes, signal-sending semantics within the container).
 
-If neither holds, `perf_event_open` returns `EACCES` at probe initialization and the worker raises a fallback signal (logged with the underlying error). The supplier consuming the probe is responsible for falling back to its static concurrency cap.
+Per-worker override using the bundled Helm chart (assumes a worker named `transcode`):
+
+```yaml
+resources:
+  controllers:
+    transcode:
+      containers:
+        main:
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - PERFMON
+```
+
+`allowPrivilegeEscalation: false` and `readOnlyRootFilesystem: true` from the chart-generated defaults can stay — neither interferes with this configuration.
+
+**Pod Security Admission**: the `restricted` profile forbids both `runAsNonRoot: false` and any `capabilities.add` outside `NET_BIND_SERVICE`, so transcode workers cannot run on namespaces enforcing `restricted`. The `baseline` profile permits both. Plan accordingly.
+
+**File ownership**: anything the transcode worker writes to mounted volumes will be UID 0. If those volumes are read by non-root pods (e.g. a media server), set `fsGroup` on the pod or pre-arrange volume permissions so the consumers can still read the output.
+
+For Docker / Podman: pass `--user 0:0 --cap-drop=ALL --cap-add=PERFMON`.
+
+Alternatively, set `kernel.perf_event_paranoid` ≤ 1 on the worker node — this lets unprivileged users open the i915 PMU and bypasses the capability path entirely. The worker container can then stay non-root with no `cap_add`.
+
+If neither approach holds, `perf_event_open` returns `EACCES` (or `execve` returns `EPERM` if bounding is missing the cap) and the worker raises a fallback signal (logged with the underlying error). The supplier consuming the probe falls back to its static concurrency cap.
 
 ### Container CPU probe (cgroup v2)
 
