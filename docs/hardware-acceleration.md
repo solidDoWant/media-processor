@@ -65,7 +65,7 @@ Some sources — most often Blu-ray rips that span a scene-change or chapter bou
 
 The transcoder repairs this on the way to the muxer: when the encoder hands it a packet with DTS less than or equal to the last DTS already written for the same stream, it bumps the new DTS to `previous_dts + 1` and (if needed) raises the PTS to satisfy `DTS ≤ PTS`. A warning is logged for every clamped packet:
 
-```
+```text
 WARN ffmpeg: clamping non-monotonic encoder DTS stream=0 encoder_dts=2337 previous_dts=2338 corrected_dts=2339
 ```
 

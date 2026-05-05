@@ -121,7 +121,7 @@ func TestMonotonicDtsClamp_FMABFailureSequence(t *testing.T) {
 	// hundreds of ticks behind, then several more out-of-order packets, then
 	// resumes monotonic output. The first column is what the encoder hands us;
 	// the second is the corresponding PTS (also irregular due to VFR input).
-	encoderStream := []encOut{
+	encoderOutputs := []encOut{
 		{dts: 400029, pts: 400030},
 		{dts: 400071, pts: 400113},
 		{dts: 400113, pts: 400071},
@@ -136,10 +136,10 @@ func TestMonotonicDtsClamp_FMABFailureSequence(t *testing.T) {
 
 	lastWritten := int64(astiav.NoPtsValue)
 	clampedCount := 0
-	muxedDts := make([]int64, 0, len(encoderStream))
+	muxedDts := make([]int64, 0, len(encoderOutputs))
 
-	for _, p := range encoderStream {
-		newDts, _, clamped := monotonicDtsClamp(lastWritten, p.dts, p.pts)
+	for _, encoderOutput := range encoderOutputs {
+		newDts, _, clamped := monotonicDtsClamp(lastWritten, encoderOutput.dts, encoderOutput.pts)
 		if clamped {
 			clampedCount++
 		}
