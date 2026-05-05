@@ -3,17 +3,31 @@
 package ffmpeg_test
 
 import (
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/asticode/go-astiav"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/solidDoWant/media-processor/pkg/ffmpeg"
 	"github.com/solidDoWant/media-processor/pkg/ffprobe"
 )
+
+// testVFRHEVCSourcePath is a synthetic 5 s 640x360 HEVC matroska whose
+// container PTS values have been rewritten to inject a variable-frame-rate
+// pattern. On Intel Arc QSV the libmfx HEVC encoder computes DecodeTimeStamp
+// assuming a uniform input cadence; this fixture causes it to emit packets
+// with non-monotonic DTS, which the matroska muxer rejects with
+// "Application provided invalid, non monotonically increasing dts to muxer".
+// The transcoder's per-stream DTS clamp in receiveAndWritePackets repairs
+// the encoder output so the muxer accepts every packet.
+//
+// See pkg/ffmpeg/testdata/README.md for the regeneration procedure.
+const testVFRHEVCSourcePath = "testdata/video_vfr_hevc.mkv"
 
 // TestTranscode_CropWithQSV verifies that the vpp_qsv crop path produces output
 // with the correct dimensions when QSV hardware is available.
@@ -65,6 +79,88 @@ func TestTranscode_SourceWithAttachedPic_QSV(t *testing.T) {
 		Build().
 		Run(t.Context())
 	require.NoError(t, err, "QSV transcode of a source with attached_pic must succeed; pre-fix this returned %q", "Function not implemented")
+}
+
+// TestTranscode_VFRSourceWithQSV verifies that variable-frame-rate HEVC
+// sources do not break the QSV transcode pipeline. On Intel Arc, hevc_qsv's
+// underlying libmfx runtime emits packets with non-monotonic DTS when fed
+// frames with irregular PTS spacing, which the matroska muxer rejects with
+// EINVAL. The transcoder's per-stream DTS clamp must repair the encoder
+// output so that the muxer accepts every packet and the resulting file has
+// strictly monotonic DTS. Requires QSV hardware (qsvtest build tag).
+func TestTranscode_VFRSourceWithQSV(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVFRHEVCSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		HardwareAccel(ffmpeg.HWAccelQSV).
+		WithCrop(&ffmpeg.CropParams{W: 624, H: 360, X: 8, Y: 0}).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err, "QSV transcode of a VFR source must succeed; pre-fix the muxer rejected non-monotonic DTS from hevc_qsv")
+
+	// Read every video packet's DTS from the output and assert strict
+	// monotonicity — the property the muxer enforces and that the clamp
+	// is responsible for restoring.
+	fmtCtx := astiav.AllocFormatContext()
+	defer fmtCtx.Free()
+
+	require.NotNil(t, fmtCtx)
+
+	require.NoError(t, fmtCtx.OpenInput(output, nil, nil))
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	videoStreamIndex := -1
+
+	for _, stream := range fmtCtx.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeVideo {
+			videoStreamIndex = stream.Index()
+			break
+		}
+	}
+
+	require.NotEqual(t, -1, videoStreamIndex, "output must contain a video stream")
+
+	pkt := astiav.AllocPacket()
+	require.NotNil(t, pkt)
+
+	defer pkt.Free()
+
+	prevDts := int64(astiav.NoPtsValue)
+	packetCount := 0
+
+	for {
+		if err := fmtCtx.ReadFrame(pkt); err != nil {
+			require.True(t, errors.Is(err, astiav.ErrEof), "unexpected ReadFrame error: %v", err)
+
+			break
+		}
+
+		if pkt.StreamIndex() != videoStreamIndex {
+			pkt.Unref()
+			continue
+		}
+
+		packetCount++
+		dts := pkt.Dts()
+
+		if dts != astiav.NoPtsValue && prevDts != astiav.NoPtsValue {
+			assert.Greater(t, dts, prevDts,
+				"video packet %d DTS must be strictly greater than previous (got %d after %d)",
+				packetCount, dts, prevDts)
+		}
+
+		if dts != astiav.NoPtsValue {
+			prevDts = dts
+		}
+
+		pkt.Unref()
+	}
+
+	assert.Greater(t, packetCount, 0, "output must contain video packets")
 }
 
 // TestTranscode_QSVPerformanceMatchesFFmpegCLI verifies that our QSV transcode

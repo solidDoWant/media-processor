@@ -115,6 +115,28 @@ ffmpeg -y -i main.mp4 -i poster.jpg \
        pkg/ffmpeg/testdata/video_with_attached_pic.mp4
 ```
 
+## video_vfr_hevc.mkv
+
+A synthetic 5 s 640x360 HEVC clip whose container PTS values have been rewritten to inject the variable-frame-rate pattern that triggers `hevc_qsv` on Intel Arc to emit non-monotonic DTS. The bitstream itself is normal CFR HEVC at 24000/1001 fps with `bf=3` B-frames; only the matroska packet timestamps have been perturbed. Used to regression-test that the transcoder's `receiveAndWritePackets` clamp keeps the muxer from rejecting these packets when re-encoding through QSV.
+
+The fixture is unlikely to need regeneration — the failure mode it captures is stable. If you do need to rebuild it (e.g. to dial up or down the irregularity), the recipe is two steps: encode a clean CFR base, then rewrite packet PTS in place.
+
+Step 1, the clean CFR base:
+
+```bash
+ffmpeg -y -f lavfi -i "testsrc=duration=5:size=640x360:rate=24000/1001" \
+       -c:v libx265 -preset ultrafast -bf 3 \
+       -x265-params "log-level=error:bframes=3:b-pyramid=1" \
+       -pix_fmt yuv420p \
+       cfr.mkv
+```
+
+Step 2, the PTS injection. Read every video packet from `cfr.mkv` in coding order. Sort indices by PTS to derive display order. Build a per-display-position shift table that mimics the production source's gap pattern — starting at display position 50, apply a persistent +230 ms baseline shift; then at successive display positions add cumulative ramps so the PTS gaps in display order become 126 / 105 / 84 / 42 / 42 / 42 / 42 / 42 / 230 / 42 / 34 / 35 / 37 ms before settling back to ~42 ms. Apply each display position's shift to the PTS of the corresponding packet in coding order. Leave DTS untouched. Write the modified packets to a new matroska file with `c copy`.
+
+DTS stays valid because every shift is non-negative — DTS monotonicity from the original encode is preserved, and `DTS ≤ PTS` cannot be violated by raising PTS only. The HEVC bitstream is unchanged, so the resulting file is a well-formed HEVC matroska that nonetheless trips the libmfx/oneVPL DTS computation when re-encoded through QSV.
+
+A reference Go implementation using `go-astiav` lived at `cmd/gen-vfr-fixture/` during the original investigation; see git history if it would help as a starting point.
+
 ## video_all_black.mp4
 
 A synthetic 12-frame (0.5 s at 24 fps) lossless H.264 clip used to verify that `DetectCrop` returns an error when no visible content is present. The video is 320x180 solid black (CRF 0, so decoded pixels are exactly zero).

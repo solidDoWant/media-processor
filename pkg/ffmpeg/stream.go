@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/asticode/go-astiav"
 )
@@ -62,11 +63,20 @@ type copyStreamState struct {
 	inStream  *astiav.Stream
 	outStream *astiav.Stream
 	frames    int64 // encoded frames written; used for progress reporting
+	// lastWrittenDts is the DTS of the most recent packet handed to the muxer
+	// for outStream, in outStream's timebase. Used by receiveAndWritePackets to
+	// repair non-monotonic DTS coming out of the encoder (notably hevc_qsv on
+	// VFR sources, where Intel's libmfx runtime computes DecodeTimeStamp
+	// assuming uniform input cadence). NoPtsValue before the first write.
+	lastWrittenDts int64
 }
 
-func (css *copyStreamState) inputStream() *astiav.Stream        { return css.inStream }
-func (css *copyStreamState) outputStream() *astiav.Stream       { return css.outStream }
-func (css *copyStreamState) setOutputStream(out *astiav.Stream) { css.outStream = out }
+func (css *copyStreamState) inputStream() *astiav.Stream  { return css.inStream }
+func (css *copyStreamState) outputStream() *astiav.Stream { return css.outStream }
+func (css *copyStreamState) setOutputStream(out *astiav.Stream) {
+	css.outStream = out
+	css.lastWrittenDts = astiav.NoPtsValue
+}
 
 func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
 func (css *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
@@ -112,18 +122,74 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 		css.frames++
 		encPkt.SetStreamIndex(css.outStream.Index())
 		encPkt.RescaleTs(encCtx.TimeBase(), css.outStream.TimeBase())
+		css.repairNonMonotonicDts(encPkt)
 
 		if progressCh != nil {
 			sendProgress(progressCh, css.frames, encPkt, css.outStream, totalDuration)
 		}
+
+		// Snapshot DTS before WriteInterleavedFrame, which transfers ownership of
+		// the packet to the muxer and leaves the AVPacket fields cleared.
+		writtenDts := encPkt.Dts()
 
 		if err := outputFmt.WriteInterleavedFrame(encPkt); err != nil {
 			encPkt.Unref()
 			return fmt.Errorf("ffmpeg: writing encoded packet: %w", err)
 		}
 
+		css.lastWrittenDts = writtenDts
+
 		encPkt.Unref()
 	}
+}
+
+// repairNonMonotonicDts rewrites pkt's DTS (and PTS, if needed to keep
+// DTS <= PTS) so that it is strictly greater than the last DTS written to the
+// output stream. Mirrors the clamp in fftools/ffmpeg_mux.c::mux_fixup_ts that
+// lets the FFmpeg CLI tolerate the non-monotonic DTS the hevc_qsv encoder
+// emits on variable-frame-rate sources. No-op on the first packet, on packets
+// without a DTS value, or when the encoder DTS is already monotonic — so
+// well-formed encodes produce bit-identical output.
+func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
+	newDts, newPts, clamped := monotonicDtsClamp(css.lastWrittenDts, pkt.Dts(), pkt.Pts())
+	if !clamped {
+		return
+	}
+
+	slog.Warn("ffmpeg: clamping non-monotonic encoder DTS",
+		slog.Int("stream", css.outStream.Index()),
+		slog.Int64("encoder_dts", pkt.Dts()),
+		slog.Int64("previous_dts", css.lastWrittenDts),
+		slog.Int64("corrected_dts", newDts),
+	)
+
+	pkt.SetDts(newDts)
+
+	if newPts != pkt.Pts() {
+		pkt.SetPts(newPts)
+	}
+}
+
+// monotonicDtsClamp computes the DTS and PTS for an outgoing packet so that
+// its DTS is strictly greater than the previous packet's DTS on the same
+// stream. clamped is true when the encoder's DTS was non-monotonic and had to
+// be rewritten. Pure function — no I/O, no logging — so it can be unit-tested
+// without a hardware encoder or a live FormatContext. Inputs and outputs are
+// in the muxer's stream timebase. AV_NOPTS_VALUE sentinels short-circuit the
+// clamp (first-packet case and packets without DTS pass through unchanged).
+func monotonicDtsClamp(lastWrittenDts, encDts, encPts int64) (newDts, newPts int64, clamped bool) {
+	if lastWrittenDts == astiav.NoPtsValue || encDts == astiav.NoPtsValue || encDts > lastWrittenDts {
+		return encDts, encPts, false
+	}
+
+	newDts = lastWrittenDts + 1
+	newPts = encPts
+
+	if encPts != astiav.NoPtsValue && encPts < newDts {
+		newPts = newDts
+	}
+
+	return newDts, newPts, true
 }
 
 // sendProgress emits a non-blocking progress update on ch.

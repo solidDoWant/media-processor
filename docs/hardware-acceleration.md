@@ -59,6 +59,18 @@ Use `MEDIA_H265_CRF` to control output quality. The meaning of the value varies 
 
 Leaving `MEDIA_H265_CRF` unset (the default) lets each encoder use its own built-in default. Valid explicit values are `1`–`51`; setting `MEDIA_H265_CRF=0` (or any other out-of-range value) is rejected at startup.
 
+## Variable-frame-rate sources on QSV
+
+Some sources — most often Blu-ray rips that span a scene-change or chapter boundary the original encoder couldn't represent cleanly — carry container PTS values whose inter-frame spacing in display order is highly irregular (gaps from tens of milliseconds up to a quarter-second within a single GOP). When such a source is re-encoded through `hevc_qsv`, Intel's libmfx/oneVPL runtime computes `DecodeTimeStamp` assuming a uniform input cadence and emits one or more output packets whose DTS goes backward relative to the previous packet. The matroska muxer rejects these with `Application provided invalid, non monotonically increasing dts to muxer in stream 0`.
+
+The transcoder repairs this on the way to the muxer: when the encoder hands it a packet with DTS less than or equal to the last DTS already written for the same stream, it bumps the new DTS to `previous_dts + 1` and (if needed) raises the PTS to satisfy `DTS ≤ PTS`. A warning is logged for every clamped packet:
+
+```text
+WARN ffmpeg: clamping non-monotonic encoder DTS stream=0 encoder_dts=2337 previous_dts=2338 corrected_dts=2339
+```
+
+Each clamp shifts the affected packet's display time by at most a few hundred milliseconds (bounded by the size of the original irregular gap). The clamp is a no-op on packets the encoder already emitted in monotonic order, so well-formed sources produce bit-identical output. `libx265` does not exhibit this defect; if you see frequent clamp warnings on QSV that you want to avoid entirely, fall back to software encoding for the affected file.
+
 ## Checking encoder availability
 
 To verify which hardware encoders are detected at runtime, check the worker logs at `debug` level (`LOG_LEVEL=debug`). The worker logs which encoder profile was chosen and why.
