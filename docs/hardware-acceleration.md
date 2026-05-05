@@ -62,3 +62,29 @@ Leaving `MEDIA_H265_CRF` unset (the default) lets each encoder use its own built
 ## Checking encoder availability
 
 To verify which hardware encoders are detected at runtime, check the worker logs at `debug` level (`LOG_LEVEL=debug`). The worker logs which encoder profile was chosen and why.
+
+## Load probe permissions
+
+Transcode-enabled workers can sample worker load to gate concurrency. Two probe implementations exist:
+
+### Intel i915 GPU probe
+
+Reads per-engine VCS busy counters from the i915 PMU via `perf_event_open`. The probe binds to the same i915 device the worker transcodes against — on hosts with multiple Intel GPUs the matching per-device PMU is selected automatically by mapping the transcode device path through its PCI bus address (see Device selection above) to the kernel-registered PMU. Single-GPU hosts use the legacy bare `i915` PMU; multi-GPU hosts use BDF-suffixed names like `i915_0000_03_00.0`.
+
+**Permission requirements** — the worker process must satisfy at least one of:
+
+- Hold `CAP_PERFMON` (preferred for containerized deployments — grant via the container runtime's capabilities mechanism).
+- Run on a host with `kernel.perf_event_paranoid` ≤ 1.
+
+If neither holds, `perf_event_open` returns `EACCES` at probe initialization and the worker raises a fallback signal (logged with the underlying error). The supplier consuming the probe is responsible for falling back to its static concurrency cap.
+
+### Container CPU probe (cgroup v2)
+
+Used in workers running in software-only mode. Reads `cpu.stat` and `cpu.max` from the unified cgroup v2 hierarchy at `/sys/fs/cgroup` and reports utilization relative to the container's CPU bandwidth quota.
+
+**Requirements:**
+
+- Cgroup v2 must be mounted (the unified hierarchy — most modern container runtimes provide this by default).
+- The container must have a CPU quota set (`cpu.max` cannot be `max <period>`). When the quota is unset, the probe initialization fails so the supplier falls back to its static cap; pin a CPU quota in your container runtime / Kubernetes resource limits to keep the load probe active.
+
+The fallback behavior — what the supplier does when a probe is unavailable or fails — is documented alongside the supplier itself once it lands.
