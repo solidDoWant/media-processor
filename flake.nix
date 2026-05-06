@@ -123,7 +123,7 @@
         };
 
         watcherVendorHash = "sha256-+SNDmb/Dk62Cdg4pe11JtVNI557+tqIQloMUbGeTzb4=";
-        workerVendorHash = "sha256-+SNDmb/Dk62Cdg4pe11JtVNI557+tqIQloMUbGeTzb4=";
+        workerVendorHash = "sha256-zGL3XX1Ij6rWcu63pLzMe8zWR9iX4/ukxY8uVSkoX0Q=";
 
         watcher-bin = pkgs.buildGoModule {
           name = "watcher";

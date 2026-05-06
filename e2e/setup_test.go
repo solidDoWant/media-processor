@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -165,10 +166,21 @@ func streamAppLogs(ctx context.Context) {
 	}()
 }
 
+// idleExitWorkerService is the compose service name of the worker pool that
+// is configured to idle-exit mid-suite (see docker-compose.yml). The health
+// monitor stops watching this pool once it has been seen draining so the
+// expected-and-tested termination is not reported as a health degradation.
+const idleExitWorkerService = "worker-transcode"
+
 // startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
-// The returned readyCh is closed once both services are seen healthy in the same
-// poll. The returned failCh receives at most one error if health subsequently
-// degrades after the initial ready signal. Cancel ctx to stop the goroutine.
+// The returned readyCh is closed once every service is seen healthy in the
+// same poll. After ready, the monitor continues watching the watcher and the
+// non-idle-exit worker pools; the idle-exit pool (worker-transcode) is only
+// tolerated once it has actually been observed to have exited cleanly via
+// `docker inspect` — a crash or wedge before the WORKER_IDLE_EXIT_AFTER drain
+// is exercised must surface as a regression, not a tolerated failure. The
+// returned failCh receives at most one error if any non-tolerated service
+// subsequently degrades. Cancel ctx to stop the goroutine.
 func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-chan error) {
 	ready := make(chan struct{})
 	fail := make(chan error, 1)
@@ -178,6 +190,7 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		defer ticker.Stop()
 
 		everReady := false
+		idleExitObserved := false
 
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
@@ -185,15 +198,15 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 			workerErrs := make(map[string]error, len(workerPools))
 			anyWorkerErr := false
 
-			for _, pool := range workerPools {
-				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
-					workerErrs[pool.serviceName] = err
+			for _, workerPool := range workerPools {
+				if err := checkHTTP(workerPool.healthBase + "/readyz"); err != nil {
+					workerErrs[workerPool.serviceName] = err
 					anyWorkerErr = true
 				}
 			}
 
-			if watcherErr == nil && !anyWorkerErr {
-				if !everReady {
+			if !everReady {
+				if watcherErr == nil && !anyWorkerErr {
 					everReady = true
 
 					close(ready)
@@ -202,20 +215,39 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				return
 			}
 
-			if !everReady {
-				return
-			}
-
-			// Health degraded after the initial ready signal — report once.
+			// Post-ready: report watcher and non-idle-exit-pool failures
+			// immediately. For the idle-exit pool, only tolerate /readyz
+			// failures once `docker inspect` confirms the container has
+			// exited cleanly; otherwise treat the failure as a regression.
 			var msgs []string
 			if watcherErr != nil {
 				msgs = append(msgs, "watcher: "+watcherErr.Error())
 			}
 
-			for _, pool := range workerPools {
-				if err, ok := workerErrs[pool.serviceName]; ok {
-					msgs = append(msgs, pool.serviceName+": "+err.Error())
+			for _, workerPool := range workerPools {
+				err, ok := workerErrs[workerPool.serviceName]
+				if !ok {
+					continue
 				}
+
+				if workerPool.serviceName == idleExitWorkerService {
+					if idleExitObserved {
+						continue
+					}
+
+					state, inspectErr := inspectWorkerState(ctx, workerPool.serviceName)
+					if inspectErr == nil && state.State.Status == "exited" && state.State.ExitCode == 0 {
+						idleExitObserved = true
+
+						continue
+					}
+				}
+
+				msgs = append(msgs, workerPool.serviceName+": "+err.Error())
+			}
+
+			if len(msgs) == 0 {
+				return
 			}
 
 			select {
@@ -308,6 +340,127 @@ func checkTemporal(ctx context.Context) error {
 		Namespace: temporalNamespace,
 	}); err != nil {
 		return fmt.Errorf("describe namespace %q: %w", temporalNamespace, err)
+	}
+
+	return nil
+}
+
+// ---- worker idle-exit verification --------------------------------------
+
+// containerInspectState mirrors the subset of `docker inspect` State output
+// the suite cares about. Only Status and ExitCode are read; the rest of the
+// fields are deliberately ignored.
+type containerInspectState struct {
+	State struct {
+		Status   string `json:"Status"`
+		ExitCode int    `json:"ExitCode"`
+	} `json:"State"`
+}
+
+// inspectWorkerState looks up the container ID of the named compose service
+// and returns its parsed State. Returns an error wrapping "no container" when
+// compose has no record of the service (e.g. the container never started).
+func inspectWorkerState(ctx context.Context, serviceName string) (containerInspectState, error) {
+	psCmd := exec.CommandContext(ctx, "docker", composeArgs("ps", "-aq", serviceName)...)
+	psCmd.Env = composeEnv()
+
+	out, err := psCmd.Output()
+	if err != nil {
+		return containerInspectState{}, fmt.Errorf("compose ps %s: %w", serviceName, err)
+	}
+
+	containerID := strings.TrimSpace(string(out))
+	if containerID == "" {
+		return containerInspectState{}, fmt.Errorf("no container for service %q", serviceName)
+	}
+
+	inspectCmd := exec.CommandContext(ctx, "docker", "inspect", containerID)
+
+	raw, err := inspectCmd.Output()
+	if err != nil {
+		return containerInspectState{}, fmt.Errorf("docker inspect %s: %w", containerID, err)
+	}
+
+	var inspected []containerInspectState
+	if err := json.Unmarshal(raw, &inspected); err != nil {
+		return containerInspectState{}, fmt.Errorf("parse docker inspect output for %s: %w", containerID, err)
+	}
+
+	if len(inspected) == 0 {
+		return containerInspectState{}, fmt.Errorf("docker inspect returned no entries for %s", containerID)
+	}
+
+	return inspected[0], nil
+}
+
+// verifyTranscodeWorkerIdleExit waits for the transcode worker pool to drain
+// itself via WORKER_IDLE_EXIT_AFTER and asserts that the workflow and rest
+// pools stay running. Only the transcode pool is configured for idle-exit in
+// docker-compose.yml so the workflow worker can still drive post-transcode
+// steps (notify, cleanup) and the rest worker can still service them after
+// the transcode pool exits. The deadline covers the configured 15s idle
+// window plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus a generous buffer.
+func verifyTranscodeWorkerIdleExit(ctx context.Context) error {
+	const transcodeService = "worker-transcode"
+
+	deadline := 2 * time.Minute
+
+	pollCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	exitErr := pollUntil(pollCtx, 2*time.Second, func() error {
+		state, err := inspectWorkerState(pollCtx, transcodeService)
+		if err != nil {
+			return fmt.Errorf("%s: %w", transcodeService, err)
+		}
+
+		if state.State.Status != "exited" {
+			return fmt.Errorf("%s: status=%s", transcodeService, state.State.Status)
+		}
+
+		// Container has exited; exit-code validation happens once below.
+		return nil
+	})
+	if exitErr != nil {
+		return exitErr
+	}
+
+	state, err := inspectWorkerState(ctx, transcodeService)
+	if err != nil {
+		return fmt.Errorf("re-inspect %s after exit: %w", transcodeService, err)
+	}
+
+	if state.State.ExitCode != 0 {
+		return fmt.Errorf("worker %s exited with non-zero code %d", transcodeService, state.State.ExitCode)
+	}
+
+	// Confirm the other two pools did NOT exit — only the transcode pool is
+	// supposed to idle out in this configuration.
+	var stillRunning []string
+
+	for _, workerPool := range workerPools {
+		if workerPool.serviceName == transcodeService {
+			continue
+		}
+
+		state, err := inspectWorkerState(ctx, workerPool.serviceName)
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", workerPool.serviceName, err)
+		}
+
+		if state.State.Status == "running" {
+			stillRunning = append(stillRunning, workerPool.serviceName)
+
+			continue
+		}
+
+		return fmt.Errorf("worker %s expected to be running but is %s (exit code %d)",
+			workerPool.serviceName, state.State.Status, state.State.ExitCode)
+	}
+
+	if len(stillRunning) != len(workerPools)-1 {
+		return fmt.Errorf("expected %d non-transcode worker pools to still be running, got %d",
+			len(workerPools)-1, len(stillRunning))
 	}
 
 	return nil

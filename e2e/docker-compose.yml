@@ -104,6 +104,21 @@ services:
   # activity queue, and one polls every other activity queue. Together they
   # cover end-to-end execution while proving each piece is reachable from a
   # different process.
+  #
+  # Only the transcode pool is configured for idle-exit
+  # (WORKER_IDLE_EXIT_AFTER=15s, restart: "no") so the e2e suite exercises the
+  # KEDA-pattern drain path on a single pool while the workflow and rest pools
+  # remain available to handle non-transcode work for the duration of the
+  # tests. The workflow pool stays alive so the workflow worker can drive
+  # post-transcode steps (notify, cleanup) even after the transcode pool exits;
+  # the rest pool stays alive for the same reason. The 15s window is sized to
+  # comfortably cover the worst-case startup-to-first-transcode gap (watcher
+  # scan + probe + detect-crop + Temporal poll latency, ~6s) — the idle-exit
+  # countdown starts at worker startup, so a tighter window would race the
+  # transcode dispatch and exit the worker before any work arrives.
+  # METRICS_SCRAPE_WAIT_TIMEOUT is dropped to 30s (vs the 60s default) so the
+  # post-drain scrape gate keeps the suite responsive while still leaving room
+  # for tests to fetch /metrics in their post-completion assertions.
   worker-workflow:
     image: worker:latest
     pull_policy: never
@@ -138,7 +153,7 @@ services:
   worker-transcode:
     image: worker:latest
     pull_policy: never
-    restart: on-failure
+    restart: "no"
     profiles:
       - app
     user: "${UID}:${GID}"
@@ -158,6 +173,8 @@ services:
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: media-processor-e2e
       WORKER_ACTIVITIES: transcode
+      WORKER_IDLE_EXIT_AFTER: "15s"
+      METRICS_SCRAPE_WAIT_TIMEOUT: "30s"
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878

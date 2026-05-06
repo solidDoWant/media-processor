@@ -19,6 +19,13 @@ import (
 // imported, the original .mp4 source file has been deleted, and the output
 // file has the expected media properties.
 func TestRadarrHappyPath(t *testing.T) {
+	// Run alongside the sonarr happy path so the transcode worker pool sees
+	// back-to-back transcodes and does not idle-exit between tests. The
+	// transcode pool is configured with a 15s WORKER_IDLE_EXIT_AFTER in
+	// compose; a sequential run would let it drain after the radarr transcode
+	// and leave the sonarr transcode without a worker to pick it up.
+	t.Parallel()
+
 	radarr := newArrClient(radarrBase, radarrAPIKey)
 
 	const releaseTitle = "Big.Buck.Bunny.2008.1080p.WEB-DL"

@@ -43,6 +43,12 @@ type workerConfig struct {
 	// workers. Read from MEDIA_TRANSCODE_LIMITER_* env vars; the values are
 	// only consulted when the worker actually polls the transcode queue.
 	TranscodeLimiter transcodeLimiterConfig
+	// IdleExitAfter, when > 0, enables idle-exit: the worker drains itself
+	// (via the same path as SIGTERM) after this much wall-clock time elapses
+	// with no activity- or workflow-task starts and zero in-flight tasks.
+	// Read from WORKER_IDLE_EXIT_AFTER; unset/empty leaves this zero, which
+	// disables the feature (no interceptor, no goroutine, no gauge).
+	IdleExitAfter time.Duration
 }
 
 // transcodeLimiterConfig bundles the operator-tunable parameters for the
@@ -160,6 +166,17 @@ func loadConfig() (workerConfig, error) {
 	}
 
 	cfg.TranscodeLimiter = limiter
+
+	idleExitAfter, err := parseTimeout("WORKER_IDLE_EXIT_AFTER", 0)
+	if err != nil {
+		return workerConfig{}, err
+	}
+
+	if idleExitAfter < 0 {
+		return workerConfig{}, fmt.Errorf("WORKER_IDLE_EXIT_AFTER must be >= 0 (got %q)", os.Getenv("WORKER_IDLE_EXIT_AFTER"))
+	}
+
+	cfg.IdleExitAfter = idleExitAfter
 
 	return cfg, nil
 }
