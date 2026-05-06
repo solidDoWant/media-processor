@@ -228,36 +228,52 @@ When the worker and the arr service already see the output volume at the same pa
 
 ## Temporal search attributes
 
-When `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED` is `true` (the default), the watcher attaches five custom search attributes to every dispatched media workflow. These make workflows filterable in the Temporal Web UI and queryable via the visibility API using expressions like `MediaMappingName = "movies"` or `MediaFilePath STARTS_WITH "/downloads/"`.
+When `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED` is `true` (the default), the watcher attaches four custom search attributes to every dispatched media workflow. These make workflows filterable in the Temporal Web UI and queryable via the visibility API using expressions like `MediaMappingName = "movies"` or `MediaFilePathSegments = "Season 01"`.
 
-Every dispatched workflow also receives a **Memo** with the same five fields. Memo is always attached regardless of the search-attribute setting, and its fields are visible in the Temporal Web UI's per-run detail pane without any namespace-level registration.
+Every dispatched workflow also receives a **Memo** with the full absolute `MediaFilePath`, the watch root, and other context. Memo is always attached regardless of the search-attribute setting, and its fields are visible in the Temporal Web UI's per-run detail pane without any namespace-level registration.
 
 ### Attribute names and types
 
-| Attribute name     | Type      | Value                                             |
-| ------------------ | --------- | ------------------------------------------------- |
-| `MediaFilePath`    | `Keyword` | Absolute path of the input file                   |
-| `MediaTitle`       | `Text`    | Basename of the input file (full-text searchable) |
-| `MediaType`        | `Keyword` | `movie` or `show`                                 |
-| `MediaMappingName` | `Keyword` | Name of the watch mapping that matched the file   |
-| `MediaWatchRoot`   | `Keyword` | Absolute path of the watch root directory         |
+| Attribute name          | Type          | Value                                                                       |
+| ----------------------- | ------------- | --------------------------------------------------------------------------- |
+| `MediaFilePathSegments` | `KeywordList` | Path components of the input file relative to the watch root, split on `/` |
+| `MediaTitle`            | `Text`        | Basename of the input file (full-text searchable)                           |
+| `MediaType`             | `Keyword`     | `movie` or `show`                                                           |
+| `MediaMappingName`      | `Keyword`     | Name of the watch mapping that matched the file                             |
 
-Note: both `MediaFilePath` and `MediaTitle` reflect the original input path. When `output.remotePath` is set in the watcher config, the rewritten path is **not** used here.
+Notes:
+
+- `MediaFilePathSegments` is a `KeywordList` rather than a single `Keyword` because the Postgres advanced-visibility schema stores Keyword search attributes as `VARCHAR(255)`, and absolute media file paths frequently exceed that. Splitting on the path separator keeps each indexed value short and lets you query for any directory or filename in the path with equality (e.g. `MediaFilePathSegments = "Season 01"` finds every workflow whose path contains a `Season 01` segment). Each individual segment is defensively truncated to 255 runes for backend portability.
+- Segments are computed *relative to the watch root* — the absolute prefix is shared by every workflow from a given watch and adds no distinguishing information. To filter by watch, use `MediaMappingName`.
+- The full absolute path is always attached as `MediaFilePath` in the workflow Memo, alongside the watch root, so the Temporal Web UI's per-run detail pane shows the original path even when `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=false`.
+- Both `MediaFilePathSegments` and `MediaTitle` reflect the original input path. When `output.remotePath` is set in the watcher config, the rewritten path is **not** used here.
 
 ### One-time registration
 
-Custom search attributes are namespace-scoped and must be registered once before the watcher starts with `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=true`. Registration requires advanced visibility (an Elasticsearch-backed self-hosted Temporal server, or Temporal Cloud). Run:
+Custom search attributes are namespace-scoped and must be registered once before the watcher starts with `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=true`. Registration requires advanced visibility (an Elasticsearch-backed self-hosted Temporal server, Postgres advanced visibility, or Temporal Cloud). Run:
 
 ```sh
 temporal operator search-attribute create \
   --namespace <namespace> \
-  --name MediaFilePath --type Keyword \
+  --name MediaFilePathSegments --type KeywordList \
   --name MediaTitle --type Text \
   --name MediaType --type Keyword \
-  --name MediaMappingName --type Keyword \
-  --name MediaWatchRoot --type Keyword
+  --name MediaMappingName --type Keyword
 ```
 
 Replace `<namespace>` with the Temporal namespace the watcher connects to (the value of `TEMPORAL_NAMESPACE`, default `default`).
 
 If the attributes are not registered and the watcher starts with `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=true`, every workflow dispatch will fail. The watcher logs a clear error message including the full registration command and the attribute names. Set `WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=false` to skip search attributes (e.g. when running against a basic-visibility Temporal server).
+
+### Migrating from `MediaFilePath` and `MediaWatchRoot`
+
+Earlier versions of the watcher registered `MediaFilePath` as a `Keyword`. On Postgres advanced visibility this caused `pq: value too long for type character varying(255)` errors in the visibility queue processor for any path longer than 255 characters, leaving the affected workflows missing from the Temporal Web UI. The new `MediaFilePathSegments` `KeywordList` avoids the cap by storing the relative path components individually as a JSONB array.
+
+`MediaWatchRoot` was also dropped from the search attribute set: it duplicated information already available via `MediaMappingName` (the operator-chosen label that uniquely identifies a watch) and was itself a `Keyword` subject to the same 255-character limit. Both fields remain in the workflow Memo for human-readable debugging.
+
+To migrate:
+
+1. Register the new `MediaFilePathSegments` attribute on the namespace using the command above.
+2. Deploy the new watcher.
+3. Update any visibility queries: replace `MediaFilePath` with `MediaFilePathSegments`; replace `MediaWatchRoot = "..."` with `MediaMappingName = "..."` using the corresponding watch's configured name.
+4. (Optional) Remove the now-unused old attributes: `temporal operator search-attribute remove --namespace <namespace> --name MediaFilePath --name MediaWatchRoot`.

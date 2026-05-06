@@ -179,23 +179,63 @@ func sanitizeWorkflowIDSegment(s string, stripLeadingDots bool) string {
 	return out
 }
 
-// mediaSearchAttributeKeys are the five typed search attribute keys attached to every
+// mediaSearchAttributeKeys are the four typed search attribute keys attached to every
 // media workflow. They must be pre-registered in the Temporal namespace before the
 // watcher starts with search attributes enabled:
 //
 //	temporal operator search-attribute create --namespace <namespace> \
-//	  --name MediaFilePath --type Keyword \
+//	  --name MediaFilePathSegments --type KeywordList \
 //	  --name MediaTitle --type Text \
 //	  --name MediaType --type Keyword \
-//	  --name MediaMappingName --type Keyword \
-//	  --name MediaWatchRoot --type Keyword
+//	  --name MediaMappingName --type Keyword
 var (
-	mediaFilePathKey    = temporal.NewSearchAttributeKeyKeyword("MediaFilePath")
-	mediaTitleKey       = temporal.NewSearchAttributeKeyString("MediaTitle")
-	mediaTypeKey        = temporal.NewSearchAttributeKeyKeyword("MediaType")
-	mediaMappingNameKey = temporal.NewSearchAttributeKeyKeyword("MediaMappingName")
-	mediaWatchRootKey   = temporal.NewSearchAttributeKeyKeyword("MediaWatchRoot")
+	mediaFilePathSegmentsKey = temporal.NewSearchAttributeKeyKeywordList("MediaFilePathSegments")
+	mediaTitleKey            = temporal.NewSearchAttributeKeyString("MediaTitle")
+	mediaTypeKey             = temporal.NewSearchAttributeKeyKeyword("MediaType")
+	mediaMappingNameKey      = temporal.NewSearchAttributeKeyKeyword("MediaMappingName")
 )
+
+// maxKeywordValueRunes matches the VARCHAR(255) cap that Postgres advanced
+// visibility applies to Keyword search attribute columns. Values longer than
+// this make the visibility queue processor fail the insert with
+// `pq: value too long for type character varying(255)` and silently drop the
+// run from the visibility store. KeywordList elements are stored as JSONB and
+// not subject to the cap today, but truncating them too keeps the search
+// attribute portable across visibility backends.
+const maxKeywordValueRunes = 255
+
+// pathSegments splits p on filepath.Separator and truncates each segment.
+// Truncation is safe because the full untruncated path is always attached to
+// the workflow Memo by buildWorkflowMemo.
+func pathSegments(p string) []string {
+	parts := strings.Split(p, string(filepath.Separator))
+	out := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		out = append(out, truncateToRunes(part, maxKeywordValueRunes))
+	}
+
+	return out
+}
+
+// truncateToRunes clips s on a rune boundary so the result remains valid UTF-8
+// when s contains multi-byte characters. Plain s[:maxRunes] would split them.
+func truncateToRunes(s string, maxRunes int) string {
+	if len(s) <= maxRunes {
+		return s
+	}
+
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+
+	return string(runes[:maxRunes])
+}
 
 // buildWorkflowMemo returns the Memo map for a media workflow dispatch. Memo is
 // always attached to every run, independent of whether search attributes are enabled.
@@ -210,13 +250,17 @@ func buildWorkflowMemo(input mediatypes.MediaInput) map[string]interface{} {
 }
 
 // buildSearchAttributes returns the TypedSearchAttributes for a media workflow dispatch.
+// MediaFilePathSegments is computed relative to the watch root because the
+// absolute prefix is shared by every workflow from that watch and adds no
+// distinguishing information; the watch is identified by MediaMappingName.
 func buildSearchAttributes(input mediatypes.MediaInput) temporal.SearchAttributes {
+	relPath, _ := filepath.Rel(input.WatchRoot, input.FilePath)
+
 	return temporal.NewSearchAttributes(
-		mediaFilePathKey.ValueSet(input.FilePath),
+		mediaFilePathSegmentsKey.ValueSet(pathSegments(relPath)),
 		mediaTitleKey.ValueSet(filepath.Base(input.FilePath)),
 		mediaTypeKey.ValueSet(string(input.MediaType)),
-		mediaMappingNameKey.ValueSet(input.MappingName),
-		mediaWatchRootKey.ValueSet(input.WatchRoot),
+		mediaMappingNameKey.ValueSet(truncateToRunes(input.MappingName, maxKeywordValueRunes)),
 	)
 }
 
@@ -276,8 +320,8 @@ func newTemporalDispatch(c client.Client, taskQueue string, searchAttributesEnab
 
 			if isMissingSearchAttributeError(err) {
 				slog.ErrorContext(ctx, "dispatch failed: custom Temporal search attributes are not registered in the namespace; register them or set WATCHER_TEMPORAL_SEARCH_ATTRIBUTES_ENABLED=false to disable",
-					slog.String("required_attributes", "MediaFilePath (Keyword), MediaTitle (Text), MediaType (Keyword), MediaMappingName (Keyword), MediaWatchRoot (Keyword)"),
-					slog.String("registration_command", "temporal operator search-attribute create --namespace <namespace> --name MediaFilePath --type Keyword --name MediaTitle --type Text --name MediaType --type Keyword --name MediaMappingName --type Keyword --name MediaWatchRoot --type Keyword"),
+					slog.String("required_attributes", "MediaFilePathSegments (KeywordList), MediaTitle (Text), MediaType (Keyword), MediaMappingName (Keyword)"),
+					slog.String("registration_command", "temporal operator search-attribute create --namespace <namespace> --name MediaFilePathSegments --type KeywordList --name MediaTitle --type Text --name MediaType --type Keyword --name MediaMappingName --type Keyword"),
 					slog.Any("err", err),
 				)
 			}
