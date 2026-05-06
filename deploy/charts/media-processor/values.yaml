@@ -116,7 +116,7 @@ config:
       # attributes (MediaFilePathSegments, MediaTitle, MediaType, MediaMappingName)
       # must be pre-registered in the Temporal namespace. See docs/configuration.md
       # for the registration command. Set to false when running against a Temporal
-      # server without advanced visibility (no Elasticsearch backend).
+      # server without advanced visibility configured.
       enabled: true
 
   worker:
