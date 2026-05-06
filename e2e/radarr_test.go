@@ -21,9 +21,9 @@ import (
 func TestRadarrHappyPath(t *testing.T) {
 	// Run alongside the sonarr happy path so the transcode worker pool sees
 	// back-to-back transcodes and does not idle-exit between tests. The
-	// transcode pool is configured with WORKER_IDLE_EXIT_AFTER=5s in compose;
-	// a sequential run would let it drain after the radarr transcode and
-	// leave the sonarr transcode without a worker to pick it up.
+	// transcode pool is configured with a 15s WORKER_IDLE_EXIT_AFTER in
+	// compose; a sequential run would let it drain after the radarr transcode
+	// and leave the sonarr transcode without a worker to pick it up.
 	t.Parallel()
 
 	radarr := newArrClient(radarrBase, radarrAPIKey)

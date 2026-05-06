@@ -175,11 +175,12 @@ const idleExitWorkerService = "worker-transcode"
 // startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
 // The returned readyCh is closed once every service is seen healthy in the
 // same poll. After ready, the monitor continues watching the watcher and the
-// non-idle-exit worker pools; failures on the idle-exit pool (worker-transcode)
-// are tolerated because that pool is expected to drain itself via
-// WORKER_IDLE_EXIT_AFTER. The returned failCh receives at most one error if
-// any non-tolerated service subsequently degrades. Cancel ctx to stop the
-// goroutine.
+// non-idle-exit worker pools; the idle-exit pool (worker-transcode) is only
+// tolerated once it has actually been observed to have exited cleanly via
+// `docker inspect` — a crash or wedge before the WORKER_IDLE_EXIT_AFTER drain
+// is exercised must surface as a regression, not a tolerated failure. The
+// returned failCh receives at most one error if any non-tolerated service
+// subsequently degrades. Cancel ctx to stop the goroutine.
 func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-chan error) {
 	ready := make(chan struct{})
 	fail := make(chan error, 1)
@@ -189,6 +190,7 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		defer ticker.Stop()
 
 		everReady := false
+		idleExitObserved := false
 
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
@@ -196,9 +198,9 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 			workerErrs := make(map[string]error, len(workerPools))
 			anyWorkerErr := false
 
-			for _, pool := range workerPools {
-				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
-					workerErrs[pool.serviceName] = err
+			for _, workerPool := range workerPools {
+				if err := checkHTTP(workerPool.healthBase + "/readyz"); err != nil {
+					workerErrs[workerPool.serviceName] = err
 					anyWorkerErr = true
 				}
 			}
@@ -213,21 +215,35 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				return
 			}
 
-			// Post-ready: tolerate the idle-exit pool draining; report any
-			// other regression once.
+			// Post-ready: report watcher and non-idle-exit-pool failures
+			// immediately. For the idle-exit pool, only tolerate /readyz
+			// failures once `docker inspect` confirms the container has
+			// exited cleanly; otherwise treat the failure as a regression.
 			var msgs []string
 			if watcherErr != nil {
 				msgs = append(msgs, "watcher: "+watcherErr.Error())
 			}
 
-			for _, pool := range workerPools {
-				if pool.serviceName == idleExitWorkerService {
+			for _, workerPool := range workerPools {
+				err, ok := workerErrs[workerPool.serviceName]
+				if !ok {
 					continue
 				}
 
-				if err, ok := workerErrs[pool.serviceName]; ok {
-					msgs = append(msgs, pool.serviceName+": "+err.Error())
+				if workerPool.serviceName == idleExitWorkerService {
+					if idleExitObserved {
+						continue
+					}
+
+					state, inspectErr := inspectWorkerState(ctx, workerPool.serviceName)
+					if inspectErr == nil && state.State.Status == "exited" && state.State.ExitCode == 0 {
+						idleExitObserved = true
+
+						continue
+					}
 				}
+
+				msgs = append(msgs, workerPool.serviceName+": "+err.Error())
 			}
 
 			if len(msgs) == 0 {
@@ -382,8 +398,8 @@ func inspectWorkerState(ctx context.Context, serviceName string) (containerInspe
 // pools stay running. Only the transcode pool is configured for idle-exit in
 // docker-compose.yml so the workflow worker can still drive post-transcode
 // steps (notify, cleanup) and the rest worker can still service them after
-// the transcode pool exits. The deadline covers the worst-case 5s idle window
-// plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus a generous buffer.
+// the transcode pool exits. The deadline covers the configured 15s idle
+// window plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus a generous buffer.
 func verifyTranscodeWorkerIdleExit(ctx context.Context) error {
 	const transcodeService = "worker-transcode"
 
@@ -422,24 +438,24 @@ func verifyTranscodeWorkerIdleExit(ctx context.Context) error {
 	// supposed to idle out in this configuration.
 	var stillRunning []string
 
-	for _, pool := range workerPools {
-		if pool.serviceName == transcodeService {
+	for _, workerPool := range workerPools {
+		if workerPool.serviceName == transcodeService {
 			continue
 		}
 
-		state, err := inspectWorkerState(ctx, pool.serviceName)
+		state, err := inspectWorkerState(ctx, workerPool.serviceName)
 		if err != nil {
-			return fmt.Errorf("inspect %s: %w", pool.serviceName, err)
+			return fmt.Errorf("inspect %s: %w", workerPool.serviceName, err)
 		}
 
 		if state.State.Status == "running" {
-			stillRunning = append(stillRunning, pool.serviceName)
+			stillRunning = append(stillRunning, workerPool.serviceName)
 
 			continue
 		}
 
 		return fmt.Errorf("worker %s expected to be running but is %s (exit code %d)",
-			pool.serviceName, state.State.Status, state.State.ExitCode)
+			workerPool.serviceName, state.State.Status, state.State.ExitCode)
 	}
 
 	if len(stillRunning) != len(workerPools)-1 {

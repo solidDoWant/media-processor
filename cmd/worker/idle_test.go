@@ -55,8 +55,7 @@ func TestIdleTrackerLastActivityUpdatesOnEachLifecycleEvent(t *testing.T) {
 	// Time advances; without a fresh event, elapsed grows from the last end.
 	clock.Advance(30 * time.Second)
 
-	seen, inFlight, elapsed := tracker.snapshot()
-	assert.True(t, seen)
+	inFlight, elapsed := tracker.snapshot()
 	assert.Equal(t, int64(0), inFlight)
 	assert.Equal(t, 30*time.Second, elapsed)
 
@@ -65,30 +64,9 @@ func TestIdleTrackerLastActivityUpdatesOnEachLifecycleEvent(t *testing.T) {
 	tracker.markStart()
 	tracker.markEnd()
 
-	seen, inFlight, elapsed = tracker.snapshot()
-	assert.True(t, seen)
+	inFlight, elapsed = tracker.snapshot()
 	assert.Equal(t, int64(0), inFlight)
 	assert.Equal(t, time.Duration(0), elapsed)
-}
-
-// TestIdleTrackerInitialSnapshotIsUnseen verifies that a fresh tracker
-// reports seen=false until the first markStart, which is what gates the
-// poller's idle-exit decision while the worker is warming up.
-func TestIdleTrackerInitialSnapshotIsUnseen(t *testing.T) {
-	clock := newFakeClock()
-	tracker := newIdleTracker(clock.Now)
-
-	clock.Advance(time.Hour)
-
-	seen, inFlight, _ := tracker.snapshot()
-	assert.False(t, seen, "fresh tracker must report seen=false")
-	assert.Equal(t, int64(0), inFlight)
-
-	tracker.markStart()
-	tracker.markEnd()
-
-	seen, _, _ = tracker.snapshot()
-	assert.True(t, seen, "after the first start, snapshot must report seen=true permanently")
 }
 
 // TestIdleTrackerInFlightCountReflectsConcurrent verifies that in-flight
@@ -101,17 +79,17 @@ func TestIdleTrackerInFlightCountReflectsConcurrent(t *testing.T) {
 	tracker.markStart()
 	tracker.markStart()
 
-	_, inFlight, _ := tracker.snapshot()
+	inFlight, _ := tracker.snapshot()
 	assert.Equal(t, int64(2), inFlight)
 
 	tracker.markEnd()
 
-	_, inFlight, _ = tracker.snapshot()
+	inFlight, _ = tracker.snapshot()
 	assert.Equal(t, int64(1), inFlight)
 
 	tracker.markEnd()
 
-	_, inFlight, _ = tracker.snapshot()
+	inFlight, _ = tracker.snapshot()
 	assert.Equal(t, int64(0), inFlight)
 }
 
@@ -132,10 +110,6 @@ func TestIdlePollerCancelsAfterIdleWindow(t *testing.T) {
 
 	poller := newIdlePoller(tracker, idleAfter, gauge, nil, cancel, slog.Default())
 
-	// Worker has processed a task; idle countdown begins from this end.
-	tracker.markStart()
-	tracker.markEnd()
-
 	// Tick before window elapses: no cancel, gauge counts down.
 	clock.Advance(2 * time.Minute)
 	assert.False(t, poller.evaluate())
@@ -147,40 +121,6 @@ func TestIdlePollerCancelsAfterIdleWindow(t *testing.T) {
 	assert.True(t, poller.evaluate())
 	assert.Equal(t, 1, cancelCalls)
 	assert.InDelta(t, 0, gaugeValue(t, reg), 0.001)
-}
-
-// TestIdlePollerHoldsWhileWarmingUp verifies that a worker that has not yet
-// seen any task does not idle-exit, regardless of how much wall-clock time
-// has elapsed since the worker started. The countdown only begins once the
-// first task has been observed (matches the operator-facing meaning of
-// "idle" — between jobs, not still warming up).
-func TestIdlePollerHoldsWhileWarmingUp(t *testing.T) {
-	const idleAfter = time.Minute
-
-	clock := newFakeClock()
-	tracker := newIdleTracker(clock.Now)
-
-	cancelCalls := 0
-	cancel := func() { cancelCalls++ }
-
-	reg := prometheus.NewRegistry()
-	gauge := registerIdleGauge(reg)
-
-	poller := newIdlePoller(tracker, idleAfter, gauge, nil, cancel, slog.Default())
-
-	// Far longer than idleAfter has passed, but the worker has never seen a
-	// task. The poller must not cancel; the gauge stays at idleAfter.
-	clock.Advance(time.Hour)
-	assert.False(t, poller.evaluate())
-	assert.Equal(t, 0, cancelCalls)
-	assert.InDelta(t, idleAfter.Seconds(), gaugeValue(t, reg), 0.001)
-
-	// First task arrives. After it ends and the window elapses, cancel fires.
-	tracker.markStart()
-	tracker.markEnd()
-	clock.Advance(2 * time.Minute)
-	assert.True(t, poller.evaluate())
-	assert.Equal(t, 1, cancelCalls)
 }
 
 // TestIdlePollerRearmsOnFreshStart verifies that an interleaved markStart
@@ -265,7 +205,7 @@ func TestIdleInterceptorActivityTracksLifecycle(t *testing.T) {
 	var seenInFlightInside int64
 
 	innerFn := func(_ context.Context, _ *interceptor.ExecuteActivityInput) (interface{}, error) {
-		_, seenInFlightInside, _ = tracker.snapshot()
+		seenInFlightInside, _ = tracker.snapshot()
 
 		return "result", wantErr
 	}
@@ -284,8 +224,7 @@ func TestIdleInterceptorActivityTracksLifecycle(t *testing.T) {
 	assert.ErrorIs(t, err, wantErr)
 	assert.Equal(t, int64(1), seenInFlightInside, "tracker must show in-flight while inner is executing")
 
-	seen, inFlight, elapsed := tracker.snapshot()
-	assert.True(t, seen, "tracker must have observed the activity start")
+	inFlight, elapsed := tracker.snapshot()
 	assert.Equal(t, int64(0), inFlight, "tracker must clear in-flight after inner returns")
 	assert.Equal(t, time.Duration(0), elapsed, "lastActivity must reflect the activity's end time")
 }
@@ -300,7 +239,7 @@ func TestIdleInterceptorWorkflowTracksLifecycle(t *testing.T) {
 	var seenInFlightInside int64
 
 	innerFn := func(_ workflow.Context, _ *interceptor.ExecuteWorkflowInput) (interface{}, error) {
-		_, seenInFlightInside, _ = tracker.snapshot()
+		seenInFlightInside, _ = tracker.snapshot()
 
 		return nil, nil
 	}
@@ -318,8 +257,7 @@ func TestIdleInterceptorWorkflowTracksLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), seenInFlightInside)
 
-	seen, inFlight, elapsed := tracker.snapshot()
-	assert.True(t, seen)
+	inFlight, elapsed := tracker.snapshot()
 	assert.Equal(t, int64(0), inFlight)
 	assert.Equal(t, time.Duration(0), elapsed)
 }
@@ -336,10 +274,6 @@ func TestIdleGaugeAbsentWhenRegistererNil(t *testing.T) {
 
 	cancelCalls := 0
 	poller := newIdlePoller(tracker, time.Minute, nil, nil, func() { cancelCalls++ }, slog.Default())
-
-	// Worker has done a task so the warmup gate is satisfied.
-	tracker.markStart()
-	tracker.markEnd()
 
 	// Should not panic even though gauge is nil.
 	clock.Advance(2 * time.Minute)
@@ -392,9 +326,6 @@ func TestIdlePollerRunCancelsViaTick(t *testing.T) {
 	cancel := func() { cancelCalls++ }
 
 	poller := newIdlePoller(tracker, idleAfter, nil, tickCh, cancel, slog.Default())
-
-	tracker.markStart()
-	tracker.markEnd()
 
 	done := make(chan struct{})
 

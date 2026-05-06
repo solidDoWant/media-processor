@@ -27,31 +27,26 @@ const (
 // task happened to start — so a task that outlives the idle window does not
 // cause an immediate exit the moment it returns.
 //
-// Idle-exit is gated on the worker having processed at least one task: a
-// freshly-started worker that has not yet seen any work stays alive
-// indefinitely. This avoids spuriously draining a pod that has just been
-// spawned (e.g. by KEDA) before its first task arrives, and matches the
-// operator-facing meaning of "idle" — the worker is between jobs, not still
-// warming up.
-//
 // The clock is injected so unit tests can advance time without sleeping.
 type idleTracker struct {
 	now func() time.Time
 
 	mu           sync.Mutex
 	inFlight     int64
-	seen         bool
 	lastActivity time.Time
 }
 
-// newIdleTracker returns an empty tracker. Idle-exit will not fire until the
-// first markStart records a task. When `now` is nil, time.Now is used.
+// newIdleTracker returns a tracker whose lastActivity is set to now() so the
+// idle window starts counting from worker startup. Operators choose
+// WORKER_IDLE_EXIT_AFTER large enough to cover the gap between worker start
+// and first task arrival in their environment. When `now` is nil, time.Now
+// is used.
 func newIdleTracker(now func() time.Time) *idleTracker {
 	if now == nil {
 		now = time.Now
 	}
 
-	return &idleTracker{now: now}
+	return &idleTracker{now: now, lastActivity: now()}
 }
 
 func (t *idleTracker) markStart() {
@@ -59,7 +54,6 @@ func (t *idleTracker) markStart() {
 	defer t.mu.Unlock()
 
 	t.inFlight++
-	t.seen = true
 	t.lastActivity = t.now()
 }
 
@@ -71,19 +65,14 @@ func (t *idleTracker) markEnd() {
 	t.lastActivity = t.now()
 }
 
-// snapshot returns whether the worker has ever seen a task, the current
-// in-flight count, and the elapsed time since the most recent task lifecycle
-// event, taken atomically. When seen is false, elapsed is meaningless and
-// callers must treat the worker as "still warming up" (do not idle-exit).
-func (t *idleTracker) snapshot() (seen bool, inFlight int64, elapsed time.Duration) {
+// snapshot returns the current in-flight count and the elapsed time since the
+// most recent task lifecycle event (or worker startup, before any task has
+// run), taken atomically.
+func (t *idleTracker) snapshot() (int64, time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if !t.seen {
-		return false, t.inFlight, 0
-	}
-
-	return true, t.inFlight, t.now().Sub(t.lastActivity)
+	return t.inFlight, t.now().Sub(t.lastActivity)
 }
 
 // idleInterceptor wraps activity and workflow execution to feed the tracker.
@@ -200,16 +189,13 @@ func (p *idlePoller) run(ctx context.Context) {
 
 // evaluate updates the gauge to the current remaining-seconds value and
 // returns true after triggering cancel on the first tick where the idle
-// window has elapsed with zero in-flight tasks AND the worker has processed
-// at least one task. A worker that has never seen a task is held at the
-// configured idleAfter (timer paused) until its first task arrives. A nil-but-
-// already-cancelled context is fine: callers can call cancel() multiple times
-// safely.
+// window has elapsed with zero in-flight tasks. A non-nil but already-
+// cancelled context is fine: callers can call cancel() multiple times safely.
 func (p *idlePoller) evaluate() bool {
-	seen, inFlight, elapsed := p.tracker.snapshot()
+	inFlight, elapsed := p.tracker.snapshot()
 
 	remaining := p.idleAfter
-	if seen && inFlight == 0 {
+	if inFlight == 0 {
 		remaining = p.idleAfter - elapsed
 		if remaining < 0 {
 			remaining = 0
@@ -220,7 +206,7 @@ func (p *idlePoller) evaluate() bool {
 		p.gauge.Set(remaining.Seconds())
 	}
 
-	if seen && inFlight == 0 && elapsed >= p.idleAfter {
+	if inFlight == 0 && elapsed >= p.idleAfter {
 		p.logger.Info("idle-exit window elapsed; initiating drain",
 			slog.Duration("idle_after", p.idleAfter),
 			slog.Duration("elapsed", elapsed),
