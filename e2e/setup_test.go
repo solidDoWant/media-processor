@@ -402,14 +402,7 @@ func verifyTranscodeWorkerIdleExit(ctx context.Context) error {
 			return fmt.Errorf("%s: status=%s", transcodeService, state.State.Status)
 		}
 
-		if state.State.ExitCode != 0 {
-			// Wrap as a non-poll error by returning early; pollUntil treats
-			// any non-nil return as "keep polling," but this condition will
-			// never recover since restart: "no" is set. Surface it via the
-			// outer err check after the loop instead.
-			return nil
-		}
-
+		// Container has exited; exit-code validation happens once below.
 		return nil
 	})
 	if exitErr != nil {
