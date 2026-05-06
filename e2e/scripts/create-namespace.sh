@@ -70,7 +70,7 @@ while :; do
 done
 
 echo "Creating search attributes for namespace '$NAMESPACE'..."
-SEARCH_ATTRIBUTES="MediaFilePath:Keyword MediaTitle:Text MediaType:Keyword MediaMappingName:Keyword MediaWatchRoot:Keyword"
+SEARCH_ATTRIBUTES="MediaFilePathSegments:KeywordList MediaTitle:Text MediaType:Keyword MediaMappingName:Keyword MediaWatchRoot:Keyword"
 attempt=1
 while :; do
   existing=$(temporal operator search-attribute list --namespace "$NAMESPACE" --address "$TEMPORAL_ADDRESS" 2>/dev/null || true)
