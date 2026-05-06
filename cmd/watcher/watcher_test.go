@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -1103,24 +1104,20 @@ func TestBuildWorkflowMemo(t *testing.T) {
 	}
 }
 
-// TestBuildSearchAttributes verifies that buildSearchAttributes produces typed
-// search attributes with the correct keys and values, using the basename for
-// MediaTitle and the original FilePath for MediaFilePath.
 func TestBuildSearchAttributes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name            string
 		input           mediatypes.MediaInput
-		wantFilePath    string
+		wantSegments    []string
 		wantTitle       string
 		wantMediaType   string
 		wantMappingName string
-		wantWatchRoot   string
 		wantNotRemote   string
 	}{
 		{
-			name: "movie with remote path",
+			name: "file directly under watch root",
 			input: mediatypes.MediaInput{
 				FilePath:         "/downloads/movies/movie.mkv",
 				MediaType:        medialib.MovieType,
@@ -1128,61 +1125,203 @@ func TestBuildSearchAttributes(t *testing.T) {
 				WatchRoot:        "/downloads/movies",
 				OutputRemotePath: "/remote/movies",
 			},
-			wantFilePath:    "/downloads/movies/movie.mkv",
+			wantSegments:    []string{"movie.mkv"},
 			wantTitle:       "movie.mkv",
 			wantMediaType:   string(medialib.MovieType),
 			wantMappingName: "movies",
-			wantWatchRoot:   "/downloads/movies",
 			wantNotRemote:   "/remote/movies",
 		},
 		{
-			name: "show type",
+			name: "file nested several directories under watch root",
 			input: mediatypes.MediaInput{
-				FilePath:    "/downloads/tv/S01E01.mkv",
+				FilePath:    "/downloads/tv/Show (2020)/Season 01/S01E01.mkv",
 				MediaType:   medialib.ShowType,
 				MappingName: "shows",
 				WatchRoot:   "/downloads/tv",
 			},
-			wantFilePath:    "/downloads/tv/S01E01.mkv",
+			wantSegments:    []string{"Show (2020)", "Season 01", "S01E01.mkv"},
 			wantTitle:       "S01E01.mkv",
 			wantMediaType:   string(medialib.ShowType),
 			wantMappingName: "shows",
-			wantWatchRoot:   "/downloads/tv",
+		},
+		{
+			name: "watch root prefix shared with file does not bleed into segments",
+			input: mediatypes.MediaInput{
+				FilePath:    "/media/input/usenet/Series/Show.Name-RELEASEGROUP/Show.Name-RELEASEGROUP/file.mkv",
+				MediaType:   medialib.ShowType,
+				MappingName: "usenet-shows",
+				WatchRoot:   "/media/input/usenet/Series",
+			},
+			wantSegments:    []string{"Show.Name-RELEASEGROUP", "Show.Name-RELEASEGROUP", "file.mkv"},
+			wantTitle:       "file.mkv",
+			wantMediaType:   string(medialib.ShowType),
+			wantMappingName: "usenet-shows",
+		},
+		{
+			name: "long mapping name is truncated",
+			input: mediatypes.MediaInput{
+				FilePath:    "/downloads/movies/movie.mkv",
+				MediaType:   medialib.MovieType,
+				MappingName: strings.Repeat("m", 256),
+				WatchRoot:   "/downloads/movies",
+			},
+			wantSegments:    []string{"movie.mkv"},
+			wantTitle:       "movie.mkv",
+			wantMediaType:   string(medialib.MovieType),
+			wantMappingName: strings.Repeat("m", maxKeywordValueRunes),
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			sa := buildSearchAttributes(tt.input)
+			sa := buildSearchAttributes(test.input)
 
-			fp, ok := sa.GetKeyword(mediaFilePathKey)
-			require.True(t, ok, "MediaFilePath should be present")
-			assert.Equal(t, tt.wantFilePath, fp)
+			segments, ok := sa.GetKeywordList(mediaFilePathSegmentsKey)
+			require.True(t, ok, "MediaFilePathSegments should be present")
+			assert.Equal(t, test.wantSegments, segments)
 
 			title, ok := sa.GetString(mediaTitleKey)
 			require.True(t, ok, "MediaTitle should be present")
-			assert.Equal(t, tt.wantTitle, title)
+			assert.Equal(t, test.wantTitle, title)
 
 			mt, ok := sa.GetKeyword(mediaTypeKey)
 			require.True(t, ok, "MediaType should be present")
-			assert.Equal(t, tt.wantMediaType, mt)
+			assert.Equal(t, test.wantMediaType, mt)
 
 			mn, ok := sa.GetKeyword(mediaMappingNameKey)
 			require.True(t, ok, "MediaMappingName should be present")
-			assert.Equal(t, tt.wantMappingName, mn)
+			assert.Equal(t, test.wantMappingName, mn)
 
-			wr, ok := sa.GetKeyword(mediaWatchRootKey)
-			require.True(t, ok, "MediaWatchRoot should be present")
-			assert.Equal(t, tt.wantWatchRoot, wr)
-
-			if tt.wantNotRemote != "" {
+			if test.wantNotRemote != "" {
 				untyped := sa.GetUntypedValues()
 				for _, v := range untyped {
-					assert.NotEqual(t, tt.wantNotRemote, v, "search attributes must not contain the output remote path")
+					assert.NotEqual(t, test.wantNotRemote, v, "search attributes must not contain the output remote path")
 				}
 			}
+		})
+	}
+}
+
+func TestPathSegments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected []string
+	}{
+		{
+			name:     "absolute path with empty leading segment dropped",
+			path:     "/a/b/c.mkv",
+			expected: []string{"a", "b", "c.mkv"},
+		},
+		{
+			name:     "trailing separator yields no empty tail segment",
+			path:     "/a/b/",
+			expected: []string{"a", "b"},
+		},
+		{
+			name:     "consecutive separators collapse",
+			path:     "/a//b///c.mkv",
+			expected: []string{"a", "b", "c.mkv"},
+		},
+		{
+			name:     "relative path without leading separator",
+			path:     "a/b/c.mkv",
+			expected: []string{"a", "b", "c.mkv"},
+		},
+		{
+			name:     "single filename",
+			path:     "movie.mkv",
+			expected: []string{"movie.mkv"},
+		},
+		{
+			name:     "empty path",
+			path:     "",
+			expected: []string{},
+		},
+		{
+			name:     "exactly 255 ASCII characters in a segment is preserved",
+			path:     "/" + strings.Repeat("a", 255) + "/file.mkv",
+			expected: []string{strings.Repeat("a", 255), "file.mkv"},
+		},
+		{
+			name:     "256 ASCII characters truncates to 255",
+			path:     "/" + strings.Repeat("a", 256) + "/file.mkv",
+			expected: []string{strings.Repeat("a", 255), "file.mkv"},
+		},
+		{
+			name:     "many short segments unaffected",
+			path:     "/media/input/usenet/Series/Show.Name.S01E01-RELEASEGROUP/Show.Name.S01E01-RELEASEGROUP/file.mkv",
+			expected: []string{"media", "input", "usenet", "Series", "Show.Name.S01E01-RELEASEGROUP", "Show.Name.S01E01-RELEASEGROUP", "file.mkv"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := pathSegments(test.path)
+			assert.Equal(t, test.expected, got)
+
+			for _, segment := range got {
+				assert.LessOrEqual(t, len([]rune(segment)), maxKeywordValueRunes,
+					"segment %q exceeds max rune length", segment)
+			}
+		})
+	}
+}
+
+func TestTruncateToRunes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		max      int
+		expected string
+	}{
+		{
+			name:     "ASCII shorter than max is returned unchanged",
+			input:    "hello",
+			max:      255,
+			expected: "hello",
+		},
+		{
+			name:     "ASCII exactly at max is returned unchanged",
+			input:    strings.Repeat("a", 255),
+			max:      255,
+			expected: strings.Repeat("a", 255),
+		},
+		{
+			name:     "ASCII over max is truncated by rune count",
+			input:    strings.Repeat("a", 300),
+			max:      255,
+			expected: strings.Repeat("a", 255),
+		},
+		{
+			name:     "multi-byte runes are not split",
+			input:    strings.Repeat("é", 300), // é is 2 bytes in UTF-8
+			max:      255,
+			expected: strings.Repeat("é", 255),
+		},
+		{
+			name:     "string fits in bytes but not byte-equal to runes is unchanged when under cap",
+			input:    "café",
+			max:      10,
+			expected: "café",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := truncateToRunes(test.input, test.max)
+			assert.Equal(t, test.expected, got)
+			assert.True(t, utf8.ValidString(got), "result must be valid UTF-8")
 		})
 	}
 }
