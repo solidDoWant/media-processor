@@ -94,10 +94,9 @@ func TestIdleTrackerInFlightCountReflectsConcurrent(t *testing.T) {
 	assert.Equal(t, int64(0), inFlight)
 }
 
-// TestIdlePollerCancelsAfterIdleWindow verifies the AC-1 / AC-2 happy path:
-// once elapsed >= idleAfter and inFlight == 0, the first poll tick triggers
-// cancel and run() returns. Earlier ticks (window not yet elapsed) only
-// update the gauge and return false.
+// TestIdlePollerCancelsAfterIdleWindow verifies that once elapsed >= idleAfter
+// and inFlight == 0, the first poll tick triggers cancel and run() returns.
+// Earlier ticks (window not yet elapsed) only update the gauge and return false.
 func TestIdlePollerCancelsAfterIdleWindow(t *testing.T) {
 	const idleAfter = 5 * time.Minute
 
@@ -125,9 +124,9 @@ func TestIdlePollerCancelsAfterIdleWindow(t *testing.T) {
 	assert.InDelta(t, 0, gaugeValue(t, reg), 0.001)
 }
 
-// TestIdlePollerRearmsOnFreshStart verifies the AC-2 rearm: an interleaved
-// markStart resets lastStart so the next idle window must start over from
-// the new start time.
+// TestIdlePollerRearmsOnFreshStart verifies that an interleaved markStart
+// resets lastActivity so the next idle window must start over from the new
+// activity timestamp.
 func TestIdlePollerRearmsOnFreshStart(t *testing.T) {
 	const idleAfter = 5 * time.Minute
 
@@ -156,9 +155,9 @@ func TestIdlePollerRearmsOnFreshStart(t *testing.T) {
 	assert.Equal(t, 1, cancelCalls)
 }
 
-// TestIdlePollerHoldsWhileInFlight verifies the AC-3 in-flight gate: even
-// once elapsed exceeds idleAfter, an in-flight task prevents cancel; once
-// the task ends and a fresh window elapses, cancel fires.
+// TestIdlePollerHoldsWhileInFlight verifies the in-flight gate: even once
+// elapsed exceeds idleAfter, an in-flight task prevents cancel; once the
+// task ends and a fresh window elapses, cancel fires.
 func TestIdlePollerHoldsWhileInFlight(t *testing.T) {
 	const idleAfter = 5 * time.Minute
 
@@ -232,8 +231,8 @@ func TestIdleInterceptorActivityTracksLifecycle(t *testing.T) {
 }
 
 // TestIdleInterceptorWorkflowTracksLifecycle verifies the workflow wrapper
-// updates the tracker on entry and exit (AC-5: workflow-task starts rearm
-// the timer just as activity starts do).
+// updates the tracker on entry and exit, so workflow-task starts rearm the
+// idle timer just as activity starts do.
 func TestIdleInterceptorWorkflowTracksLifecycle(t *testing.T) {
 	clock := newFakeClock()
 	tracker := newIdleTracker(clock.Now)
@@ -264,9 +263,9 @@ func TestIdleInterceptorWorkflowTracksLifecycle(t *testing.T) {
 	assert.Equal(t, time.Duration(0), elapsed)
 }
 
-// TestIdleGaugeAbsentWhenRegistererNil verifies AC-6: when the metrics
-// provider is in disabled mode (nil registerer), no gauge is constructed and
-// the poller tolerates the nil gauge.
+// TestIdleGaugeAbsentWhenRegistererNil verifies that when the metrics
+// provider is in disabled mode (nil registerer), no gauge is constructed
+// and the poller tolerates the nil gauge.
 func TestIdleGaugeAbsentWhenRegistererNil(t *testing.T) {
 	gauge := registerIdleGauge(nil)
 	assert.Nil(t, gauge)
@@ -372,10 +371,10 @@ func gaugeValue(t *testing.T, reg *prometheus.Registry) float64 {
 	return 0
 }
 
-// TestIdleGaugeRegistered verifies AC-6: when called with a real registry,
-// the gauge is registered with the documented name and a non-empty help
-// string. (The "absent when disabled" half is covered by main.go's gating
-// and TestIdleGaugeAbsentWhenRegistererNil above.)
+// TestIdleGaugeRegistered verifies that when registerIdleGauge is called
+// with a real registry, the gauge is registered with the documented name
+// and a non-empty help string. (The "absent when disabled" half is covered
+// by main.go's gating and TestIdleGaugeAbsentWhenRegistererNil above.)
 func TestIdleGaugeRegistered(t *testing.T) {
 	reg := prometheus.NewRegistry()
 

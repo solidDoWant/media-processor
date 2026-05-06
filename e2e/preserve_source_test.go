@@ -19,10 +19,11 @@ import (
 // waits for the probe step to reject it and the record_invalid step to write the
 // sentinel, then confirms the watcher does not dispatch it a second time.
 func TestPreserveSourceSentinel(t *testing.T) {
-	// Run alongside the radarr and sonarr happy paths so the worker pools see
-	// continuous work and do not idle-exit between tests. With
-	// WORKER_IDLE_EXIT_AFTER=5s in compose, a sequential run would let the
-	// workers terminate during the inter-test gap and break later tests.
+	// Run alongside the radarr and sonarr happy paths. This test does not
+	// involve a transcode (the worker rejects the dummy file at the probe
+	// step) so it does not interact with the transcode pool's idle-exit
+	// behavior, but parallel execution lets it overlap with the long
+	// transcode tests rather than serialising the whole suite behind them.
 	t.Parallel()
 
 	srcFile := filepath.Join(downloadsDir, "preserve-source", "not-a-video.txt")

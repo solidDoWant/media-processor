@@ -133,7 +133,7 @@ func registerIdleGauge(reg prometheus.Registerer) prometheus.Gauge {
 
 	g := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: idleGaugeName,
-		Help: "Seconds remaining before the worker initiates an idle-exit drain. Held at the configured WORKER_IDLE_EXIT_AFTER value while activity is in flight.",
+		Help: "Seconds remaining before the worker initiates an idle-exit drain. Held at the configured WORKER_IDLE_EXIT_AFTER value while activity or workflow-task work is in flight.",
 	})
 
 	reg.MustRegister(g)

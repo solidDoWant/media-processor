@@ -23,10 +23,11 @@ import (
 // without renewal in 1985) with 6-minute episodes. The BBB fixture at ~9:56
 // exceeds Sonarr's 50%-of-episode-runtime sample check (threshold: 3 min).
 func TestSonarrHappyPath(t *testing.T) {
-	// Run alongside the radarr and preserve-source happy paths so the worker
-	// pools see continuous work and do not idle-exit between tests. With
-	// WORKER_IDLE_EXIT_AFTER=5s in compose, a sequential run would let the
-	// workers terminate during the inter-test gap and break later tests.
+	// Run alongside the radarr happy path so the transcode worker pool sees
+	// back-to-back transcodes and does not idle-exit between tests. The
+	// transcode pool is configured with WORKER_IDLE_EXIT_AFTER=5s in compose;
+	// a sequential run would let it drain after the radarr transcode and
+	// leave the sonarr transcode without a worker to pick it up.
 	t.Parallel()
 
 	sonarr := newArrClient(sonarrBase, sonarrAPIKey)

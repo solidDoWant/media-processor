@@ -172,6 +172,10 @@ func loadConfig() (workerConfig, error) {
 		return workerConfig{}, err
 	}
 
+	if idleExitAfter < 0 {
+		return workerConfig{}, fmt.Errorf("WORKER_IDLE_EXIT_AFTER must be >= 0 (got %q)", os.Getenv("WORKER_IDLE_EXIT_AFTER"))
+	}
+
 	cfg.IdleExitAfter = idleExitAfter
 
 	return cfg, nil

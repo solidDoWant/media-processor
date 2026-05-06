@@ -354,38 +354,74 @@ func TestLoadTranscodeLimiterConfigOverrides(t *testing.T) {
 
 // TestLoadConfigIdleExitAfter verifies that loadConfig parses
 // WORKER_IDLE_EXIT_AFTER, leaves the field zero when unset (idle-exit
-// disabled), accepts a valid duration, and surfaces a fail-fast error that
-// names the variable when the value is unparseable.
+// disabled), accepts a valid positive duration, rejects negative values,
+// and surfaces a fail-fast error that names the variable when the value is
+// unparseable.
 func TestLoadConfigIdleExitAfter(t *testing.T) {
 	t.Setenv("RADARR_URL", "http://radarr.local")
 	t.Setenv("RADARR_API_KEY", "k")
 	t.Setenv("SONARR_URL", "http://sonarr.local")
 	t.Setenv("SONARR_API_KEY", "k")
 
-	t.Run("unset disables", func(t *testing.T) {
-		t.Setenv("WORKER_IDLE_EXIT_AFTER", "")
+	tests := []struct {
+		name          string
+		envValue      string
+		expected      time.Duration
+		errFunc       require.ErrorAssertionFunc
+		errSubstrings []string
+	}{
+		{
+			name:     "unset disables",
+			envValue: "",
+			expected: 0,
+		},
+		{
+			name:     "zero disables",
+			envValue: "0s",
+			expected: 0,
+		},
+		{
+			name:     "valid positive duration",
+			envValue: "5m",
+			expected: 5 * time.Minute,
+		},
+		{
+			name:          "negative value rejected",
+			envValue:      "-5s",
+			errFunc:       require.Error,
+			errSubstrings: []string{"WORKER_IDLE_EXIT_AFTER", "-5s"},
+		},
+		{
+			name:          "unparseable value rejected",
+			envValue:      "not-a-duration",
+			errFunc:       require.Error,
+			errSubstrings: []string{"WORKER_IDLE_EXIT_AFTER", "not-a-duration"},
+		},
+	}
 
-		cfg, err := loadConfig()
-		require.NoError(t, err)
-		assert.Equal(t, time.Duration(0), cfg.IdleExitAfter)
-	})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("WORKER_IDLE_EXIT_AFTER", test.envValue)
 
-	t.Run("valid duration", func(t *testing.T) {
-		t.Setenv("WORKER_IDLE_EXIT_AFTER", "5m")
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
 
-		cfg, err := loadConfig()
-		require.NoError(t, err)
-		assert.Equal(t, 5*time.Minute, cfg.IdleExitAfter)
-	})
+			cfg, err := loadConfig()
+			errFunc(t, err)
 
-	t.Run("invalid duration fails fast", func(t *testing.T) {
-		t.Setenv("WORKER_IDLE_EXIT_AFTER", "not-a-duration")
+			if err != nil {
+				for _, sub := range test.errSubstrings {
+					assert.Contains(t, err.Error(), sub)
+				}
 
-		_, err := loadConfig()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "WORKER_IDLE_EXIT_AFTER")
-		assert.Contains(t, err.Error(), "not-a-duration")
-	})
+				return
+			}
+
+			assert.Equal(t, test.expected, cfg.IdleExitAfter)
+		})
+	}
 }
 
 func TestParseTimeout(t *testing.T) {

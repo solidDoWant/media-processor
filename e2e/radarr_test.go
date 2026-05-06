@@ -19,10 +19,11 @@ import (
 // imported, the original .mp4 source file has been deleted, and the output
 // file has the expected media properties.
 func TestRadarrHappyPath(t *testing.T) {
-	// Run alongside the sonarr and preserve-source happy paths so the worker
-	// pools see continuous work and do not idle-exit between tests. With
-	// WORKER_IDLE_EXIT_AFTER=5s in compose, a sequential run would let the
-	// workers terminate during the inter-test gap and break later tests.
+	// Run alongside the sonarr happy path so the transcode worker pool sees
+	// back-to-back transcodes and does not idle-exit between tests. The
+	// transcode pool is configured with WORKER_IDLE_EXIT_AFTER=5s in compose;
+	// a sequential run would let it drain after the radarr transcode and
+	// leave the sonarr transcode without a worker to pick it up.
 	t.Parallel()
 
 	radarr := newArrClient(radarrBase, radarrAPIKey)
