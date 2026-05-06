@@ -168,12 +168,12 @@ func streamAppLogs(ctx context.Context) {
 
 // startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
 // The returned readyCh is closed once both services are seen healthy in the
-// same poll. After ready, only the watcher is monitored for ongoing health —
-// the worker pools are expected to drain themselves via WORKER_IDLE_EXIT_AFTER
-// once the suite stops dispatching work, so a worker /readyz failure post-ready
-// is normal and must not be reported as a degradation. The returned failCh
-// receives at most one error if the watcher health subsequently degrades.
-// Cancel ctx to stop the goroutine.
+// same poll. After ready, the watcher and all non-idle-exit worker pools are
+// monitored for ongoing health — pools with idleExitEnabled are excluded
+// because they are expected to drain and exit cleanly once the suite stops
+// dispatching work, so their /readyz endpoint going away is normal. The
+// returned failCh receives at most one error if health subsequently degrades
+// in a monitored service. Cancel ctx to stop the goroutine.
 func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-chan error) {
 	ready := make(chan struct{})
 	fail := make(chan error, 1)
@@ -187,17 +187,17 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
 
-			if !everReady {
-				workerErrs := make(map[string]error, len(workerPools))
-				anyWorkerErr := false
+			workerErrs := make(map[string]error, len(workerPools))
+			anyWorkerErr := false
 
-				for _, pool := range workerPools {
-					if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
-						workerErrs[pool.serviceName] = err
-						anyWorkerErr = true
-					}
+			for _, pool := range workerPools {
+				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
+					workerErrs[pool.serviceName] = err
+					anyWorkerErr = true
 				}
+			}
 
+			if !everReady {
 				if watcherErr == nil && !anyWorkerErr {
 					everReady = true
 
@@ -207,13 +207,29 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				return
 			}
 
-			if watcherErr == nil {
+			// Post-ready: report degradation in watcher or non-idle-exit workers.
+			var msgs []string
+			if watcherErr != nil {
+				msgs = append(msgs, "watcher: "+watcherErr.Error())
+			}
+
+			for _, pool := range workerPools {
+				if pool.idleExitEnabled {
+					continue
+				}
+
+				if err, ok := workerErrs[pool.serviceName]; ok {
+					msgs = append(msgs, pool.serviceName+": "+err.Error())
+				}
+			}
+
+			if len(msgs) == 0 {
 				return
 			}
 
-			// Watcher degraded after the initial ready signal — report once.
+			// Health degraded after the initial ready signal — report once.
 			select {
-			case fail <- fmt.Errorf("app health degraded: watcher: %s", watcherErr.Error()):
+			case fail <- fmt.Errorf("app health degraded: %s", strings.Join(msgs, "; ")):
 			default:
 			}
 		}
@@ -355,13 +371,15 @@ func inspectWorkerState(ctx context.Context, serviceName string) (containerInspe
 	return inspected[0], nil
 }
 
-// waitForWorkersExited polls every worker pool's compose service until each
+// waitForWorkersExited polls idle-exit-enabled worker pools until each
 // container has reached "exited" status with code 0, or the deadline elapses.
 // Called after m.Run() to verify the WORKER_IDLE_EXIT_AFTER drain path runs
-// to completion when no more work is dispatched. The deadline (2 min) covers
-// the worst-case 5s idle window plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus
-// a generous buffer for staggered worker idle times. Returns an error naming
-// any pool that did not exit cleanly within the deadline.
+// to completion when no more work is dispatched. Only pools with
+// idleExitEnabled=true are checked; pools that run indefinitely (restart:
+// on-failure, no idle-exit timeout) are skipped. The deadline covers the
+// worst-case 5s idle window plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus a
+// generous buffer. Returns an error naming any pool that did not exit cleanly
+// within the deadline.
 func waitForWorkersExited(ctx context.Context) error {
 	deadline := 2 * time.Minute
 
@@ -372,6 +390,10 @@ func waitForWorkersExited(ctx context.Context) error {
 		var unfinished []string
 
 		for _, pool := range workerPools {
+			if !pool.idleExitEnabled {
+				continue
+			}
+
 			state, err := inspectWorkerState(pollCtx, pool.serviceName)
 			if err != nil {
 				unfinished = append(unfinished, fmt.Sprintf("%s: %v", pool.serviceName, err))

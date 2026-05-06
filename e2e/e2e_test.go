@@ -64,20 +64,25 @@ const (
 )
 
 // workerPool bundles the docker-compose service name, /readyz base URL, and
-// /metrics endpoint for a single worker container. Storing the three pieces
-// together (rather than as parallel slices) keeps them from drifting out of
-// sync and removes the need for index-keyed correlation in the helpers.
+// /metrics endpoint for a single worker container. idleExitEnabled marks pools
+// that are configured with WORKER_IDLE_EXIT_AFTER and restart: "no"; these are
+// expected to exit cleanly after idle and are excluded from post-ready health
+// monitoring (an exited container's /readyz will fail, which is expected).
+// Storing all pieces together (rather than as parallel slices) keeps them from
+// drifting out of sync and removes the need for index-keyed correlation in the
+// helpers.
 type workerPool struct {
-	serviceName string
-	healthBase  string
-	metricsAddr string
+	serviceName     string
+	healthBase      string
+	metricsAddr     string
+	idleExitEnabled bool
 }
 
 //nolint:gochecknoglobals // immutable metadata describing the worker pools.
 var workerPools = []workerPool{
-	{"worker-workflow", workerWorkflowHealthBase, workerWorkflowMetricsAddr},
-	{"worker-transcode", workerTranscodeHealthBase, workerTranscodeMetricsAddr},
-	{"worker-rest", workerRestHealthBase, workerRestMetricsAddr},
+	{"worker-workflow", workerWorkflowHealthBase, workerWorkflowMetricsAddr, false},
+	{"worker-transcode", workerTranscodeHealthBase, workerTranscodeMetricsAddr, true},
+	{"worker-rest", workerRestHealthBase, workerRestMetricsAddr, false},
 }
 
 // log is a package-level slog.Logger tagged with source="e2e" so test-harness
@@ -232,18 +237,18 @@ func run(m *testing.M) error {
 	default:
 	}
 
-	// Verify the worker pools drained themselves via WORKER_IDLE_EXIT_AFTER
-	// once the suite stopped dispatching work. Each pool runs with restart:
-	// "no" in compose, so a clean idle-exit must produce an "exited" state
-	// with code 0; restart loops would mask a regression here.
+	// Verify the transcode worker drained itself via WORKER_IDLE_EXIT_AFTER
+	// once the suite stopped dispatching work. It runs with restart: "no" in
+	// compose, so a clean idle-exit must produce an "exited" state with code
+	// 0; a restart loop would mask a regression here.
 	exitCtx, exitCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer exitCancel()
 
 	exitErr := waitForWorkersExited(exitCtx)
 	if exitErr != nil {
-		log.Error("worker pools did not idle-exit cleanly", "error", exitErr)
+		log.Error("transcode worker did not idle-exit cleanly", "error", exitErr)
 	} else {
-		log.Info("worker pools idle-exited cleanly")
+		log.Info("transcode worker idle-exited cleanly")
 	}
 
 	if code != 0 {
