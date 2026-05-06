@@ -59,6 +59,12 @@ These metrics describe the GPU-aware Temporal slot supplier that gates transcode
 | ------------------------------- | ----- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `media_worker_activity_enabled` | gauge | `activity`| `1` if this pod has the named activity enabled, `0` otherwise. One series per known activity. Use `sum by (activity) (media_worker_activity_enabled == 1)` for per-activity pod counts. |
 
+`media_worker_idle_exit_seconds_remaining` is emitted **only when `WORKER_IDLE_EXIT_AFTER` is set to a positive duration** (see [configuration.md](configuration.md#worker)). On workers where the feature is disabled, the gauge is not registered.
+
+| Metric                                     | Type  | Unit    | Labels | Description                                                                                                                                                                                                                       |
+| ------------------------------------------ | ----- | ------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_worker_idle_exit_seconds_remaining` | gauge | seconds | —      | Seconds remaining before the worker initiates an idle-exit drain. Held at the configured `WORKER_IDLE_EXIT_AFTER` value while activity- or workflow-task work is in flight (the timer is paused). Reaches `0` immediately before drain. |
+
 ### Worker — Temporal SDK
 
 The Temporal Go SDK emits its own set of counters and histograms onto the same `/metrics` endpoint. A few that are especially useful operationally:

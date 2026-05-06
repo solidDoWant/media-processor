@@ -23,6 +23,12 @@ import (
 // without renewal in 1985) with 6-minute episodes. The BBB fixture at ~9:56
 // exceeds Sonarr's 50%-of-episode-runtime sample check (threshold: 3 min).
 func TestSonarrHappyPath(t *testing.T) {
+	// Run alongside the radarr and preserve-source happy paths so the worker
+	// pools see continuous work and do not idle-exit between tests. With
+	// WORKER_IDLE_EXIT_AFTER=5s in compose, a sequential run would let the
+	// workers terminate during the inter-test gap and break later tests.
+	t.Parallel()
+
 	sonarr := newArrClient(sonarrBase, sonarrAPIKey)
 
 	// Include the year so Sonarr's title parser resolves "Colonel Bleep" with

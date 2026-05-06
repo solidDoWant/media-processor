@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -166,9 +167,13 @@ func streamAppLogs(ctx context.Context) {
 }
 
 // startHealthMonitor polls the watcher and worker /readyz endpoints every 3s.
-// The returned readyCh is closed once both services are seen healthy in the same
-// poll. The returned failCh receives at most one error if health subsequently
-// degrades after the initial ready signal. Cancel ctx to stop the goroutine.
+// The returned readyCh is closed once both services are seen healthy in the
+// same poll. After ready, only the watcher is monitored for ongoing health —
+// the worker pools are expected to drain themselves via WORKER_IDLE_EXIT_AFTER
+// once the suite stops dispatching work, so a worker /readyz failure post-ready
+// is normal and must not be reported as a degradation. The returned failCh
+// receives at most one error if the watcher health subsequently degrades.
+// Cancel ctx to stop the goroutine.
 func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-chan error) {
 	ready := make(chan struct{})
 	fail := make(chan error, 1)
@@ -182,18 +187,18 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 		poll := func() {
 			watcherErr := checkHTTP(watcherHealthBase + "/readyz")
 
-			workerErrs := make(map[string]error, len(workerPools))
-			anyWorkerErr := false
+			if !everReady {
+				workerErrs := make(map[string]error, len(workerPools))
+				anyWorkerErr := false
 
-			for _, pool := range workerPools {
-				if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
-					workerErrs[pool.serviceName] = err
-					anyWorkerErr = true
+				for _, pool := range workerPools {
+					if err := checkHTTP(pool.healthBase + "/readyz"); err != nil {
+						workerErrs[pool.serviceName] = err
+						anyWorkerErr = true
+					}
 				}
-			}
 
-			if watcherErr == nil && !anyWorkerErr {
-				if !everReady {
+				if watcherErr == nil && !anyWorkerErr {
 					everReady = true
 
 					close(ready)
@@ -202,24 +207,13 @@ func startHealthMonitor(ctx context.Context) (readyCh <-chan struct{}, failCh <-
 				return
 			}
 
-			if !everReady {
+			if watcherErr == nil {
 				return
 			}
 
-			// Health degraded after the initial ready signal — report once.
-			var msgs []string
-			if watcherErr != nil {
-				msgs = append(msgs, "watcher: "+watcherErr.Error())
-			}
-
-			for _, pool := range workerPools {
-				if err, ok := workerErrs[pool.serviceName]; ok {
-					msgs = append(msgs, pool.serviceName+": "+err.Error())
-				}
-			}
-
+			// Watcher degraded after the initial ready signal — report once.
 			select {
-			case fail <- fmt.Errorf("app health degraded: %s", strings.Join(msgs, "; ")):
+			case fail <- fmt.Errorf("app health degraded: watcher: %s", watcherErr.Error()):
 			default:
 			}
 		}
@@ -311,6 +305,97 @@ func checkTemporal(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ---- worker idle-exit verification --------------------------------------
+
+// containerInspectState mirrors the subset of `docker inspect` State output
+// the suite cares about. Only Status and ExitCode are read; the rest of the
+// fields are deliberately ignored.
+type containerInspectState struct {
+	State struct {
+		Status   string `json:"Status"`
+		ExitCode int    `json:"ExitCode"`
+	} `json:"State"`
+}
+
+// inspectWorkerState looks up the container ID of the named compose service
+// and returns its parsed State. Returns an error wrapping "no container" when
+// compose has no record of the service (e.g. the container never started).
+func inspectWorkerState(ctx context.Context, serviceName string) (containerInspectState, error) {
+	psCmd := exec.CommandContext(ctx, "docker", composeArgs("ps", "-aq", serviceName)...)
+	psCmd.Env = composeEnv()
+
+	out, err := psCmd.Output()
+	if err != nil {
+		return containerInspectState{}, fmt.Errorf("compose ps %s: %w", serviceName, err)
+	}
+
+	containerID := strings.TrimSpace(string(out))
+	if containerID == "" {
+		return containerInspectState{}, fmt.Errorf("no container for service %q", serviceName)
+	}
+
+	inspectCmd := exec.CommandContext(ctx, "docker", "inspect", containerID)
+
+	raw, err := inspectCmd.Output()
+	if err != nil {
+		return containerInspectState{}, fmt.Errorf("docker inspect %s: %w", containerID, err)
+	}
+
+	var inspected []containerInspectState
+	if err := json.Unmarshal(raw, &inspected); err != nil {
+		return containerInspectState{}, fmt.Errorf("parse docker inspect output for %s: %w", containerID, err)
+	}
+
+	if len(inspected) == 0 {
+		return containerInspectState{}, fmt.Errorf("docker inspect returned no entries for %s", containerID)
+	}
+
+	return inspected[0], nil
+}
+
+// waitForWorkersExited polls every worker pool's compose service until each
+// container has reached "exited" status with code 0, or the deadline elapses.
+// Called after m.Run() to verify the WORKER_IDLE_EXIT_AFTER drain path runs
+// to completion when no more work is dispatched. The deadline (2 min) covers
+// the worst-case 5s idle window plus the 30s METRICS_SCRAPE_WAIT_TIMEOUT plus
+// a generous buffer for staggered worker idle times. Returns an error naming
+// any pool that did not exit cleanly within the deadline.
+func waitForWorkersExited(ctx context.Context) error {
+	deadline := 2 * time.Minute
+
+	pollCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	return pollUntil(pollCtx, 2*time.Second, func() error {
+		var unfinished []string
+
+		for _, pool := range workerPools {
+			state, err := inspectWorkerState(pollCtx, pool.serviceName)
+			if err != nil {
+				unfinished = append(unfinished, fmt.Sprintf("%s: %v", pool.serviceName, err))
+
+				continue
+			}
+
+			if state.State.Status != "exited" {
+				unfinished = append(unfinished, fmt.Sprintf("%s: status=%s", pool.serviceName, state.State.Status))
+
+				continue
+			}
+
+			if state.State.ExitCode != 0 {
+				return fmt.Errorf("worker %s exited with non-zero code %d", pool.serviceName, state.State.ExitCode)
+			}
+		}
+
+		if len(unfinished) > 0 {
+			return fmt.Errorf("workers not yet exited: %s", strings.Join(unfinished, "; "))
+		}
+
+		return nil
+	})
 }
 
 // ---- polling helpers ----------------------------------------------------

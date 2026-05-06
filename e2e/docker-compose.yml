@@ -104,10 +104,18 @@ services:
   # activity queue, and one polls every other activity queue. Together they
   # cover end-to-end execution while proving each piece is reachable from a
   # different process.
+  # All three worker pools idle-exit after 5s of no activity- or workflow-task
+  # starts so the e2e suite can observe the KEDA-pattern drain path end-to-end.
+  # restart: "no" means an idle exit is not respawned by Docker; the suite
+  # asserts each container reaches "exited" status with code 0 in
+  # waitForWorkersExited (e2e_test.go). METRICS_SCRAPE_WAIT_TIMEOUT is held at
+  # 30s (vs the 60s default) so the post-drain scrape gate is short enough to
+  # keep the suite responsive while still leaving room for tests to fetch
+  # /metrics in their post-completion assertions before the worker exits.
   worker-workflow:
     image: worker:latest
     pull_policy: never
-    restart: on-failure
+    restart: "no"
     profiles:
       - app
     user: "${UID}:${GID}"
@@ -124,6 +132,8 @@ services:
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: media-processor-e2e
       WORKER_ACTIVITIES: workflow
+      WORKER_IDLE_EXIT_AFTER: "5s"
+      METRICS_SCRAPE_WAIT_TIMEOUT: "30s"
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878
@@ -138,7 +148,7 @@ services:
   worker-transcode:
     image: worker:latest
     pull_policy: never
-    restart: on-failure
+    restart: "no"
     profiles:
       - app
     user: "${UID}:${GID}"
@@ -158,6 +168,8 @@ services:
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: media-processor-e2e
       WORKER_ACTIVITIES: transcode
+      WORKER_IDLE_EXIT_AFTER: "5s"
+      METRICS_SCRAPE_WAIT_TIMEOUT: "30s"
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878
@@ -172,7 +184,7 @@ services:
   worker-rest:
     image: worker:latest
     pull_policy: never
-    restart: on-failure
+    restart: "no"
     profiles:
       - app
     user: "${UID}:${GID}"
@@ -189,6 +201,8 @@ services:
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: media-processor-e2e
       WORKER_ACTIVITIES: all,!workflow,!transcode
+      WORKER_IDLE_EXIT_AFTER: "5s"
+      METRICS_SCRAPE_WAIT_TIMEOUT: "30s"
       METRICS_ADDR: ":9090"
       HEALTH_ADDR: ":9091"
       RADARR_URL: http://radarr:7878

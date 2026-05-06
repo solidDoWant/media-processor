@@ -8,9 +8,11 @@ import (
 	"os/signal"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/solidDoWant/media-processor/pkg/health"
@@ -40,6 +42,11 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 	if err != nil {
 		return err
 	}
+
+	// Derive a cancellable child context so the idle-exit poller can trigger
+	// the same drain path as SIGTERM by cancelling it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	logging.Setup(cfg.LogLevel)
 
@@ -97,7 +104,25 @@ func run(ctx context.Context, interruptCh <-chan interface{}) error {
 		defer transcodeRuntime.stop()
 	}
 
-	started, err := startWorkers(temporalClient, activities, cfg, transcodeRuntime)
+	var workerInterceptors []interceptor.WorkerInterceptor
+
+	if cfg.IdleExitAfter > 0 {
+		tracker := newIdleTracker(nil)
+		workerInterceptors = append(workerInterceptors, newIdleInterceptor(tracker))
+
+		gauge := registerIdleGauge(metricsProvider.PrometheusRegisterer())
+
+		ticker := time.NewTicker(idlePollInterval)
+		defer ticker.Stop()
+
+		poller := newIdlePoller(tracker, cfg.IdleExitAfter, gauge, ticker.C, cancel, slog.Default())
+
+		go poller.run(ctx)
+
+		slog.InfoContext(ctx, "idle-exit enabled", slog.Duration("idle_after", cfg.IdleExitAfter))
+	}
+
+	started, err := startWorkers(temporalClient, activities, cfg, transcodeRuntime, workerInterceptors)
 	if err != nil {
 		return err
 	}
@@ -157,10 +182,13 @@ type startedWorker struct {
 // SlotSupplier supplied by transcodeRuntime; other tokens use Temporal's
 // default tuner. If any Worker fails to start, already-started Workers are
 // stopped and the error is returned.
-func startWorkers(c client.Client, activities *media.Activities, cfg workerConfig, transcodeRuntime *transcodeLimiterRuntime) ([]startedWorker, error) {
+func startWorkers(c client.Client, activities *media.Activities, cfg workerConfig, transcodeRuntime *transcodeLimiterRuntime, interceptors []interceptor.WorkerInterceptor) ([]startedWorker, error) {
 	started := make([]startedWorker, 0, len(cfg.EnabledTokens))
 
-	baseOpts := worker.Options{WorkerStopTimeout: cfg.WorkerStopTimeout}
+	baseOpts := worker.Options{
+		WorkerStopTimeout: cfg.WorkerStopTimeout,
+		Interceptors:      interceptors,
+	}
 
 	for _, token := range cfg.EnabledTokens {
 		var (

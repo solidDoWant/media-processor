@@ -352,6 +352,42 @@ func TestLoadTranscodeLimiterConfigOverrides(t *testing.T) {
 	assert.Equal(t, 10, cfg.SmoothingWindow)
 }
 
+// TestLoadConfigIdleExitAfter verifies that loadConfig parses
+// WORKER_IDLE_EXIT_AFTER, leaves the field zero when unset (idle-exit
+// disabled), accepts a valid duration, and surfaces a fail-fast error that
+// names the variable when the value is unparseable.
+func TestLoadConfigIdleExitAfter(t *testing.T) {
+	t.Setenv("RADARR_URL", "http://radarr.local")
+	t.Setenv("RADARR_API_KEY", "k")
+	t.Setenv("SONARR_URL", "http://sonarr.local")
+	t.Setenv("SONARR_API_KEY", "k")
+
+	t.Run("unset disables", func(t *testing.T) {
+		t.Setenv("WORKER_IDLE_EXIT_AFTER", "")
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(0), cfg.IdleExitAfter)
+	})
+
+	t.Run("valid duration", func(t *testing.T) {
+		t.Setenv("WORKER_IDLE_EXIT_AFTER", "5m")
+
+		cfg, err := loadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 5*time.Minute, cfg.IdleExitAfter)
+	})
+
+	t.Run("invalid duration fails fast", func(t *testing.T) {
+		t.Setenv("WORKER_IDLE_EXIT_AFTER", "not-a-duration")
+
+		_, err := loadConfig()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WORKER_IDLE_EXIT_AFTER")
+		assert.Contains(t, err.Error(), "not-a-duration")
+	})
+}
+
 func TestParseTimeout(t *testing.T) {
 	tests := []struct {
 		name       string

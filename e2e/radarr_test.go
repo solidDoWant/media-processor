@@ -19,6 +19,12 @@ import (
 // imported, the original .mp4 source file has been deleted, and the output
 // file has the expected media properties.
 func TestRadarrHappyPath(t *testing.T) {
+	// Run alongside the sonarr and preserve-source happy paths so the worker
+	// pools see continuous work and do not idle-exit between tests. With
+	// WORKER_IDLE_EXIT_AFTER=5s in compose, a sequential run would let the
+	// workers terminate during the inter-test gap and break later tests.
+	t.Parallel()
+
 	radarr := newArrClient(radarrBase, radarrAPIKey)
 
 	const releaseTitle = "Big.Buck.Bunny.2008.1080p.WEB-DL"

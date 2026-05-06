@@ -232,9 +232,23 @@ func run(m *testing.M) error {
 	default:
 	}
 
-	if code != 0 {
-		return errors.Join(fmt.Errorf("test suite failed (exit code %d)", code), healthErr)
+	// Verify the worker pools drained themselves via WORKER_IDLE_EXIT_AFTER
+	// once the suite stopped dispatching work. Each pool runs with restart:
+	// "no" in compose, so a clean idle-exit must produce an "exited" state
+	// with code 0; restart loops would mask a regression here.
+	exitCtx, exitCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer exitCancel()
+
+	exitErr := waitForWorkersExited(exitCtx)
+	if exitErr != nil {
+		log.Error("worker pools did not idle-exit cleanly", "error", exitErr)
+	} else {
+		log.Info("worker pools idle-exited cleanly")
 	}
 
-	return healthErr
+	if code != 0 {
+		return errors.Join(fmt.Errorf("test suite failed (exit code %d)", code), healthErr, exitErr)
+	}
+
+	return errors.Join(healthErr, exitErr)
 }
