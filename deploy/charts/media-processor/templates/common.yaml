@@ -172,6 +172,12 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
    TriggerAuthentication helper consumes; it stays empty when keda.tls is
    disabled or no cert references are configured. */}}
 {{- $kedaTLSEnabled := .Values.config.temporal.keda.tls.enabled -}}
+{{- $kedaTLSServerName := "" -}}
+{{- $kedaTLSDisableHostVerification := false -}}
+{{- if $kedaTLSEnabled -}}
+  {{- $kedaTLSServerName = .Values.config.temporal.keda.tls.serverName | default "" -}}
+  {{- $kedaTLSDisableHostVerification = .Values.config.temporal.keda.tls.disableHostVerification | default false -}}
+{{- end -}}
 {{- $kedaTLSEntries := list -}}
 
 {{- $kedaClientCertSecret := .Values.config.temporal.keda.tls.clientCertificate.secretName | default "" -}}
@@ -868,13 +874,31 @@ does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
    byte-identical to pre-change: with no scaledjob controllers, none of the
    KEDA-related validation, Secret materialisation, or resource emission
    below executes. */}}
-{{- if $scaledjobControllers -}}
+{{- /* Filter $scaledjobControllers to those that are actually enabled.
+     bjw-s' enabled-template strings ("{{ .Values... }}") are evaluated
+     here with the same tpl call media-processor.scaledjob uses, so a
+     controller that resolves to enabled: false is excluded. Gating the
+     KEDA validation, Secret materialisation, and TriggerAuthentication
+     on the filtered set keeps disabled scaledjobs from forcing
+     keda.apiKey or emitting orphan resources with no ScaledJob to use them. */ -}}
+{{- $enabledScaledjobControllers := dict -}}
+{{- range $name, $ctrl := $scaledjobControllers -}}
+  {{- $enabled := true -}}
+  {{- if hasKey $ctrl "enabled" -}}
+    {{- $enabled = eq (tpl (get $ctrl "enabled" | toString) $) "true" -}}
+  {{- end -}}
+  {{- if $enabled -}}
+    {{- $_ := set $enabledScaledjobControllers $name $ctrl -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $enabledScaledjobControllers -}}
 
 {{- /* Resolve the Secret backing the KEDA-only API key. Either the operator
      supplied secretKeyRef (use directly) or value (chart materialises a
      Secret below). The "neither populated" case fails here rather than at
-     the early shape validation block because it only matters once a
-     scaledjob controller is actually declared. */ -}}
+     the early shape validation block because it only matters once an
+     enabled scaledjob controller exists. */ -}}
 {{- $kedaResolvedSecretName := "" -}}
 {{- $kedaResolvedSecretKey := "" -}}
 {{- if $kedaAPIKeySecretName -}}
@@ -893,16 +917,31 @@ does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
      in turn drives the order of triggers rendered on each ScaledJob. */ -}}
 {{- $knownTokens := list "probe" "detect-crop" "transcode" "notify" "cleanup" "notify-failure" "workflow" -}}
 
+{{- /* kedaTLS exposes the scaler-side TLS metadata (tlsServerName /
+     unsafeSsl) the Temporal scaler reads from triggerMetadata. Only the
+     fields actually configured by the operator survive — the helper
+     emits each metadata key conditionally on hasKey. The source values
+     are read above the bjw-s init / .Values strip pass, since
+     .Values.config does not exist after that. */ -}}
+{{- $kedaTLS := dict -}}
+{{- if $kedaTLSServerName -}}
+  {{- $_ := set $kedaTLS "serverName" $kedaTLSServerName -}}
+{{- end -}}
+{{- if $kedaTLSDisableHostVerification -}}
+  {{- $_ := set $kedaTLS "unsafeSsl" true -}}
+{{- end -}}
+
 {{- $authRefName := printf "%s-temporal" (include "bjw-s.common.lib.chart.names.fullname" .) }}
 {{- include "media-processor.scaledjob" (dict
     "rootContext" .
-    "controllers" $scaledjobControllers
+    "controllers" $enabledScaledjobControllers
     "temporalEndpoint" $temporalAddress
     "temporalNamespace" $temporalNamespace
     "taskQueuePrefix" $temporalTaskQueue
     "authRefName" $authRefName
     "knownTokens" $knownTokens
     "workersByName" $workers
+    "kedaTLS" $kedaTLS
   ) }}
 {{ include "media-processor.triggerAuthentication" (dict
     "rootContext" .

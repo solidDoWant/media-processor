@@ -154,14 +154,20 @@ controller.keda.* onto the ScaledJob's top-level spec. Job-level fields
 
 .spec.triggers is computed from the controller's resolved activity tokens —
 one Temporal trigger per resolved task queue. Activity tokens map to
-"{prefix}-{token}" queues (queueType Activity); the workflow token maps to
-the prefix-only queue (queueType Workflow). Caller supplies a dict with
-the additional keys "temporalEndpoint", "temporalNamespace", "taskQueuePrefix",
-"authRefName", "knownTokens", and "workersByName" (the chart-validated
-workers map keyed on controller name) so the helper can resolve each
-controller's tokens via media-processor.resolveActivities. Per-controller
-keda.targetQueueSize / keda.activationTargetQueueSize override the chart
-defaults (5 / 0).
+"{prefix}-{token}" queues (queueTypes activity); the workflow token maps to
+the prefix-only queue (queueTypes workflow). The metadata key names
+(taskQueue, queueTypes, tlsServerName, unsafeSsl) and value casing
+(lowercase) match the KEDA Temporal scaler's struct tags in
+pkg/scalers/temporal_scaler.go — they are not chart-internal names. Caller
+supplies a dict with the additional keys "temporalEndpoint",
+"temporalNamespace", "taskQueuePrefix", "authRefName", "knownTokens",
+"workersByName" (the chart-validated workers map keyed on controller name),
+and "kedaTLS" (a dict with optional "serverName" and "unsafeSsl" entries
+already filtered for whether keda.tls.enabled is true upstream) so the
+helper can resolve each controller's tokens via
+media-processor.resolveActivities and emit scaler-side TLS metadata
+when configured. Per-controller keda.targetQueueSize /
+keda.activationTargetQueueSize override the chart defaults (5 / 0).
 */}}
 {{- define "media-processor.scaledjob" -}}
 {{- $rootContext := .rootContext -}}
@@ -172,6 +178,7 @@ defaults (5 / 0).
 {{- $authRefName := .authRefName -}}
 {{- $knownTokens := .knownTokens -}}
 {{- $workersByName := .workersByName -}}
+{{- $kedaTLS := .kedaTLS | default dict -}}
 {{- $fullName := include "bjw-s.common.lib.chart.names.fullname" $rootContext -}}
 {{- range $name, $ctrl := $controllers }}
   {{- /* Honor controller.enabled so a user-disabled scaledjob controller
@@ -238,31 +245,47 @@ defaults (5 / 0).
   {{- $targetQueueSize := index $kedaCfg "targetQueueSize" | default 5 -}}
   {{- $activationTargetQueueSize := index $kedaCfg "activationTargetQueueSize" | default 0 -}}
 
-  {{- /* Build the trigger list. Activity tokens emit Activity-typed triggers
-       on "{prefix}-{token}"; the workflow token emits a Workflow-typed
-       trigger on the prefix-only queue. Order matches knownTokens order
-       (resolver already canonicalises). */ -}}
+  {{- /* Build the trigger list. Activity tokens emit activity-typed
+       triggers on "{prefix}-{token}"; the workflow token emits a
+       workflow-typed trigger on the prefix-only queue. Metadata keys
+       (taskQueue, queueTypes) and lowercase values match the KEDA
+       Temporal scaler struct tags in pkg/scalers/temporal_scaler.go —
+       getQueueTypes() switches on lowercase "workflow"/"activity" only.
+       Order matches knownTokens order (resolver already canonicalises). */ -}}
   {{- $triggers := list -}}
   {{- range $token := $resolvedTokens -}}
-    {{- $queueName := "" -}}
-    {{- $queueType := "" -}}
+    {{- $taskQueue := "" -}}
+    {{- $queueTypes := "" -}}
     {{- if eq $token "workflow" -}}
-      {{- $queueName = $taskQueuePrefix -}}
-      {{- $queueType = "Workflow" -}}
+      {{- $taskQueue = $taskQueuePrefix -}}
+      {{- $queueTypes = "workflow" -}}
     {{- else -}}
-      {{- $queueName = printf "%s-%s" $taskQueuePrefix $token -}}
-      {{- $queueType = "Activity" -}}
+      {{- $taskQueue = printf "%s-%s" $taskQueuePrefix $token -}}
+      {{- $queueTypes = "activity" -}}
+    {{- end -}}
+    {{- $metadata := dict
+      "endpoint" $temporalEndpoint
+      "namespace" $temporalNamespace
+      "taskQueue" $taskQueue
+      "queueTypes" $queueTypes
+      "targetQueueSize" ($targetQueueSize | toString)
+      "activationTargetQueueSize" ($activationTargetQueueSize | toString)
+    -}}
+    {{- /* Scaler-side TLS metadata. Only emitted when keda.tls.enabled is
+         true and the operator supplied the corresponding override.
+         tlsServerName overrides SNI / cert-verification hostname; unsafeSsl
+         disables host verification. Both are per-trigger metadata fields
+         in the Temporal scaler (not authParams), so they live alongside
+         taskQueue / queueTypes rather than on the TriggerAuthentication. */ -}}
+    {{- if $kedaTLS.serverName -}}
+      {{- $_ := set $metadata "tlsServerName" $kedaTLS.serverName -}}
+    {{- end -}}
+    {{- if $kedaTLS.unsafeSsl -}}
+      {{- $_ := set $metadata "unsafeSsl" "true" -}}
     {{- end -}}
     {{- $trigger := dict
       "type" "temporal"
-      "metadata" (dict
-        "endpoint" $temporalEndpoint
-        "namespace" $temporalNamespace
-        "queueName" $queueName
-        "queueType" $queueType
-        "targetQueueSize" ($targetQueueSize | toString)
-        "activationTargetQueueSize" ($activationTargetQueueSize | toString)
-      )
+      "metadata" $metadata
       "authenticationRef" (dict "name" $authRefName)
     -}}
     {{- $triggers = append $triggers $trigger -}}
@@ -311,10 +334,16 @@ spec:
       metadata:
         endpoint: {{ $trigger.metadata.endpoint }}
         namespace: {{ $trigger.metadata.namespace }}
-        queueName: {{ $trigger.metadata.queueName }}
-        queueType: {{ $trigger.metadata.queueType }}
+        taskQueue: {{ $trigger.metadata.taskQueue }}
+        queueTypes: {{ $trigger.metadata.queueTypes }}
         targetQueueSize: {{ $trigger.metadata.targetQueueSize | quote }}
         activationTargetQueueSize: {{ $trigger.metadata.activationTargetQueueSize | quote }}
+        {{- if hasKey $trigger.metadata "tlsServerName" }}
+        tlsServerName: {{ $trigger.metadata.tlsServerName }}
+        {{- end }}
+        {{- if hasKey $trigger.metadata "unsafeSsl" }}
+        unsafeSsl: {{ $trigger.metadata.unsafeSsl | quote }}
+        {{- end }}
       authenticationRef:
         name: {{ $trigger.authenticationRef.name }}
     {{- end }}
