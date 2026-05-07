@@ -172,11 +172,21 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
    TriggerAuthentication helper consumes; it stays empty when keda.tls is
    disabled or no cert references are configured. */}}
 {{- $kedaTLSEnabled := .Values.config.temporal.keda.tls.enabled -}}
-{{- $kedaTLSServerName := "" -}}
-{{- $kedaTLSDisableHostVerification := false -}}
-{{- if $kedaTLSEnabled -}}
-  {{- $kedaTLSServerName = .Values.config.temporal.keda.tls.serverName | default "" -}}
-  {{- $kedaTLSDisableHostVerification = .Values.config.temporal.keda.tls.disableHostVerification | default false -}}
+{{- $kedaTLSServerName := .Values.config.temporal.keda.tls.serverName | default "" -}}
+{{- $kedaTLSDisableHostVerification := .Values.config.temporal.keda.tls.disableHostVerification | default false -}}
+{{/* Mirror the cert-ref hard-fail behaviour for the non-secret TLS overrides:
+   serverName / disableHostVerification are no-ops when keda.tls.enabled is
+   false, which makes a missed enabled flag look valid until KEDA connects
+   without the intended TLS posture. Fail at render time instead. */}}
+{{- if and (not $kedaTLSEnabled) $kedaTLSServerName -}}
+  {{- fail "config.temporal.keda.tls.serverName is set but config.temporal.keda.tls.enabled is false — enable TLS or remove the override" -}}
+{{- end -}}
+{{- if and (not $kedaTLSEnabled) $kedaTLSDisableHostVerification -}}
+  {{- fail "config.temporal.keda.tls.disableHostVerification is set but config.temporal.keda.tls.enabled is false — enable TLS or remove the override" -}}
+{{- end -}}
+{{- if not $kedaTLSEnabled -}}
+  {{- $kedaTLSServerName = "" -}}
+  {{- $kedaTLSDisableHostVerification = false -}}
 {{- end -}}
 {{- $kedaTLSEntries := list -}}
 

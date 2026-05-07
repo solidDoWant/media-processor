@@ -26,8 +26,10 @@ resolveActivities mirrors cmd/worker/activities_resolver.go: it evaluates a
 list of WORKER_ACTIVITIES tokens left-to-right against an initially empty
 set, then returns the resolved set as a comma-joined string in the canonical
 order of the supplied known-tokens list. Caller supplies a dict with keys
-"tokens" (the raw token list, untrimmed) and "knownTokens" (the chart-side
-known set, mirroring workflows/media/config.go's KnownActivities + WorkflowToken).
+"workerName" (used in error messages so operators can find the offending
+workers.<name>.activities entry when multiple workers are defined), "tokens"
+(the raw token list, untrimmed), and "knownTokens" (the chart-side known
+set, mirroring workflows/media/config.go's KnownActivities + WorkflowToken).
 
 Token grammar:
   - "all"   sets the working set to every known token
@@ -44,6 +46,7 @@ template language does not let a `define` return a list / dict directly; the
 caller splits on "," to recover the resolved tokens.
 */}}
 {{- define "media-processor.resolveActivities" -}}
+{{- $workerName := index . "workerName" | default "" -}}
 {{- $tokens := index . "tokens" -}}
 {{- $knownTokens := index . "knownTokens" -}}
 {{- $set := dict -}}
@@ -62,7 +65,7 @@ caller splits on "," to recover the resolved tokens.
         {{- $name = trim (substr 1 (len $name) $name) -}}
       {{- end -}}
       {{- if not (has $name $knownTokens) -}}
-        {{- fail (printf "WORKER_ACTIVITIES: unknown token %q (known: %s)" $token (join ", " $knownTokens)) -}}
+        {{- fail (printf "workers.%s.activities: unknown token %q (known: %s)" $workerName $token (join ", " $knownTokens)) -}}
       {{- end -}}
       {{- if $negate -}}
         {{- $_ := unset $set $name -}}
@@ -234,7 +237,11 @@ keda.activationTargetQueueSize override the chart defaults (5 / 0).
     {{- fail (printf "scaledjob controller %q has no entry in workers" $name) -}}
   {{- end -}}
   {{- $rawTokens := index $workerEntry "activities" -}}
-  {{- $resolved := include "media-processor.resolveActivities" (dict "tokens" $rawTokens "knownTokens" $knownTokens) -}}
+  {{- $resolved := include "media-processor.resolveActivities" (dict
+        "workerName" $name
+        "tokens" $rawTokens
+        "knownTokens" $knownTokens
+      ) -}}
   {{- if not $resolved -}}
     {{- fail (printf "scaledjob controller %q resolved to an empty activity set" $name) -}}
   {{- end -}}
