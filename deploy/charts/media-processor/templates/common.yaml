@@ -612,14 +612,38 @@ config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
 {{- $userControllers := index .Values.resources "controllers" | default dict -}}
 {{- $computedWorkerControllers := dict -}}
 {{- range $name := $workerNames -}}
-  {{/* PDB.enabled computed as a literal bool from the user-supplied replicas
-     value (or 1 when unset). Done at chart-build time rather than as a deferred
-     tpl string because resources.controllers.<workerName> may be absent in the
-     user values entirely (the default case), and chained index on missing keys
-     panics. */}}
   {{- $userCtrl := index $userControllers $name | default dict -}}
-  {{- $reps := index $userCtrl "replicas" | default 1 -}}
-  {{- $pdbEnabled := gt ($reps | int) 1 -}}
+  {{- $controllerType := index $userCtrl "type" | default "deployment" -}}
+
+  {{/* PDB default depends on controller type. Deployment-typed defaults gate
+     enabled on replicas > 1 and use minAvailable: 1 (the pre-multi-worker
+     chart's behaviour). Scaledjob-typed defaults are always enabled with
+     maxUnavailable: 0 — replicas is not meaningful for ScaledJob, and a node
+     hosting an in-flight transcode should be undrainable until the activity
+     completes (or its Temporal heartbeat times out). PDB.enabled is computed
+     here as a literal bool rather than a deferred tpl string because
+     resources.controllers.<workerName> may be absent in the user values
+     entirely (the default case) and chained index on missing keys panics. */}}
+  {{- $pdbDefault := dict -}}
+  {{- if eq $controllerType "scaledjob" -}}
+    {{- $pdbDefault = dict "enabled" true "maxUnavailable" 0 -}}
+  {{- else -}}
+    {{- $reps := index $userCtrl "replicas" | default 1 -}}
+    {{- $pdbDefault = dict "enabled" (gt ($reps | int) 1) "minAvailable" 1 -}}
+  {{- end -}}
+
+  {{/* Detect a user-explicit `podDisruptionBudget: null` opt-out before merge.
+     mustMergeOverwrite skips nil source values, so a chart default left in
+     $controller would silently override `null` and the PDB would still
+     emit. Setting podDisruptionBudget on $controller is gated on this flag
+     so the merged resource simply has no podDisruptionBudget key in the
+     null-opt-out case. */}}
+  {{- $userNulledPDB := false -}}
+  {{- if hasKey $userCtrl "podDisruptionBudget" -}}
+    {{- if kindIs "invalid" (index $userCtrl "podDisruptionBudget") -}}
+      {{- $userNulledPDB = true -}}
+    {{- end -}}
+  {{- end -}}
 
   {{/* For scaledjob-typed workers, inject the WORKER_IDLE_EXIT_AFTER chart default
      onto the per-worker env dict before merging user values. 5m for activity-only
@@ -629,7 +653,7 @@ config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
      token (which includes workflow), "workflow" adds it, "!workflow" removes it.
      User-supplied resources.controllers.<name>.containers.main.env.WORKER_IDLE_EXIT_AFTER
      overrides this default via the resources mustMergeOverwrite below. */}}
-  {{- if eq (index $userCtrl "type" | default "deployment") "scaledjob" -}}
+  {{- if eq $controllerType "scaledjob" -}}
     {{- $entry := index $workers $name -}}
     {{- $activitiesList := index $entry "activities" -}}
     {{- $includesWorkflow := false -}}
@@ -688,14 +712,13 @@ config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
       )
       "env" (index $workerEnvByName $name)
     ))
-    "podDisruptionBudget" (dict
-      "enabled" $pdbEnabled
-      "minAvailable" 1
-    )
     "pod" (dict
       "terminationGracePeriodSeconds" 120
     )
   -}}
+  {{- if not $userNulledPDB -}}
+    {{- $_ := set $controller "podDisruptionBudget" $pdbDefault -}}
+  {{- end -}}
   {{- $_ := set $computedWorkerControllers $name $controller -}}
 {{- end -}}
 
@@ -984,6 +1007,25 @@ metadata:
 type: Opaque
 stringData:
   {{ $kedaResolvedSecretKey }}: {{ $kedaAPIKeyValue | quote }}
+{{- end }}
+
+{{- /* Per-controller PodDisruptionBudget. The merged controller dict still
+     carries the merged podDisruptionBudget block at this point — the
+     post-merge enabled-template strip pass above either deleted the whole
+     key (enabled: false opt-out) or stripped just the enabled key
+     (enabled: true → live). A user-supplied podDisruptionBudget: null
+     was caught pre-merge in the per-worker controller-defaults block above,
+     so the merged dict simply has no podDisruptionBudget key in that case
+     and the helper invocation is skipped. */ -}}
+{{- range $name, $ctrl := $enabledScaledjobControllers }}
+{{- $pdb := index $ctrl "podDisruptionBudget" }}
+{{- if $pdb }}
+{{ include "media-processor.podDisruptionBudget" (dict
+    "rootContext" $
+    "controllerName" $name
+    "pdb" $pdb
+  ) }}
+{{- end }}
 {{- end }}
 {{- end -}}
 

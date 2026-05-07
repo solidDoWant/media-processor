@@ -353,6 +353,15 @@ resources:
     # METRICS_SCRAPE_WAIT_TIMEOUT + buffer). Override per-worker by adding
     # resources.controllers.<name> here.
     #
+    # podDisruptionBudget defaults differ by controller type:
+    #   - type: deployment (default) — enabled when replicas > 1, minAvailable: 1.
+    #   - type: scaledjob          — always enabled, maxUnavailable: 0 (a node
+    #     hosting an in-flight transcode is undrainable until the activity
+    #     completes or its Temporal heartbeat times out).
+    # Opt out per-controller via either form:
+    #   resources.controllers.<name>.podDisruptionBudget: null
+    #   resources.controllers.<name>.podDisruptionBudget.enabled: false
+    #
     # DRA GPU example (requires config.worker.media.hardware.mountHostDevice: false):
     # transcode:
     #   pod:
