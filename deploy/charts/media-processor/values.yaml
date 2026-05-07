@@ -66,6 +66,54 @@ config:
     # through verbatim (the Temporal SDK lowercases and hyphenates them at load time). Rendered
     # under [profile.default.grpc_meta] in temporal.toml.
     grpcMeta: {}
+    # keda configures KEDA's connection to the Temporal frontend, used by the per-release
+    # TriggerAuthentication that backs every type: scaledjob worker's Temporal triggers. Both
+    # the credential and the TLS posture are configured independently from the workers' so KEDA
+    # can be granted a less-privileged credential (e.g. read-only Temporal RBAC scoped to
+    # DescribeTaskQueue) without giving it the workers' API key. To share credentials or TLS
+    # material with the workers, point keda.apiKey.secretKeyRef / keda.tls.* at the same
+    # Secrets used by config.temporal.apiKey / config.temporal.tls.
+    #
+    # When at least one type: scaledjob worker is defined, keda.apiKey must be populated
+    # (either value or secretKeyRef); otherwise the chart fails at render time. With no
+    # type: scaledjob workers (the chart default), this entire block is unused.
+    keda:
+      # apiKey is the Temporal API key KEDA's Temporal scaler uses to query task-queue backlog.
+      # Setting both value and secretKeyRef is rejected. value is intended for development;
+      # production deployments should use secretKeyRef. When value is set, the chart materialises
+      # a chart-managed Secret (named "<release>-keda-temporal-apikey") containing it; the
+      # TriggerAuthentication points at that Secret.
+      apiKey:
+        value: ""
+        secretKeyRef:
+          name: ""
+          key: ""
+      # tls configures KEDA's transport security to the Temporal frontend. Mirrors the shape of
+      # config.temporal.tls but is configured independently so KEDA's TLS posture can differ
+      # from the workers'. enabled: false uses plaintext gRPC; enabled: true turns on server-side
+      # TLS (mTLS and a custom CA are optional). Reference Secrets are mounted on the KEDA-side
+      # TriggerAuthentication only — the workers continue to use the Secrets referenced under
+      # config.temporal.tls.*.
+      tls:
+        enabled: false
+        # serverName overrides the SNI / cert-verification hostname. Useful when address is an IP
+        # or a service name that does not match the cert's SAN.
+        serverName: ""
+        # disableHostVerification skips server certificate hostname verification. Should only be
+        # used in development against self-signed certs.
+        disableHostVerification: false
+        # clientCertificate enables mTLS by pointing at a kubernetes.io/tls Secret containing the
+        # client cert and private key (standard "tls.crt" / "tls.key" keys). Leave secretName
+        # empty to skip mTLS.
+        clientCertificate:
+          secretName: ""
+        # caCert overrides the trusted CA pool. Free-form secretKeyRef because CA bundles do
+        # not standardise on a single Secret layout; key defaults to "ca.crt". Leave name empty
+        # to use the system roots.
+        caCert:
+          secretKeyRef:
+            name: ""
+            key: "ca.crt"
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
@@ -237,6 +285,16 @@ workers: {}
 # Scaledjob workers default `WORKER_IDLE_EXIT_AFTER` to `5m`, or `15m` if
 # the worker's activities resolve to include the `workflow` token; override
 # via `containers.main.env.WORKER_IDLE_EXIT_AFTER`.
+#
+# Each scaledjob worker emits one Temporal trigger per resolved activity
+# task queue (Activity queueType `media-processor-{token}`, plus a
+# Workflow queueType against the prefix-only queue when the resolved
+# activities include `workflow`). Triggers default to `targetQueueSize: 5`
+# and `activationTargetQueueSize: 0`; override per worker via
+# `resources.controllers.<name>.keda.targetQueueSize` and
+# `resources.controllers.<name>.keda.activationTargetQueueSize`. KEDA's
+# Temporal credential and TLS posture come from `config.temporal.keda.*`,
+# not from `config.temporal.apiKey` / `config.temporal.tls.*`.
 resources:
   controllers:
     watcher:

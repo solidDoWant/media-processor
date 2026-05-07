@@ -105,6 +105,20 @@ pattern avoids that footgun.
   {{- fail "config.temporal.apiKey.value and config.temporal.apiKey.secretKeyRef are mutually exclusive — set only one" -}}
 {{- end -}}
 
+{{/* config.temporal.keda.apiKey: same shape-validation as the workers' API key
+   above (mutual exclusion + paired name/key). The "at least one scaledjob
+   controller present + neither populated" gate runs further down, after the
+   scaledjob partition is computed. */}}
+{{- $kedaAPIKeyValue      := .Values.config.temporal.keda.apiKey.value             | default "" -}}
+{{- $kedaAPIKeySecretName := .Values.config.temporal.keda.apiKey.secretKeyRef.name | default "" -}}
+{{- $kedaAPIKeySecretKey  := .Values.config.temporal.keda.apiKey.secretKeyRef.key  | default "" -}}
+{{- if or (and $kedaAPIKeySecretName (not $kedaAPIKeySecretKey)) (and $kedaAPIKeySecretKey (not $kedaAPIKeySecretName)) -}}
+  {{- fail "config.temporal.keda.apiKey.secretKeyRef.name and config.temporal.keda.apiKey.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
+{{- if and $kedaAPIKeyValue $kedaAPIKeySecretName -}}
+  {{- fail "config.temporal.keda.apiKey.value and config.temporal.keda.apiKey.secretKeyRef are mutually exclusive — set only one" -}}
+{{- end -}}
+
 {{/* ============================================================ */}}
 {{/* Temporal TLS cert reference resolution                       */}}
 {{/* ============================================================ */}}
@@ -147,6 +161,39 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $mountDir := printf "%s/%s" $temporalTLSRoot $caCertSecretName -}}
   {{- $_ := set $tlsResolvedPaths "caCert" (printf "%s/%s" $mountDir $caCertSecretKey) -}}
   {{- $_ := set $tlsSecretMounts $caCertSecretName $mountDir -}}
+{{- end -}}
+
+{{/* config.temporal.keda.tls: resolved here (rather than inside the scaledjob
+   gate below) so shape-validation surfaces immediately on misconfigured
+   values, regardless of whether any scaledjob controllers are declared.
+   Resolution mirrors the workers' TLS block above; references that have a
+   Secret name but no enabled flag fail the same way.
+   $kedaTLSEntries is the list of {parameter,name,key} entries that the
+   TriggerAuthentication helper consumes; it stays empty when keda.tls is
+   disabled or no cert references are configured. */}}
+{{- $kedaTLSEnabled := .Values.config.temporal.keda.tls.enabled -}}
+{{- $kedaTLSEntries := list -}}
+
+{{- $kedaClientCertSecret := .Values.config.temporal.keda.tls.clientCertificate.secretName | default "" -}}
+{{- if $kedaClientCertSecret -}}
+  {{- if not $kedaTLSEnabled -}}
+    {{- fail "config.temporal.keda.tls.clientCertificate.secretName is set but config.temporal.keda.tls.enabled is false — enable TLS or remove the reference" -}}
+  {{- end -}}
+  {{- $kedaTLSEntries = append $kedaTLSEntries (dict "parameter" "cert" "name" $kedaClientCertSecret "key" "tls.crt") -}}
+  {{- $kedaTLSEntries = append $kedaTLSEntries (dict "parameter" "key"  "name" $kedaClientCertSecret "key" "tls.key") -}}
+{{- end -}}
+
+{{- $kedaCACertRef := .Values.config.temporal.keda.tls.caCert.secretKeyRef | default dict -}}
+{{- $kedaCACertSecretName := $kedaCACertRef.name | default "" -}}
+{{- $kedaCACertSecretKey  := $kedaCACertRef.key  | default "" -}}
+{{- if $kedaCACertSecretName -}}
+  {{- if not $kedaCACertSecretKey -}}
+    {{- fail "config.temporal.keda.tls.caCert.secretKeyRef.key must not be empty when name is set (chart default is \"ca.crt\")" -}}
+  {{- end -}}
+  {{- if not $kedaTLSEnabled -}}
+    {{- fail "config.temporal.keda.tls.caCert.secretKeyRef is set but config.temporal.keda.tls.enabled is false — enable TLS or remove the reference" -}}
+  {{- end -}}
+  {{- $kedaTLSEntries = append $kedaTLSEntries (dict "parameter" "ca" "name" $kedaCACertSecretName "key" $kedaCACertSecretKey) -}}
 {{- end -}}
 
 {{/* ============================================================ */}}
@@ -805,17 +852,86 @@ does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
 {{- include "bjw-s.common.loader.init" . }}
 
 {{/* Render scaledjob controllers (partitioned aside above) as
-   keda.sh/v1alpha1 ScaledJob resources. Done before stripping their
-   advancedMounts entries so bjw-s.common.lib.pod.field.volumes (called
-   from pod.spec inside the helper) still finds the persistence mounts
-   for scaledjob workers and produces matching volume / volumeMount
-   YAML in the rendered Job pod template.
+   keda.sh/v1alpha1 ScaledJob resources, plus the per-release
+   TriggerAuthentication that backs every Temporal trigger and (when
+   keda.apiKey.value is set) the chart-managed Secret that holds the
+   inline credential. Done before stripping the controllers' advancedMounts
+   entries so bjw-s.common.lib.pod.field.volumes (called from pod.spec
+   inside the helper) still finds the persistence mounts for scaledjob
+   workers and produces matching volume / volumeMount YAML in the rendered
+   Job pod template.
 
-   Inlined in this template (rather than a separate templates/scaledjob.yaml
-   file) because Helm does not reliably propagate intra-template Values
-   mutations across template files. */}}
+   Inlined in this template (rather than separate templates/scaledjob.yaml /
+   triggerauthentication.yaml files) because Helm does not reliably
+   propagate intra-template Values mutations across template files. The
+   $scaledjobControllers gate is what keeps the default-values render
+   byte-identical to pre-change: with no scaledjob controllers, none of the
+   KEDA-related validation, Secret materialisation, or resource emission
+   below executes. */}}
 {{- if $scaledjobControllers -}}
-{{- include "media-processor.scaledjob" (dict "rootContext" . "controllers" $scaledjobControllers) }}
+
+{{- /* Resolve the Secret backing the KEDA-only API key. Either the operator
+     supplied secretKeyRef (use directly) or value (chart materialises a
+     Secret below). The "neither populated" case fails here rather than at
+     the early shape validation block because it only matters once a
+     scaledjob controller is actually declared. */ -}}
+{{- $kedaResolvedSecretName := "" -}}
+{{- $kedaResolvedSecretKey := "" -}}
+{{- if $kedaAPIKeySecretName -}}
+  {{- $kedaResolvedSecretName = $kedaAPIKeySecretName -}}
+  {{- $kedaResolvedSecretKey = $kedaAPIKeySecretKey -}}
+{{- else if $kedaAPIKeyValue -}}
+  {{- $kedaResolvedSecretName = printf "%s-keda-temporal-apikey" (include "bjw-s.common.lib.chart.names.fullname" .) -}}
+  {{- $kedaResolvedSecretKey = "apiKey" -}}
+{{- else -}}
+  {{- fail "config.temporal.keda.apiKey is required when at least one type: scaledjob worker is defined; configure config.temporal.keda.apiKey.value or config.temporal.keda.apiKey.secretKeyRef" -}}
+{{- end -}}
+
+{{- /* Chart-side mirror of workflows/media/config.go (KnownActivities +
+     WorkflowToken). The order here drives the resolved-token output order
+     (the resolveActivities helper canonicalises against this list), which
+     in turn drives the order of triggers rendered on each ScaledJob. */ -}}
+{{- $knownTokens := list "probe" "detect-crop" "transcode" "notify" "cleanup" "notify-failure" "workflow" -}}
+
+{{- $authRefName := printf "%s-temporal" (include "bjw-s.common.lib.chart.names.fullname" .) }}
+{{- include "media-processor.scaledjob" (dict
+    "rootContext" .
+    "controllers" $scaledjobControllers
+    "temporalEndpoint" $temporalAddress
+    "temporalNamespace" $temporalNamespace
+    "taskQueuePrefix" $temporalTaskQueue
+    "authRefName" $authRefName
+    "knownTokens" $knownTokens
+    "workersByName" $workers
+  ) }}
+{{ include "media-processor.triggerAuthentication" (dict
+    "rootContext" .
+    "name" $authRefName
+    "apiKeySecret" (dict "name" $kedaResolvedSecretName "key" $kedaResolvedSecretKey)
+    "tlsSecrets" $kedaTLSEntries
+  ) }}
+
+{{- /* Chart-managed Secret carrying the inline keda.apiKey.value bytes.
+     Only emitted when value is set (secretKeyRef path uses the operator's
+     existing Secret directly, not a chart-managed copy). Labels mirror
+     other chart-emitted resources via bjw-s.common.lib.metadata.allLabels. */ -}}
+{{- if $kedaAPIKeyValue }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $kedaResolvedSecretName }}
+  namespace: {{ .Release.Namespace }}
+  {{- with (include "bjw-s.common.lib.metadata.allLabels" . | fromYaml) }}
+  labels:
+    {{- range $k, $v := . }}
+    {{ printf "%s: %s" $k (tpl $v $ | toYaml) }}
+    {{- end }}
+  {{- end }}
+type: Opaque
+stringData:
+  {{ $kedaResolvedSecretKey }}: {{ $kedaAPIKeyValue | quote }}
+{{- end }}
 {{- end -}}
 
 {{/* ============================================================ */}}
