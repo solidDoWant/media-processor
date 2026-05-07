@@ -202,10 +202,21 @@ spec:
        `null` (e.g. `maxUnavailable: null` to clear the chart default before
        supplying a different field) drops the key from the rendered spec
        rather than emitting `maxUnavailable:` with no value. */ -}}
-  {{- if and (hasKey $pdb "minAvailable") (not (kindIs "invalid" (index $pdb "minAvailable"))) }}
+  {{- $hasMin := and (hasKey $pdb "minAvailable") (not (kindIs "invalid" (index $pdb "minAvailable"))) -}}
+  {{- $hasMax := and (hasKey $pdb "maxUnavailable") (not (kindIs "invalid" (index $pdb "maxUnavailable"))) -}}
+  {{- /* policy/v1 PodDisruptionBudget rejects spec with both fields set
+       (apiserver: "minAvailable and maxUnavailable cannot be both set").
+       The scaledjob chart default lands maxUnavailable: 0, so an operator
+       override that adds minAvailable without explicitly nulling the
+       default is a real footgun — fail at template time with a controller-
+       named message instead of letting kubectl apply surface it. */ -}}
+  {{- if and $hasMin $hasMax -}}
+    {{- fail (printf "podDisruptionBudget for controller %q: minAvailable and maxUnavailable are mutually exclusive; set the unused field to null" $controllerName) -}}
+  {{- end }}
+  {{- if $hasMin }}
   minAvailable: {{ get $pdb "minAvailable" }}
   {{- end }}
-  {{- if and (hasKey $pdb "maxUnavailable") (not (kindIs "invalid" (index $pdb "maxUnavailable"))) }}
+  {{- if $hasMax }}
   maxUnavailable: {{ get $pdb "maxUnavailable" }}
   {{- end }}
 {{- end -}}
