@@ -116,13 +116,13 @@ metadata:
   {{- with $topLabels }}
   labels:
     {{- range $k, $v := . }}
-    {{ printf "%s: %s" $k (tpl $v $rootContext | toYaml) }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
     {{- end }}
   {{- end }}
   {{- with $topAnnotations }}
   annotations:
     {{- range $k, $v := . }}
-    {{ printf "%s: %s" $k (tpl $v $rootContext | toYaml) }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
     {{- end }}
   {{- end }}
 spec:
@@ -306,13 +306,13 @@ metadata:
   {{- with $topLabels }}
   labels:
     {{- range $k, $v := . }}
-    {{ printf "%s: %s" $k (tpl $v $rootContext | toYaml) }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
     {{- end }}
   {{- end }}
   {{- with $topAnnotations }}
   annotations:
     {{- range $k, $v := . }}
-    {{ printf "%s: %s" $k (tpl $v $rootContext | toYaml) }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
     {{- end }}
   {{- end }}
 spec:

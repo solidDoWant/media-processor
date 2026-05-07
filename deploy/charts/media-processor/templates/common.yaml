@@ -974,7 +974,7 @@ metadata:
   {{- with (include "bjw-s.common.lib.metadata.allLabels" . | fromYaml) }}
   labels:
     {{- range $k, $v := . }}
-    {{ printf "%s: %s" $k (tpl $v $ | toYaml) }}
+    {{ $k }}: {{ tpl $v $ | quote }}
     {{- end }}
   {{- end }}
 type: Opaque
