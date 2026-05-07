@@ -99,6 +99,8 @@ A Helm chart is available for deploying the watcher and worker to Kubernetes. Se
 
 For the full list of network connections made by each pod (required when writing `NetworkPolicy` resources), see [docs/network-policies.md](docs/network-policies.md).
 
+For KEDA-driven 0..N autoscaling of the worker (recommended for the `transcode` activity), see [docs/autoscaling.md](docs/autoscaling.md).
+
 ## Hardware acceleration
 
 Intel QSV and VAAPI are supported. See [docs/hardware-acceleration.md](docs/hardware-acceleration.md).
