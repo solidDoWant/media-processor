@@ -202,10 +202,14 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
 {{- $kedaCACertRef := .Values.config.temporal.keda.tls.caCert.secretKeyRef | default dict -}}
 {{- $kedaCACertSecretName := $kedaCACertRef.name | default "" -}}
 {{- $kedaCACertSecretKey  := $kedaCACertRef.key  | default "" -}}
+{{/* Bidirectional pairing: either both name and key set, or neither.
+   Without the reverse check, a key-only override would be silently
+   dropped (the outer if gates on name, so the entry never lands in
+   secretTargetRef and KEDA loses the CA reference without warning). */}}
+{{- if or (and $kedaCACertSecretName (not $kedaCACertSecretKey)) (and $kedaCACertSecretKey (not $kedaCACertSecretName)) -}}
+  {{- fail "config.temporal.keda.tls.caCert.secretKeyRef.name and config.temporal.keda.tls.caCert.secretKeyRef.key must both be set when using secretKeyRef" -}}
+{{- end -}}
 {{- if $kedaCACertSecretName -}}
-  {{- if not $kedaCACertSecretKey -}}
-    {{- fail "config.temporal.keda.tls.caCert.secretKeyRef.key must not be empty when name is set (chart default is \"ca.crt\")" -}}
-  {{- end -}}
   {{- if not $kedaTLSEnabled -}}
     {{- fail "config.temporal.keda.tls.caCert.secretKeyRef is set but config.temporal.keda.tls.enabled is false — enable TLS or remove the reference" -}}
   {{- end -}}

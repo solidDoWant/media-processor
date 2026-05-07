@@ -339,14 +339,14 @@ spec:
     {{- range $trigger := $triggers }}
     - type: {{ $trigger.type }}
       metadata:
-        endpoint: {{ $trigger.metadata.endpoint }}
-        namespace: {{ $trigger.metadata.namespace }}
-        taskQueue: {{ $trigger.metadata.taskQueue }}
-        queueTypes: {{ $trigger.metadata.queueTypes }}
+        endpoint: {{ $trigger.metadata.endpoint | quote }}
+        namespace: {{ $trigger.metadata.namespace | quote }}
+        taskQueue: {{ $trigger.metadata.taskQueue | quote }}
+        queueTypes: {{ $trigger.metadata.queueTypes | quote }}
         targetQueueSize: {{ $trigger.metadata.targetQueueSize | quote }}
         activationTargetQueueSize: {{ $trigger.metadata.activationTargetQueueSize | quote }}
         {{- if hasKey $trigger.metadata "tlsServerName" }}
-        tlsServerName: {{ $trigger.metadata.tlsServerName }}
+        tlsServerName: {{ $trigger.metadata.tlsServerName | quote }}
         {{- end }}
         {{- if hasKey $trigger.metadata "unsafeSsl" }}
         unsafeSsl: {{ $trigger.metadata.unsafeSsl | quote }}

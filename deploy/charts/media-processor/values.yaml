@@ -108,12 +108,14 @@ config:
         clientCertificate:
           secretName: ""
         # caCert overrides the trusted CA pool. Free-form secretKeyRef because CA bundles do
-        # not standardise on a single Secret layout; key defaults to "ca.crt". Leave name empty
-        # to use the system roots.
+        # not standardise on a single Secret layout. Leave name and key empty to use the system
+        # roots; when configuring, both fields must be set (unlike config.temporal.tls.caCert,
+        # which defaults key to "ca.crt", this surface validates the pair bidirectionally so a
+        # missed name does not silently drop the CA reference from KEDA's TriggerAuthentication).
         caCert:
           secretKeyRef:
             name: ""
-            key: "ca.crt"
+            key: ""
 
   # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
   # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
