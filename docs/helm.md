@@ -377,9 +377,30 @@ resources:
         terminationGracePeriodSeconds: 21720
 ```
 
-### Autoscaling note
+### Autoscaling (KEDA ScaledJob)
 
-Count-based HPA can misbehave during long worker drains because `status.replicas` includes terminating pods, so a scale-out triggered while one pod is still draining may not actually create a new replica. Operators that need autoscaling here should prefer KEDA driven by Temporal queue-depth metrics rather than HPA on CPU or pod count.
+The chart can render selected worker controllers as KEDA `ScaledJob` resources that scale 0..N on Temporal task-queue backlog. Set `resources.controllers.<name>.type: scaledjob` to opt a worker in. The full operator runbook (cluster prerequisites, the `keda.*` and `job.*` knob tables, the `PodDisruptionBudget` default difference, the `WORKER_IDLE_EXIT_AFTER` chart defaults, the worked split-deployment example, and the trade-offs) lives in [docs/autoscaling.md](autoscaling.md).
+
+Chart values added for ScaledJob controllers — see [autoscaling.md](autoscaling.md) for full descriptions:
+
+| Field                                           | Default | Description                                                                                                                                                                                       |
+| ----------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources.controllers.<name>.type`             | `deployment` | Set to `scaledjob` to render the controller as a `keda.sh/v1alpha1` `ScaledJob` instead of a Deployment. Only valid for entries that match a `workers.<name>` key                                |
+| `resources.controllers.<name>.keda.*`           | _unset_ | KEDA-level fields lifted onto the `ScaledJob` spec: `maxReplicaCount`, `pollingInterval`, `successfulJobsHistoryLimit`, `failedJobsHistoryLimit`, `scalingStrategy`, `targetQueueSize` (default `5`), `activationTargetQueueSize` (default `0`) |
+| `resources.controllers.<name>.job.*`            | _unset_ | Job-template fields lifted onto `jobTargetRef.spec`: `parallelism`, `completions`, `activeDeadlineSeconds`, `backoffLimit`, `ttlSecondsAfterFinished`                                            |
+| `config.temporal.keda.apiKey`                   | `{}`    | Temporal API key used by KEDA's scaler. Required when at least one `type: scaledjob` worker is defined; the chart fails at template time otherwise. Configured separately from `config.temporal.apiKey` so KEDA can be granted a least-privileged credential                  |
+| `config.temporal.keda.tls.*`                    | `{ enabled: false }` | KEDA's transport security to the Temporal frontend, configured independently from `config.temporal.tls.*`. Mirrors the same shape (`enabled`, `serverName`, `disableHostVerification`, `clientCertificate.secretName`, `caCert.secretKeyRef`) |
+
+Chart-driven defaults for `type: scaledjob` controllers:
+
+- `WORKER_IDLE_EXIT_AFTER` is set automatically (`5m` for activity-only workers, `15m` for workers whose activities resolve to include the `workflow` token). Override per-controller via `containers.main.env.WORKER_IDLE_EXIT_AFTER`.
+- `podDisruptionBudget.maxUnavailable: 0` is enabled by default (vs. the `enabled when replicas > 1, minAvailable: 1` default for Deployment-typed workers). Opt out per-controller via `podDisruptionBudget: null` or `podDisruptionBudget.enabled: false`.
+
+Operators running long transcodes on ScaledJob workers must raise `resources.controllers.<name>.pod.terminationGracePeriodSeconds` together with `config.worker.stopTimeout` and `config.worker.metrics.scrapeWaitTimeout`, exactly as for Deployment workers; see [Termination and drain](#termination-and-drain).
+
+Cluster prerequisites: KEDA &gt;= 2.16 and Temporal server &gt;= 1.24 must be installed cluster-side before enabling `type: scaledjob`. The chart only renders the `ScaledJob` and `TriggerAuthentication` resources; KEDA's CRDs and operator are not bundled.
+
+Count-based HPA is *not* recommended as an alternative: `status.replicas` includes terminating pods, so a scale-out triggered while one pod is still draining may not create a new replica.
 
 ## Hard-coded internals
 
