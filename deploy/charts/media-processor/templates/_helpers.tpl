@@ -47,6 +47,17 @@ TriggerAuthentication land in the follow-up sub-issue that depends on this one.
 {{- $controllers := .controllers -}}
 {{- $fullName := include "bjw-s.common.lib.chart.names.fullname" $rootContext -}}
 {{- range $name, $ctrl := $controllers }}
+  {{- /* Honor controller.enabled so a user-disabled scaledjob controller
+       produces no output, mirroring bjw-s.common.lib.controller.enabledControllers
+       for the deployment path. Tpl-evaluate the value to also handle the
+       chart's own '{{ … }}' string-template form (the deployment-typed
+       defaults already use that pattern via the post-merge enabled-template
+       eval in common.yaml). */ -}}
+  {{- $enabled := true -}}
+  {{- if hasKey $ctrl "enabled" -}}
+    {{- $enabled = eq (tpl (get $ctrl "enabled" | toString) $rootContext) "true" -}}
+  {{- end -}}
+  {{- if $enabled -}}
   {{- /* Build a synthetic controller object that bjw-s.common.lib.pod.spec /
        pod.metadata.labels / pod.metadata.annotations expect: a dict with the
        controller values plus identifier (and a Job-style restartPolicy default
@@ -96,37 +107,41 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
-  {{- with $kedaCfg.pollingInterval }}
-  pollingInterval: {{ . }}
+  {{- /* hasKey rather than `with` so an explicit zero (e.g.
+       successfulJobsHistoryLimit: 0 or backoffLimit: 0) is preserved —
+       Go template falsiness drops 0 with `with`, but KEDA / Kubernetes
+       JobSpec accept 0 as a valid value with distinct meaning. */ -}}
+  {{- if hasKey $kedaCfg "pollingInterval" }}
+  pollingInterval: {{ get $kedaCfg "pollingInterval" }}
   {{- end }}
-  {{- with $kedaCfg.successfulJobsHistoryLimit }}
-  successfulJobsHistoryLimit: {{ . }}
+  {{- if hasKey $kedaCfg "successfulJobsHistoryLimit" }}
+  successfulJobsHistoryLimit: {{ get $kedaCfg "successfulJobsHistoryLimit" }}
   {{- end }}
-  {{- with $kedaCfg.failedJobsHistoryLimit }}
-  failedJobsHistoryLimit: {{ . }}
+  {{- if hasKey $kedaCfg "failedJobsHistoryLimit" }}
+  failedJobsHistoryLimit: {{ get $kedaCfg "failedJobsHistoryLimit" }}
   {{- end }}
-  {{- with $kedaCfg.maxReplicaCount }}
-  maxReplicaCount: {{ . }}
+  {{- if hasKey $kedaCfg "maxReplicaCount" }}
+  maxReplicaCount: {{ get $kedaCfg "maxReplicaCount" }}
   {{- end }}
   {{- with $kedaCfg.scalingStrategy }}
   scalingStrategy: {{ . | toYaml | nindent 4 }}
   {{- end }}
   triggers: []
   jobTargetRef:
-    {{- with $jobCfg.parallelism }}
-    parallelism: {{ . }}
+    {{- if hasKey $jobCfg "parallelism" }}
+    parallelism: {{ get $jobCfg "parallelism" }}
     {{- end }}
-    {{- with $jobCfg.completions }}
-    completions: {{ . }}
+    {{- if hasKey $jobCfg "completions" }}
+    completions: {{ get $jobCfg "completions" }}
     {{- end }}
-    {{- with $jobCfg.activeDeadlineSeconds }}
-    activeDeadlineSeconds: {{ . }}
+    {{- if hasKey $jobCfg "activeDeadlineSeconds" }}
+    activeDeadlineSeconds: {{ get $jobCfg "activeDeadlineSeconds" }}
     {{- end }}
-    {{- with $jobCfg.backoffLimit }}
-    backoffLimit: {{ . }}
+    {{- if hasKey $jobCfg "backoffLimit" }}
+    backoffLimit: {{ get $jobCfg "backoffLimit" }}
     {{- end }}
-    {{- with $jobCfg.ttlSecondsAfterFinished }}
-    ttlSecondsAfterFinished: {{ . }}
+    {{- if hasKey $jobCfg "ttlSecondsAfterFinished" }}
+    ttlSecondsAfterFinished: {{ get $jobCfg "ttlSecondsAfterFinished" }}
     {{- end }}
     template:
       metadata:
@@ -137,5 +152,6 @@ spec:
         labels: {{ . | nindent 10 }}
         {{- end }}
       spec: {{ $podSpec | nindent 8 }}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
