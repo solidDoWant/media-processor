@@ -553,6 +553,30 @@ config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
   {{- $userCtrl := index $userControllers $name | default dict -}}
   {{- $reps := index $userCtrl "replicas" | default 1 -}}
   {{- $pdbEnabled := gt ($reps | int) 1 -}}
+
+  {{/* For scaledjob-typed workers, inject the WORKER_IDLE_EXIT_AFTER chart default
+     onto the per-worker env dict before merging user values. 5m for activity-only
+     workers; 15m for workers whose activities resolve to include the workflow
+     token. Resolution mirrors cmd/worker/activities_resolver.go: tokens are
+     evaluated left-to-right against an empty set, "all" expands to every known
+     token (which includes workflow), "workflow" adds it, "!workflow" removes it.
+     User-supplied resources.controllers.<name>.containers.main.env.WORKER_IDLE_EXIT_AFTER
+     overrides this default via the resources mustMergeOverwrite below. */}}
+  {{- if eq (index $userCtrl "type" | default "deployment") "scaledjob" -}}
+    {{- $entry := index $workers $name -}}
+    {{- $activitiesList := index $entry "activities" -}}
+    {{- $includesWorkflow := false -}}
+    {{- range $tok := $activitiesList -}}
+      {{- $t := toString $tok -}}
+      {{- if or (eq $t "all") (eq $t "workflow") -}}
+        {{- $includesWorkflow = true -}}
+      {{- else if eq $t "!workflow" -}}
+        {{- $includesWorkflow = false -}}
+      {{- end -}}
+    {{- end -}}
+    {{- $defaultIdle := ternary "15m" "5m" $includesWorkflow -}}
+    {{- $_ := set (index $workerEnvByName $name) "WORKER_IDLE_EXIT_AFTER" $defaultIdle -}}
+  {{- end -}}
   {{- $controller := dict
     "strategy" "RollingUpdate"
     "containers" (dict $workerContainerName (dict
@@ -693,6 +717,38 @@ a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
 {{- $mergedResources := mustMergeOverwrite $computedAdditions (mustDeepCopy .Values.resources) -}}
 
 {{/* ============================================================ */}}
+{{/* Controller-type validation + scaledjob partition             */}}
+{{/* ============================================================ */}}
+{{/*
+Allowed controller types are bjw-s 4.6.2's set plus "scaledjob" (rendered by
+this chart as a keda.sh/v1alpha1 ScaledJob). Unknown types fail here with a
+controller-named message rather than reaching bjw-s, which would emit a less
+specific "Not a valid controller.type" without naming the controller.
+
+Scaledjob entries are partitioned aside into $scaledjobControllers (keyed by
+controller name, sharing the same dict references that live in
+$mergedResources.controllers so subsequent post-merge mutations — image-tag
+tpl resolution, enabled-template eval — apply to them too) and stripped from
+$mergedResources.controllers below so the bjw-s loader never sees a type it
+does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
+*/}}
+{{- $allowedControllerTypes := list "deployment" "daemonset" "statefulset" "cronjob" "job" "scaledjob" -}}
+{{- $scaledjobControllers := dict -}}
+{{- $mergedControllers := index $mergedResources "controllers" -}}
+{{- range $name, $ctrl := $mergedControllers -}}
+  {{- $type := index $ctrl "type" | default "deployment" -}}
+  {{- if not (has $type $allowedControllerTypes) -}}
+    {{- fail (printf "resources.controllers.%s.type %q is not a valid controller type (allowed: %s)" $name $type (join ", " $allowedControllerTypes)) -}}
+  {{- end -}}
+  {{- if eq $type "scaledjob" -}}
+    {{- if not (has $name $workerNames) -}}
+      {{- fail (printf "resources.controllers.%s has type scaledjob but is not declared in workers" $name) -}}
+    {{- end -}}
+    {{- $_ := set $scaledjobControllers $name $ctrl -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* ============================================================ */}}
 {{/* Worker image tags: evaluate tpl strings post-merge so user   */}}
 {{/* overrides of containers.main.image.tag are honoured.        */}}
 {{/* ============================================================ */}}
@@ -741,5 +797,47 @@ a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
 {{- $mergedValues = mustMergeOverwrite $mergedValues $mergedResources -}}
 {{- $_ := set . "Values" $mergedValues -}}
 
-{{/* Hand off to the bjw-s common library */}}
-{{- include "bjw-s.common.loader.all" . }}
+{{/* Run the bjw-s init pass (merges .Values.common over .Values, populating
+   .Values.global etc.) before our helper invokes bjw-s.common.lib.chart.names.fullname
+   and friends. We split init from generate so the scaledjob render below can
+   reuse the post-init bjw-s helpers without bjw-s' generate pass having seen
+   the scaledjob entries (those would fail bjw-s' controller-type validation). */}}
+{{- include "bjw-s.common.loader.init" . }}
+
+{{/* Render scaledjob controllers (partitioned aside above) as
+   keda.sh/v1alpha1 ScaledJob resources. Done before stripping their
+   advancedMounts entries so bjw-s.common.lib.pod.field.volumes (called
+   from pod.spec inside the helper) still finds the persistence mounts
+   for scaledjob workers and produces matching volume / volumeMount
+   YAML in the rendered Job pod template.
+
+   Inlined in this template (rather than a separate templates/scaledjob.yaml
+   file) because Helm does not reliably propagate intra-template Values
+   mutations across template files. */}}
+{{- if $scaledjobControllers -}}
+{{- include "media-processor.scaledjob" (dict "rootContext" . "controllers" $scaledjobControllers) }}
+{{- end -}}
+
+{{/* ============================================================ */}}
+{{/* Strip scaledjob controllers + their advancedMounts entries   */}}
+{{/* from .Values before handing off to bjw-s' generate pass.     */}}
+{{/* Stripping the controllers keeps bjw-s from rendering them as */}}
+{{/* Jobs/etc. and from failing controller-type validation;       */}}
+{{/* stripping their advancedMounts entries on each persistence   */}}
+{{/* item keeps bjw-s.common.lib.chart.validate from failing on   */}}
+{{/* "No enabled controller found" for the now-removed names.    */}}
+{{/* ============================================================ */}}
+{{- $valuesControllers := index .Values "controllers" -}}
+{{- $valuesPersistence := index .Values "persistence" | default dict -}}
+{{- range $name := keys $scaledjobControllers -}}
+  {{- $_ := unset $valuesControllers $name -}}
+  {{- range $persistenceValues := values $valuesPersistence -}}
+    {{- $advancedMounts := index $persistenceValues "advancedMounts" -}}
+    {{- if $advancedMounts -}}
+      {{- $_ := unset $advancedMounts $name -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Hand off the rest of bjw-s rendering. */}}
+{{- include "bjw-s.common.loader.generate" . }}

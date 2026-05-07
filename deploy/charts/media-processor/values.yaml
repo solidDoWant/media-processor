@@ -225,6 +225,18 @@ workers: {}
 # resources.controllers in this file. Override individual worker controllers by
 # adding resources.controllers.<workerName> with the standard bjw-s controller
 # schema (replicas, pod, containers.main, etc.).
+#
+# Controller `type` selects the rendered Kubernetes kind. The chart accepts
+# bjw-s' supported types (`deployment` (default), `daemonset`, `statefulset`,
+# `cronjob`, `job`) plus `scaledjob`, which renders a `keda.sh/v1alpha1`
+# ScaledJob in place of the Deployment for that worker (KEDA must be installed
+# separately). `type: scaledjob` is only valid for entries that match a
+# `workers.<name>` key. Lift KEDA-level config under `resources.controllers.<name>.keda.*`
+# (e.g. `pollingInterval`, `maxReplicaCount`) and Job-template config under
+# `resources.controllers.<name>.job.*` (e.g. `parallelism`, `backoffLimit`).
+# Scaledjob workers default `WORKER_IDLE_EXIT_AFTER` to `5m`, or `15m` if
+# the worker's activities resolve to include the `workflow` token; override
+# via `containers.main.env.WORKER_IDLE_EXIT_AFTER`.
 resources:
   controllers:
     watcher:
