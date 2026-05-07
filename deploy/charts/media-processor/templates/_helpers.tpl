@@ -138,6 +138,90 @@ spec:
 {{- end -}}
 
 {{/*
+podDisruptionBudget renders one policy/v1 PodDisruptionBudget for a single
+scaledjob controller. bjw-s renders PDBs through its own controller loop,
+which the chart cannot reach for type: scaledjob workers (they are stripped
+from the controllers map before bjw-s' generate pass runs), so the chart
+emits PDBs for those workers itself.
+
+Caller supplies a dict with keys "rootContext" (the chart root, post
+common.yaml merge so bjw-s helpers resolve fullname / labels), "controllerName"
+(the worker name, used both as the resource-name suffix and as the
+app.kubernetes.io/controller selector value — matches the label
+bjw-s.common.lib.pod.metadata.labels stamps onto the rendered Job pod
+template), and "pdb" (the merged podDisruptionBudget block carrying any
+combination of minAvailable / maxUnavailable from the chart default plus
+operator overrides).
+
+`hasKey` rather than `with` for minAvailable / maxUnavailable so an explicit
+zero (the scaledjob chart default's maxUnavailable: 0 is exactly this case)
+is preserved — Go template falsiness drops 0 with `with`, but PDB treats 0
+as a valid value with distinct meaning.
+
+Emitted only when the merged controller still carries a podDisruptionBudget
+block; the gating happens in the caller (templates/common.yaml) so a user-
+supplied podDisruptionBudget: null or .enabled: false produces no output.
+*/}}
+{{- define "media-processor.podDisruptionBudget" -}}
+{{- $rootContext := .rootContext -}}
+{{- $controllerName := .controllerName -}}
+{{- $pdb := .pdb -}}
+{{- $fullName := include "bjw-s.common.lib.chart.names.fullname" $rootContext -}}
+{{- $resolvedName := printf "%s-%s" $fullName $controllerName | lower | trunc 63 | trimSuffix "-" -}}
+{{- $topLabels := merge
+    (dict "app.kubernetes.io/controller" $controllerName)
+    (include "bjw-s.common.lib.metadata.allLabels" $rootContext | fromYaml)
+-}}
+{{- $topAnnotations := include "bjw-s.common.lib.metadata.globalAnnotations" $rootContext | fromYaml -}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $resolvedName }}
+  namespace: {{ $rootContext.Release.Namespace }}
+  {{- with $topLabels }}
+  labels:
+    {{- range $k, $v := . }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with $topAnnotations }}
+  annotations:
+    {{- range $k, $v := . }}
+    {{ $k }}: {{ tpl $v $rootContext | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "bjw-s.common.lib.chart.names.name" $rootContext | quote }}
+      app.kubernetes.io/instance: {{ $rootContext.Release.Name | quote }}
+      app.kubernetes.io/controller: {{ $controllerName | quote }}
+  {{- /* hasKey + non-nil so explicit zero (the scaledjob chart default's
+       maxUnavailable: 0 is exactly this case) survives, but a user-supplied
+       `null` (e.g. `maxUnavailable: null` to clear the chart default before
+       supplying a different field) drops the key from the rendered spec
+       rather than emitting `maxUnavailable:` with no value. */ -}}
+  {{- $hasMin := and (hasKey $pdb "minAvailable") (not (kindIs "invalid" (index $pdb "minAvailable"))) -}}
+  {{- $hasMax := and (hasKey $pdb "maxUnavailable") (not (kindIs "invalid" (index $pdb "maxUnavailable"))) -}}
+  {{- /* policy/v1 PodDisruptionBudget rejects spec with both fields set
+       (apiserver: "minAvailable and maxUnavailable cannot be both set").
+       The scaledjob chart default lands maxUnavailable: 0, so an operator
+       override that adds minAvailable without explicitly nulling the
+       default is a real footgun — fail at template time with a controller-
+       named message instead of letting kubectl apply surface it. */ -}}
+  {{- if and $hasMin $hasMax -}}
+    {{- fail (printf "podDisruptionBudget for controller %q: minAvailable and maxUnavailable are mutually exclusive; set the unused field to null" $controllerName) -}}
+  {{- end }}
+  {{- if $hasMin }}
+  minAvailable: {{ get $pdb "minAvailable" }}
+  {{- end }}
+  {{- if $hasMax }}
+  maxUnavailable: {{ get $pdb "maxUnavailable" }}
+  {{- end }}
+{{- end -}}
+
+{{/*
 scaledjob renders one keda.sh/v1alpha1 ScaledJob per input controller. Caller
 supplies a dict with keys "rootContext" (the chart root, post common.yaml
 merge so .Values.global is populated) and "controllers" (a map of controller
