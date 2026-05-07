@@ -194,6 +194,8 @@ metadata:
 spec:
   selector:
     matchLabels:
+      app.kubernetes.io/name: {{ include "bjw-s.common.lib.chart.names.name" $rootContext | quote }}
+      app.kubernetes.io/instance: {{ $rootContext.Release.Name | quote }}
       app.kubernetes.io/controller: {{ $controllerName | quote }}
   {{- /* hasKey + non-nil so explicit zero (the scaledjob chart default's
        maxUnavailable: 0 is exactly this case) survives, but a user-supplied
