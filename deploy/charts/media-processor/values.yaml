@@ -394,9 +394,9 @@ resources:
   # The watcher uses a ServiceMonitor: its scan loop exits within milliseconds of
   # SIGTERM, so the brief delay before the pod drops out of the Endpoints object
   # does not interfere with the scrape-wait gate. The worker uses a PodMonitor
-  # (under rawResources, also emitted by the template) because its activity drain
-  # can run for the full WORKER_STOP_TIMEOUT, during which a ServiceMonitor would
-  # lose the pod from Endpoints and break the scrape-on-shutdown gate.
+  # because its activity drain can run for the full WORKER_STOP_TIMEOUT, during
+  # which a ServiceMonitor would lose the pod from Endpoints and break the
+  # scrape-on-shutdown gate.
   serviceMonitor:
     # suffix kept to preserve the resource name across the migration to a single
     # serviceMonitor entry (bjw-s only auto-suffixes when itemCount > 1).
@@ -409,6 +409,3 @@ resources:
         - port: metrics
           interval: 1m
           scrapeTimeout: 10s
-  # rawResources: per-worker PodMonitors (suffix=<workerName>, controller selector
-  # app.kubernetes.io/controller: <workerName>) are emitted by the chart template,
-  # gated by config.worker.metrics.enabled.

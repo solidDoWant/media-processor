@@ -733,9 +733,19 @@ per worker controller, suffixed by the worker name (so resource names match the
 controller they target). PodMonitor (not ServiceMonitor) is used because the
 worker's activity drain can run for the full WORKER_STOP_TIMEOUT, during which
 a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
+
+PodMonitors are emitted via the bjw-s `podMonitor` map (added in common 5.0).
+The chart still drives the selector itself (rather than letting bjw-s auto-
+build it from `controller.identifier`) because scaledjob-typed controllers
+are stripped from `.Values.controllers` before bjw-s' generate pass runs to
+keep its controller-type validation happy, and the podMonitor class
+fails-loudly if an identifier-referenced controller is absent. The selector
+labels (name + instance + controller) match what bjw-s applies to every
+pod template, so it remains stable across deployment- and scaledjob-typed
+workers.
 */}}
 {{- $computedServices    := dict -}}
-{{- $computedRawResources := dict -}}
+{{- $computedPodMonitors := dict -}}
 {{- $workerMetricsEnabledTpl := printf "{{ .Values.config.worker.metrics.enabled }}" -}}
 {{- range $name := $workerNames -}}
   {{- $svcKey := printf "%s-metrics" $name -}}
@@ -749,33 +759,28 @@ a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
       )
     )
   ) -}}
-  {{/* Use the worker name as both the rawResource key and the suffix so the
-     bjw-s naming helper (lib/common/_valuesToObject.tpl) renders a clean
-     `<chart>-<workerName>` name regardless of how many workers are defined.
-     With itemCount > 1, identifier is appended; the suffix-equals-identifier
-     case suppresses a second appendage. With itemCount == 1, identifier is
-     not appended and the suffix supplies the final segment. */}}
-  {{- $_ := set $computedRawResources $name (dict
+  {{/* Use the worker name as both the podMonitor key and the suffix so the
+     bjw-s naming helper (lib/common/_determineResourceNameFromValues.tpl)
+     renders a clean `<chart>-<workerName>` name regardless of how many
+     workers are defined. With itemCount > 1, identifier is appended; the
+     suffix-equals-identifier case suppresses a second appendage. With
+     itemCount == 1, identifier is not appended and the suffix supplies the
+     final segment. */}}
+  {{- $_ := set $computedPodMonitors $name (dict
     "enabled" $workerMetricsEnabledTpl
     "suffix" $name
-    "apiVersion" "monitoring.coreos.com/v1"
-    "kind" "PodMonitor"
-    "spec" (dict
-      "spec" (dict
-        "selector" (dict
-          "matchLabels" (dict
-            "app.kubernetes.io/name" (printf "{{ include \"bjw-s.common.lib.chart.names.name\" $ }}")
-            "app.kubernetes.io/instance" "{{ .Release.Name }}"
-            "app.kubernetes.io/controller" $name
-          )
-        )
-        "podMetricsEndpoints" (list (dict
-          "port" "metrics"
-          "interval" "1m"
-          "scrapeTimeout" "10s"
-        ))
+    "selector" (dict
+      "matchLabels" (dict
+        "app.kubernetes.io/name" (printf "{{ include \"bjw-s.common.lib.chart.names.name\" $ }}")
+        "app.kubernetes.io/instance" "{{ .Release.Name }}"
+        "app.kubernetes.io/controller" $name
       )
     )
+    "podMetricsEndpoints" (list (dict
+      "port" "metrics"
+      "interval" "1m"
+      "scrapeTimeout" "10s"
+    ))
   ) -}}
 {{- end -}}
 
@@ -792,7 +797,7 @@ a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
   "controllers" $computedControllers
   "persistence" $computedPersistence
   "service"     $computedServices
-  "rawResources" $computedRawResources
+  "podMonitor"  $computedPodMonitors
 -}}
 {{- if $computedConfigMaps -}}
   {{- $_ := set $computedAdditions "configMaps" $computedConfigMaps -}}
@@ -871,7 +876,7 @@ does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
   {{- end -}}
 {{- end -}}
 
-{{- range $key := list "service" "serviceMonitor" "rawResources" -}}
+{{- range $key := list "service" "serviceMonitor" "podMonitor" -}}
   {{- range $obj := values (index $mergedResources $key | default dict) -}}
     {{- if and (kindIs "map" $obj) (hasKey $obj "enabled") -}}
       {{- $_ := set $obj "enabled" (eq (tpl (get $obj "enabled" | toString) $) "true") -}}
@@ -886,6 +891,19 @@ does not support. The new templates/scaledjob.yaml renders them as ScaledJobs.
 {{- $mergedValues = omit $mergedValues "config" "resources" "workers" -}}
 {{- $mergedValues = mustMergeOverwrite $mergedValues $mergedResources -}}
 {{- $_ := set . "Values" $mergedValues -}}
+
+{{/* Default global.nameOverride to the release name, matching upstream
+   bjw-s app-template. This collapses chart fullname to the release name,
+   which is required for the v5 auto-created ServiceAccount: the pod field
+   that auto-picks an unowned SA uses the SA dict key (identifier =
+   releaseName), but the SA's metadata.name comes from fullname — without
+   the override these diverge for arbitrary release names and pods would
+   reference a non-existent SA. */}}
+{{- if not (dig "global" "nameOverride" "" .Values) -}}
+  {{- $globalDefaults := dict "nameOverride" .Release.Name -}}
+  {{- $existingGlobal := index .Values "global" | default dict -}}
+  {{- $_ := set .Values "global" (mustMergeOverwrite $globalDefaults $existingGlobal) -}}
+{{- end -}}
 
 {{/* Run the bjw-s init pass (merges .Values.common over .Values, populating
    .Values.global etc.) before our helper invokes bjw-s.common.lib.chart.names.fullname
