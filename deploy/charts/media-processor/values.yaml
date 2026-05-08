@@ -180,9 +180,9 @@ config:
     # (the effective MEDIA_TRANSCODE_TIMEOUT, normally 4h) applies.
     stopTimeout: "30s"
     # The worker always exposes /metrics on port 9090 regardless of this value.
-    # The toggle controls whether cluster-side scraping infrastructure (the
-    # worker-metrics Service and its PodMonitor) is created. Leave false when
-    # running without prometheus-operator CRDs installed.
+    # The toggle controls whether cluster-side scraping infrastructure (a
+    # PodMonitor per worker) is created. Leave false when running without
+    # prometheus-operator CRDs installed.
     metrics:
       enabled: false
       highCardinalityLabels: false
@@ -384,13 +384,14 @@ resources:
     watcher-metrics:
       enabled: '{{ .Values.config.watcher.metrics.enabled }}'
       controller: watcher
+      # suffix pinned so the resolved name stays `<fullname>-watcher-metrics`
+      # even when this is the only enabled service — bjw-s only auto-appends
+      # the identifier when itemCount > 1.
+      suffix: watcher-metrics
       ports:
         metrics:
           port: 9091
           protocol: TCP
-    # Per-worker metrics services (<workerName>-metrics, controller <workerName>,
-    # port 9090) are emitted by the chart template, gated by
-    # config.worker.metrics.enabled.
   # The watcher uses a ServiceMonitor: its scan loop exits within milliseconds of
   # SIGTERM, so the brief delay before the pod drops out of the Endpoints object
   # does not interfere with the scrape-wait gate. The worker uses a PodMonitor

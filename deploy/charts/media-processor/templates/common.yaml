@@ -723,42 +723,22 @@ config.worker.stopTimeout and config.worker.metrics.scrapeWaitTimeout).
 {{- end -}}
 
 {{/* ============================================================ */}}
-{{/* Per-worker metrics Service + PodMonitor                      */}}
+{{/* Per-worker PodMonitor                                        */}}
 {{/* ============================================================ */}}
 {{/*
-The watcher and worker binaries always expose /metrics. The
-config.worker.metrics.enabled toggle controls whether the chart emits the
-worker-side scrape infrastructure. One Service and one PodMonitor are emitted
-per worker controller, suffixed by the worker name (so resource names match the
-controller they target). PodMonitor (not ServiceMonitor) is used because the
-worker's activity drain can run for the full WORKER_STOP_TIMEOUT, during which
-a ServiceMonitor would lose the pod from Endpoints and miss the final scrape.
-
-PodMonitors are emitted via the bjw-s `podMonitor` map (added in common 5.0).
-The chart still drives the selector itself (rather than letting bjw-s auto-
-build it from `controller.identifier`) because scaledjob-typed controllers
-are stripped from `.Values.controllers` before bjw-s' generate pass runs to
-keep its controller-type validation happy, and the podMonitor class
-fails-loudly if an identifier-referenced controller is absent. The selector
-labels (name + instance + controller) match what bjw-s applies to every
-pod template, so it remains stable across deployment- and scaledjob-typed
-workers.
+The worker binary always exposes /metrics on port 9090. The
+config.worker.metrics.enabled toggle controls whether the chart emits one
+PodMonitor per worker. PodMonitor (not ServiceMonitor) is used because the
+worker's activity drain can run for the full WORKER_STOP_TIMEOUT, during
+which a ServiceMonitor would lose the pod from Endpoints and miss the
+final scrape. The chart drives the PodMonitor selector itself instead of
+using `controller.identifier` because scaledjob controllers are stripped
+from `.Values.controllers` before bjw-s' generate pass and the podMonitor
+class would fail validation when looking them up.
 */}}
-{{- $computedServices    := dict -}}
 {{- $computedPodMonitors := dict -}}
 {{- $workerMetricsEnabledTpl := printf "{{ .Values.config.worker.metrics.enabled }}" -}}
 {{- range $name := $workerNames -}}
-  {{- $svcKey := printf "%s-metrics" $name -}}
-  {{- $_ := set $computedServices $svcKey (dict
-    "enabled" $workerMetricsEnabledTpl
-    "controller" $name
-    "ports" (dict
-      "metrics" (dict
-        "port" 9090
-        "protocol" "TCP"
-      )
-    )
-  ) -}}
   {{/* Use the worker name as both the podMonitor key and the suffix so the
      bjw-s naming helper (lib/common/_determineResourceNameFromValues.tpl)
      renders a clean `<chart>-<workerName>` name regardless of how many
@@ -785,8 +765,8 @@ workers.
 {{- end -}}
 
 {{/* ============================================================ */}}
-{{/* Build computed additions (env + persistence + controllers +  */}}
-{{/* per-worker services + per-worker rawResources)              */}}
+{{/* Build computed additions (controllers + persistence +        */}}
+{{/* per-worker podMonitors + configMaps + secrets)               */}}
 {{/* ============================================================ */}}
 {{- $computedControllers := dict "watcher" (dict "containers" (dict "watcher" (dict "env" $watcherEnv))) -}}
 {{- range $name, $ctrl := $computedWorkerControllers -}}
@@ -796,7 +776,6 @@ workers.
 {{- $computedAdditions := dict
   "controllers" $computedControllers
   "persistence" $computedPersistence
-  "service"     $computedServices
   "podMonitor"  $computedPodMonitors
 -}}
 {{- if $computedConfigMaps -}}
