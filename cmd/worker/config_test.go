@@ -547,10 +547,11 @@ func TestParseBackoffCoefficient(t *testing.T) {
 	}
 }
 
-// TestLoadWorkflowConfigNotifyDefaults verifies that loadWorkflowConfig leaves
-// the four Notify retry-policy fields zero when their env vars are unset, so
-// NewActivities applies the package-level defaults rather than producing a
-// RetryPolicy with zero intervals.
+// TestLoadWorkflowConfigNotifyDefaults verifies that loadWorkflowConfig
+// resolves the four Notify retry-policy fields to the package-level
+// DefaultNotify* values when the corresponding env vars are unset, so the
+// worker's retry policy matches the documented defaults without depending
+// on NewActivities' zero-value fallback.
 func TestLoadWorkflowConfigNotifyDefaults(t *testing.T) {
 	for _, key := range []string{
 		"MEDIA_NOTIFY_INITIAL_INTERVAL",
