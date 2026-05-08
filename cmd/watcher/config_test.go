@@ -30,12 +30,14 @@ func TestLoadConfig(t *testing.T) {
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
   - name: shows
-    watchedPath: /watch/shows
+    input:
+      path: /watch/shows
     mediaType: show
     output:
       path: /out/shows
@@ -43,8 +45,8 @@ watches:
 			expected: Config{
 				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
-					{Name: "shows", WatchedPath: "/watch/shows", MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: "/out/shows"}},
+					{Name: "movies", Input: watcherconfig.WatchEntryInput{Path: "/watch/movies"}, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
+					{Name: "shows", Input: watcherconfig.WatchEntryInput{Path: "/watch/shows"}, MediaType: medialib.ShowType, Output: watcherconfig.WatchEntryOutput{Path: "/out/shows"}},
 				},
 			},
 		},
@@ -76,7 +78,8 @@ watches: []
 			name: "omitted name in watch entry returns error",
 			content: `
 watches:
-  - watchedPath: /watch/movies
+  - input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -88,7 +91,8 @@ watches:
 			content: `
 watches:
   - name: ""
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -96,7 +100,7 @@ watches:
 			errFunc: require.Error,
 		},
 		{
-			name: "omitted watchedPath in watch entry returns error",
+			name: "omitted input.path in watch entry returns error",
 			content: `
 watches:
   - name: movies
@@ -107,11 +111,12 @@ watches:
 			errFunc: require.Error,
 		},
 		{
-			name: "empty watchedPath in watch entry returns error",
+			name: "empty input.path in watch entry returns error",
 			content: `
 watches:
   - name: movies
-    watchedPath: ""
+    input:
+      path: ""
     mediaType: movie
     output:
       path: /out/movies
@@ -123,7 +128,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
 `,
 			errFunc: require.Error,
@@ -133,7 +139,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: ""
@@ -145,7 +152,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -154,7 +162,7 @@ watches:
 			expected: Config{
 				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies", RemotePath: "/remote/movies"}},
+					{Name: "movies", Input: watcherconfig.WatchEntryInput{Path: "/watch/movies"}, MediaType: medialib.MovieType, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies", RemotePath: "/remote/movies"}},
 				},
 			},
 		},
@@ -163,7 +171,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: ""
     output:
       path: /out/movies
@@ -175,7 +184,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: UnknownType
     output:
       path: /out/movies
@@ -217,7 +227,8 @@ watches: []
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     preserveSource: true
     output:
@@ -226,7 +237,7 @@ watches:
 			expected: Config{
 				ScanInterval: watcherconfig.DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/watch/movies", MediaType: medialib.MovieType, PreserveSource: true, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
+					{Name: "movies", Input: watcherconfig.WatchEntryInput{Path: "/watch/movies"}, MediaType: medialib.MovieType, PreserveSource: true, Output: watcherconfig.WatchEntryOutput{Path: "/out/movies"}},
 				},
 			},
 		},
@@ -235,7 +246,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -249,7 +261,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -263,7 +276,8 @@ watches:
 			content: `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -309,7 +323,8 @@ func TestLoadConfig_NullIgnorePatternEntryDropped(t *testing.T) {
 	content := `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies
@@ -331,7 +346,8 @@ func TestLoadConfig_IgnorePatternsParsedAndCompiled(t *testing.T) {
 	content := `
 watches:
   - name: movies
-    watchedPath: /watch/movies
+    input:
+      path: /watch/movies
     mediaType: movie
     output:
       path: /out/movies

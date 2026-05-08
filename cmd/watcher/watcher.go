@@ -369,14 +369,14 @@ func validateWatchDirs(cfg *Config) error {
 	errs := make([]error, 0, len(cfg.Watches))
 
 	for _, w := range cfg.Watches {
-		info, err := os.Stat(w.WatchedPath)
+		info, err := os.Stat(w.Input.Path)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("watch directory %q: %w", w.WatchedPath, err))
+			errs = append(errs, fmt.Errorf("watch directory %q: %w", w.Input.Path, err))
 			continue
 		}
 
 		if !info.IsDir() {
-			errs = append(errs, fmt.Errorf("watch path %q is not a directory", w.WatchedPath))
+			errs = append(errs, fmt.Errorf("watch path %q is not a directory", w.Input.Path))
 		}
 	}
 
@@ -404,9 +404,9 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 		// Normalise the watch path to an absolute path once per entry so that watchRoot
 		// is always comparable to the absolute file paths produced inside the walk callback.
-		absWatchRoot, err := filepath.Abs(w.WatchedPath)
+		absWatchRoot, err := filepath.Abs(w.Input.Path)
 		if err != nil {
-			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for watch directory %q: %w", w.WatchedPath, err))
+			mappingErrs = append(mappingErrs, fmt.Errorf("resolve absolute path for watch directory %q: %w", w.Input.Path, err))
 			errs = append(errs, mappingErrs...)
 
 			continue
@@ -414,7 +414,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 
 		trimmedOutputPath := strings.TrimSpace(w.Output.Path)
 		if trimmedOutputPath == "" {
-			mappingErrs = append(mappingErrs, fmt.Errorf("output.path is blank or whitespace-only for watch %q (watched path %q)", w.Name, w.WatchedPath))
+			mappingErrs = append(mappingErrs, fmt.Errorf("output.path is blank or whitespace-only for watch %q (watched path %q)", w.Name, w.Input.Path))
 			errs = append(errs, mappingErrs...)
 
 			continue
@@ -509,7 +509,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				return err
 			}
 
-			mappingErrs = append(mappingErrs, fmt.Errorf("walk directory %q: %w", w.WatchedPath, err))
+			mappingErrs = append(mappingErrs, fmt.Errorf("walk directory %q: %w", w.Input.Path, err))
 		}
 
 		slog.InfoContext(ctx, "scan complete",

@@ -22,25 +22,28 @@ scanInterval: 5s
 
 watches:
   - name: movies
-    watchedPath: /downloads/movies
-    mediaType: movie          # "movie" or "show"
+    input:
+      path: /downloads/movies   # directory the watcher scans
+    mediaType: movie            # "movie" or "show"
     output:
       path: /processed/movies
-      remotePath: /media/movies   # path as seen by Radarr (omit if same as output.path)
+      remotePath: /media/movies # path as seen by Radarr (omit if same as output.path)
     ignorePatterns:
-      - \.!qB$               # incomplete qBittorrent downloads
-      - (^|/)_unpack(/|$)    # unpack-in-progress directories
-    preserveSource: false     # delete source after processing (default)
+      - \.!qB$                  # incomplete qBittorrent downloads
+      - (^|/)_unpack(/|$)       # unpack-in-progress directories
+    preserveSource: false       # delete source after processing (default)
     retainEmptyDirectories: false  # prune empty dirs after deletion (default)
 
   - name: shows
-    watchedPath: /downloads/tv
+    input:
+      path: /downloads/tv
     mediaType: show
     output:
       path: /processed/tv
 
   - name: archive
-    watchedPath: /downloads/archive
+    input:
+      path: /downloads/archive
     mediaType: movie
     output:
       path: /processed/archive
@@ -54,7 +57,7 @@ watches:
 | ---------------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scanInterval`                     | string   | `5s`    | Go duration string (e.g. `5s`, `1m30s`) controlling how often each watch directory is scanned. Defaults to `5s` when omitted.                                                                                           |
 | `watches[].name`                   | string   | —       | **Required.** Logical name for this watch entry; used as a label in metrics.                                                                                                                                            |
-| `watches[].watchedPath`            | string   | —       | **Required.** Path to the directory to watch. Relative paths are resolved against the watcher's working directory.                                                                                                      |
+| `watches[].input.path`             | string   | —       | **Required.** Path to the directory to watch. Relative paths are resolved against the watcher's working directory.                                                                                                      |
 | `watches[].mediaType`              | string   | —       | **Required.** `movie` or `show`. Determines which library service (Radarr or Sonarr) is notified.                                                                                                                       |
 | `watches[].output.path`            | string   | —       | **Required.** Directory where processed files for this watch entry are written.                                                                                                                                         |
 | `watches[].output.remotePath`      | string   | `""`    | Path by which the output directory is known to the arr service (Radarr or Sonarr). Set this when the worker and the arr service mount the output volume at different paths. When empty, no path translation is applied. |
@@ -229,7 +232,8 @@ Example: the worker writes to `/processed/radarr` but Radarr sees the same volum
 ```yaml
 watches:
   - name: movies
-    watchedPath: /downloads/movies
+    input:
+      path: /downloads/movies
     mediaType: movie
     output:
       path: /processed/radarr
