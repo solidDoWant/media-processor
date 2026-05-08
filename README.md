@@ -32,7 +32,7 @@ Sonarr/Radarr's `/downloads` is bind-mounted from `/processed-output` on the hos
 2. Sonarr/Radarr sends the release to the download client.
 3. The download client saves the completed file to `/downloads` and reports the path back to Sonarr/Radarr.
 4. The watcher detects the new file and starts a Temporal workflow execution.
-5. The worker picks up the job: it probes the file, detects black-bar crop, and writes an MKV output to the directory specified by `output.path` in the watcher config (mirroring the input's subdirectory under that path when `watchedPath` is a parent of the input file). Non-H.264/H.265 video is re-encoded to H.265; H.264 or H.265 sources already in MKV are remuxed without re-encode unless a crop is being applied.
+5. The worker picks up the job: it probes the file, detects black-bar crop, and writes an MKV output to the directory specified by `output.path` in the watcher config (mirroring the input's subdirectory under that path when `input.path` is a parent of the input file). Non-H.264/H.265 video is re-encoded to H.265; H.264 or H.265 sources already in MKV are remuxed without re-encode unless a crop is being applied.
 6. The worker calls the Radarr or Sonarr API to trigger a library rescan using the transcoded output file path. When `output.remotePath` is configured, the `output.path` prefix in that path is replaced by `output.remotePath` to produce the path as Sonarr/Radarr sees it (e.g., local `/processed-output/movies/film.mkv` becomes `/downloads/movies/film.mkv` when `output.remotePath` is `/downloads`).
 7. Sonarr/Radarr scans the notified path, finds the processed file, and imports it into the library.
 
@@ -62,12 +62,14 @@ Minimal watcher config:
 ```yaml
 watches:
   - name: movies
-    watchedPath: /downloads/movies
+    input:
+      path: /downloads/movies
     mediaType: movie
     output:
       path: /processed/movies
   - name: shows
-    watchedPath: /downloads/tv
+    input:
+      path: /downloads/tv
     mediaType: show
     output:
       path: /processed/tv

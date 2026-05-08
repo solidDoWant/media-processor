@@ -24,7 +24,7 @@ func TestNewValidator_MinLengthRulesEnforced(t *testing.T) {
 			cfg: Config{
 				ScanInterval: DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/watch", MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
+					{Name: "movies", Input: WatchEntryInput{Path: "/watch"}, MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
 				},
 			},
 		},
@@ -33,17 +33,17 @@ func TestNewValidator_MinLengthRulesEnforced(t *testing.T) {
 			cfg: Config{
 				ScanInterval: DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "", WatchedPath: "/watch", MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
+					{Name: "", Input: WatchEntryInput{Path: "/watch"}, MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
 				},
 			},
 			errFunc: require.Error,
 		},
 		{
-			name: "empty WatchedPath is rejected",
+			name: "empty Input.Path is rejected",
 			cfg: Config{
 				ScanInterval: DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "", MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
+					{Name: "movies", Input: WatchEntryInput{Path: ""}, MediaType: "movie", Output: WatchEntryOutput{Path: "/out"}},
 				},
 			},
 			errFunc: require.Error,
@@ -53,7 +53,7 @@ func TestNewValidator_MinLengthRulesEnforced(t *testing.T) {
 			cfg: Config{
 				ScanInterval: DefaultScanInterval,
 				Watches: []WatchEntry{
-					{Name: "movies", WatchedPath: "/watch", MediaType: "movie", Output: WatchEntryOutput{Path: ""}},
+					{Name: "movies", Input: WatchEntryInput{Path: "/watch"}, MediaType: "movie", Output: WatchEntryOutput{Path: ""}},
 				},
 			},
 			errFunc: require.Error,

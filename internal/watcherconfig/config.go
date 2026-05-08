@@ -98,6 +98,13 @@ func (c *CompiledRegexp) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// WatchEntryInput describes the input source for a watch entry.
+type WatchEntryInput struct {
+	// Path is the filesystem path to the directory the watcher scans. Relative paths are
+	// resolved against the watcher's working directory.
+	Path string `yaml:"path" jsonschema:"minLength=1"`
+}
+
 // WatchEntryOutput describes the output destination for a watch entry.
 type WatchEntryOutput struct {
 	// Path is the filesystem path to the directory where processed files are written.
@@ -113,9 +120,8 @@ type WatchEntryOutput struct {
 type WatchEntry struct {
 	// Name is a human-readable label for this watch entry, used in logs and metrics.
 	Name string `yaml:"name" jsonschema:"minLength=1"`
-	// WatchedPath is the filesystem path to the directory to watch. Relative paths are resolved
-	// against the watcher's working directory.
-	WatchedPath string `yaml:"watchedPath" jsonschema:"minLength=1"`
+	// Input describes the directory the watcher scans for media files.
+	Input WatchEntryInput `yaml:"input"`
 	// MediaType indicates whether this directory contains movies or TV show episodes.
 	MediaType medialib.MediaType `yaml:"mediaType" validate:"mediatype"`
 	// IgnorePatterns is an optional list of Go regular expressions matched against the absolute

@@ -117,16 +117,6 @@ config:
             name: ""
             key: ""
 
-  # inputVolume is a bjw-s persistence item (type, existingClaim, etc.) without globalMounts or
-  # advancedMounts; the chart manages mounts at /media/input. An optional chart-specific subPath
-  # field controls the volume mount subPath. When empty, no input volume is created.
-  inputVolume: {}
-  # inputVolume:
-  #   type: nfs
-  #   server: nas.example.com
-  #   path: /volume1/media
-  #   subPath: input
-
   watcher:
     # configType controls whether the watcher YAML config file is stored as a ConfigMap or Secret.
     configType: ConfigMap
@@ -134,14 +124,40 @@ config:
     # "1m30s"). Defaults to "5s" when empty (the watcher binary applies the default). Written to
     # scanInterval in the rendered watcher YAML config.
     scanInterval: ""
+    # watches is the list of directories the watcher scans. Each entry has its own input
+    # (where the watcher reads from) and output (where the worker writes to) blocks. Both
+    # blocks reference a volume defined under config.watcher.volumes by name and pin the
+    # in-container mount path (mountPath) and an optional subPath into that volume:
+    #
+    #   - name: bittorrent-movies
+    #     mediaType: movie
+    #     input:
+    #       volumeName: bittorrent
+    #       mountPath: /media/input/bittorrent/Movies
+    #       subPath: Movies
+    #     output:
+    #       volumeName: media
+    #       mountPath: /media/output/movies
+    #       subPath: converted/Movies
+    #       remotePath: /mnt/complete
+    #
+    # The chart wires input volumes onto the watcher (read-only) and every worker (read-write),
+    # and output volumes onto every worker (read-write). The watcher container only ever sees
+    # input volumes — outputs never get a read-only watcher mount, since the watcher does not
+    # touch them. Multiple watches may reference the same volume at different mount paths.
     watches: []
-    # volumes is a map of volume names to bjw-s persistence items (type, existingClaim, server/path,
-    # etc.) without globalMounts or advancedMounts; the chart manages mounts. Keys become bjw-s
-    # persistence keys. Referenced by watch entry output.volumeName fields. Volumes not referenced
-    # by any watch entry are not mounted. When empty, no output volumes are created.
+    # volumes is a map of volume names to bjw-s persistence items (type, existingClaim,
+    # server/path, etc.) without globalMounts or advancedMounts; the chart manages mounts.
+    # Keys become bjw-s persistence keys. Referenced by watch entry input.volumeName /
+    # output.volumeName fields. Volumes not referenced by any watch entry are not mounted.
+    # When empty, no input or output volumes are created.
     volumes: {}
     # volumes:
-    #   media-output:
+    #   bittorrent:
+    #     type: nfs
+    #     server: nas.example.com
+    #     path: /volume1/downloads
+    #   media:
     #     type: nfs
     #     server: nas.example.com
     #     path: /volume1/media

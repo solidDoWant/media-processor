@@ -15,11 +15,10 @@ helm install my-release oci://ghcr.io/soliddowant/charts/media-processor --versi
 `config.temporal.address` is required at `helm template` time — the chart fails with a clear error when it (or any of `config.temporal.namespace` / `config.temporal.taskQueue`) is empty. `namespace` and `taskQueue` have built-in defaults, so only `address` typically needs to be supplied. In addition, the pods will fail at runtime without the following values. You will need at a minimum:
 
 - `config.temporal.address` — Temporal frontend host:port (e.g. `temporal-frontend.temporal.svc.cluster.local:7233`)
-- `config.watcher.watches` — at least one watch entry
+- `config.watcher.watches` — at least one watch entry, each with `input` and `output` blocks
 - `config.worker.radarr.url` + `config.worker.radarr.apiKey`
 - `config.worker.sonarr.url` + `config.worker.sonarr.apiKey`
-- `config.inputVolume` — volume definition for the media input directory
-- `config.watcher.volumes` — one volume definition per distinct `output.volumeName` referenced by watch entries
+- `config.watcher.volumes` — one volume definition per distinct `input.volumeName` / `output.volumeName` referenced by watch entries
 
 ## Values reference
 
@@ -72,33 +71,13 @@ config:
       X-Trace-Origin: helm
 ```
 
-### `config.inputVolume`
-
-A bjw-s persistence item describing the volume that holds the input media files. The chart mounts it at `/media/input` in both the watcher (read-only) and the worker (read-write). When empty (`{}`), no input volume is created.
-
-Any bjw-s persistence item type is supported (`persistentVolumeClaim`, `hostPath`, `nfs`, `custom`, etc.). Do not set `globalMounts` or `advancedMounts` — the chart manages those.
-
-| Field                        | Type   | Default | Description                                |
-| ---------------------------- | ------ | ------- | ------------------------------------------ |
-| `config.inputVolume.subPath` | string | `""`    | Optional subPath for the volume mount      |
-| (all other fields)           | —      | —       | Passed through as a bjw-s persistence item |
-
-Example:
-
-```yaml
-config:
-  inputVolume:
-    type: persistentVolumeClaim
-    existingClaim: my-input-pvc
-```
-
 ### `config.watcher`
 
 | Field                                      | Type   | Default     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------ | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `config.watcher.configType`                | string | `ConfigMap` | Storage type for the watcher YAML config file. `ConfigMap` or `Secret`                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `config.watcher.scanInterval`              | string | `""`        | Duration between directory scans, as a Go duration string (e.g. `5s`, `1m30s`). When empty, the watcher uses the built-in default of `5s`. Written to `scanInterval` in the rendered watcher YAML config                                                                                                                                                                                                                                                                                   |
-| `config.watcher.volumes`                   | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). When empty, no output volumes are created                                                                                                                                                                                                                                                                                                                                                                                      |
+| `config.watcher.volumes`                   | map    | `{}`        | Map of volume names to bjw-s persistence items (see below). Each volume is referenced by `input.volumeName` and/or `output.volumeName` on watch entries. Volumes never referenced are not mounted                                                                                                                                                                                                                                                                                          |
 | `config.watcher.watches`                   | list   | `[]`        | List of watch entries. Written to `watches` in the config file (see below)                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `config.watcher.logLevel`                  | string | `info`      | Sets `LOG_LEVEL` on the watcher container                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `config.watcher.metrics.enabled`           | bool   | `false`     | When true, the chart emits the watcher-metrics `Service` and its `ServiceMonitor`. The watcher binary always exposes `/metrics` on port 9091 regardless; this toggle only controls cluster-side scraping infrastructure (see [Metrics scraping](#metrics-scraping))                                                                                                                                                                                                                        |
@@ -109,51 +88,62 @@ The watcher YAML config file is stored as a `ConfigMap` (or `Secret` when `confi
 
 ### `config.watcher.volumes`
 
-A map of volume names to bjw-s persistence items. Keys become the bjw-s persistence key (and the Kubernetes volume name). Values are standard bjw-s persistence items (`type`, `existingClaim`, `server`/`path` for NFS, etc.) — do not set `globalMounts` or `advancedMounts`, the chart manages those. Volumes are mounted in the worker only. A volume is only mounted if at least one watch entry references it by `volumeName`; volumes with no references are ignored.
+A map of volume names to bjw-s persistence items. Keys become the bjw-s persistence key (and the Kubernetes volume name). Values are standard bjw-s persistence items (`type`, `existingClaim`, `server`/`path` for NFS, etc.) — do not set `globalMounts` or `advancedMounts`, the chart manages those. Each volume is referenced by `input.volumeName` and/or `output.volumeName` on watch entries; volumes referenced by neither are ignored.
 
 | Field                         | Type   | Default | Description                              |
 | ----------------------------- | ------ | ------- | ---------------------------------------- |
 | `config.watcher.volumes.NAME` | object | —       | bjw-s persistence item for volume `NAME` |
 
-### `config.watcher.watches` — output fields
+### `config.watcher.watches` — input and output fields
 
-Each watch entry in `config.watcher.watches` may include the following fields in its `output` block. `output.volumeName`, `output.mountPath`, and `output.subPath` are Helm-only fields used to configure Kubernetes volume mounts; they are not written to the watcher YAML config. The chart injects `output.path` from `mountPath` so the worker receives the correct path at runtime. `output.remotePath` is not Helm-only and is preserved as `remotePath` in the watcher YAML config.
+Each watch entry in `config.watcher.watches` declares an `input` block (where the watcher reads from) and an `output` block (where the worker writes to). Both blocks share the same `{volumeName, mountPath, subPath}` shape; `volumeName`, `mountPath`, and `subPath` are Helm-only fields used to configure Kubernetes volume mounts and are stripped before the watcher YAML config is written. The chart injects `input.path` and `output.path` from each block's `mountPath` so the binary receives the correct in-container paths at runtime. `output.remotePath` is not Helm-only and is preserved as `output.remotePath` in the watcher YAML.
 
-| Field               | Type   | Required | Description                                                                                    |
-| ------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| `output.volumeName` | string | yes      | Name of the volume from `config.watcher.volumes` to mount for this watch entry's output        |
-| `output.mountPath`  | string | yes      | Container path where the volume is mounted; becomes `output.path` in the watcher YAML config   |
-| `output.subPath`    | string | no       | Optional volume mount subPath; not written to the watcher YAML config                          |
-| `output.remotePath` | string | no       | How the arr service (Radarr/Sonarr) sees this output path. Written to `remotePath` in the YAML |
+The chart wires referenced volumes onto the watcher (read-only mounts of `input` refs only) and every worker (read-write mounts of both `input` and `output` refs) — the watcher never sees output volumes, since it does not touch them.
 
-Multiple watch entries may reference the same `volumeName` with different `mountPath`/`subPath` values; the chart creates one Kubernetes volume with multiple mounts rather than duplicating the underlying PVC or NFS share.
+| Field               | Type   | Required | Description                                                                                                                |
+| ------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `input.volumeName`  | string | yes      | Name of the volume from `config.watcher.volumes` to mount as the watch's input directory                                   |
+| `input.mountPath`   | string | yes      | In-container path where the volume is mounted; becomes `input.path` in the watcher YAML config                             |
+| `input.subPath`     | string | no       | Optional volume mount subPath; not written to the watcher YAML config                                                      |
+| `output.volumeName` | string | yes      | Name of the volume from `config.watcher.volumes` to mount for this watch entry's output                                    |
+| `output.mountPath`  | string | yes      | In-container path where the volume is mounted; becomes `output.path` in the watcher YAML config                            |
+| `output.subPath`    | string | no       | Optional volume mount subPath; not written to the watcher YAML config                                                      |
+| `output.remotePath` | string | no       | How the arr service (Radarr/Sonarr) sees this output path. Written to `output.remotePath` in the YAML                      |
 
-Example — one NFS share serving two watch entries at different sub-paths:
+Multiple watch entries may reference the same `volumeName` (in either block) with different `mountPath`/`subPath` values; the chart creates one Kubernetes volume with multiple mounts rather than duplicating the underlying PVC or NFS share.
+
+Example — one NFS share serving downloads (input) and processed files (output) under different sub-paths:
 
 ```yaml
 config:
   watcher:
     volumes:
-      media-output:
+      media:
         type: nfs
         server: nas.example.com
         path: /volume1/media
     watches:
       - name: movies
-        watchedPath: /media/input/movies
         mediaType: movie
+        input:
+          volumeName: media
+          mountPath: /media/input/movies
+          subPath: downloads/movies
         output:
-          volumeName: media-output
+          volumeName: media
           mountPath: /media/output/movies
-          subPath: movies
+          subPath: converted/movies
           remotePath: /downloads/movies
       - name: shows
-        watchedPath: /media/input/shows
         mediaType: show
+        input:
+          volumeName: media
+          mountPath: /media/input/shows
+          subPath: downloads/shows
         output:
-          volumeName: media-output
+          volumeName: media
           mountPath: /media/output/shows
-          subPath: shows
+          subPath: converted/shows
           remotePath: /downloads/shows
 ```
 
@@ -408,7 +398,6 @@ These values are intentionally not configurable in `values.yaml`:
 
 | Setting               | Value                       |
 | --------------------- | --------------------------- |
-| Input mount path      | `/media/input`              |
 | Watcher config mount  | `/etc/media-processor/`     |
 | Temporal config mount | `/etc/temporal/`            |
 | Temporal TLS root     | `/etc/temporal-tls/<name>/` |
@@ -459,21 +448,23 @@ config:
     namespace: "default"
     taskQueue: "media-processor"
 
-  inputVolume:
-    type: persistentVolumeClaim
-    existingClaim: downloads-pvc
-
   watcher:
     scanInterval: "30s"
     volumes:
+      downloads:
+        type: persistentVolumeClaim
+        existingClaim: downloads-pvc
       processed-output:
         type: nfs
         server: nas.example.com
         path: /volume1/processed
     watches:
       - name: movies
-        watchedPath: /media/input/movies
         mediaType: movie
+        input:
+          volumeName: downloads
+          mountPath: /media/input/movies
+          subPath: movies
         output:
           volumeName: processed-output
           mountPath: /media/output/movies
@@ -482,8 +473,11 @@ config:
           # so Radarr sees /downloads/movies where the worker writes /media/output/movies.
           remotePath: /downloads/movies
       - name: shows
-        watchedPath: /media/input/shows
         mediaType: show
+        input:
+          volumeName: downloads
+          mountPath: /media/input/shows
+          subPath: shows
         output:
           volumeName: processed-output
           mountPath: /media/output/shows

@@ -45,10 +45,9 @@
           "minLength": 1,
           "description": "Name is a human-readable label for this watch entry, used in logs and metrics."
         },
-        "watchedPath": {
-          "type": "string",
-          "minLength": 1,
-          "description": "WatchedPath is the filesystem path to the directory to watch. Relative paths are resolved\nagainst the watcher's working directory."
+        "input": {
+          "$ref": "#/$defs/WatchEntryInput",
+          "description": "Input describes the directory the watcher scans for media files."
         },
         "mediaType": {
           "$ref": "#/$defs/MediaType",
@@ -78,11 +77,26 @@
       "type": "object",
       "required": [
         "name",
-        "watchedPath",
+        "input",
         "mediaType",
         "output"
       ],
       "description": "WatchEntry describes a watched location, mapping a filesystem path to a media type for dispatch and carrying a human-readable name for identification."
+    },
+    "WatchEntryInput": {
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path is the filesystem path to the directory the watcher scans. Relative paths are\nresolved against the watcher's working directory."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "description": "WatchEntryInput describes the input source for a watch entry."
     },
     "WatchEntryOutput": {
       "properties": {

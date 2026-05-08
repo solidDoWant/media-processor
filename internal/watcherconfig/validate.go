@@ -21,7 +21,7 @@ func NewValidator() *validator.Validate {
 		panic("failed to register validation \"mediatype\": " + err.Error())
 	}
 
-	registerSchemaConstraints(v, Config{}, WatchEntry{}, WatchEntryOutput{})
+	registerSchemaConstraints(v, Config{}, WatchEntry{}, WatchEntryInput{}, WatchEntryOutput{})
 
 	return v
 }
