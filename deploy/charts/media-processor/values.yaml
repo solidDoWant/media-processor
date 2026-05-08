@@ -237,6 +237,29 @@ config:
         # MEDIA_TRANSCODE_TIMEOUT. Set to "0s" to disable both progress logging and
         # heartbeat-based stall detection. When empty, the binary default of 30s applies.
         progressLogInterval: ""
+      # notify tunes the Temporal RetryPolicy on the Notify activity, which issues
+      # the Sonarr/Radarr scan command after a transcode and blocks until the import
+      # completes. The default schedule (5s, 7.5s, 11s, 17s, 25s, 38s, 57s, then 60s
+      # × 8 = ~9 min total wall time) retries quickly to clear arr command-queue
+      # saturation while extending past a typical 60s NFS acdirmax window — the
+      # most common failure mode is the arr service not yet seeing the new file
+      # because of NFS attribute-cache staleness on its mount. Each value below maps
+      # 1:1 to a MEDIA_NOTIFY_* env var on the worker; leave empty for the binary
+      # default. See docs/configuration.md for tuning guidance.
+      notify:
+        # initialInterval sets MEDIA_NOTIFY_INITIAL_INTERVAL (Go duration). When empty,
+        # the binary default of 5s applies. Must be > 0.
+        initialInterval: ""
+        # backoffCoefficient sets MEDIA_NOTIFY_BACKOFF_COEFFICIENT (float >= 1.0; 1.0
+        # means constant spacing, > 1.0 means exponential growth). When empty, the
+        # binary default of 1.5 applies.
+        backoffCoefficient: ""
+        # maximumInterval sets MEDIA_NOTIFY_MAXIMUM_INTERVAL (Go duration). When empty,
+        # the binary default of 60s applies. Must be > 0.
+        maximumInterval: ""
+        # maximumAttempts sets MEDIA_NOTIFY_MAXIMUM_ATTEMPTS (positive integer). When
+        # empty, the binary default of 15 applies.
+        maximumAttempts: ""
     radarr:
       url: ""
       apiKey:

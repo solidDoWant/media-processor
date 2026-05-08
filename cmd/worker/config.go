@@ -325,14 +325,38 @@ func loadWorkflowConfig() (media.MediaWorkflowConfig, error) {
 		return media.MediaWorkflowConfig{}, err
 	}
 
+	notifyInitialInterval, err := parsePositiveTimeout("MEDIA_NOTIFY_INITIAL_INTERVAL", media.DefaultNotifyInitialInterval)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	notifyBackoffCoefficient, err := parseBackoffCoefficient("MEDIA_NOTIFY_BACKOFF_COEFFICIENT", media.DefaultNotifyBackoffCoefficient)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	notifyMaximumInterval, err := parsePositiveTimeout("MEDIA_NOTIFY_MAXIMUM_INTERVAL", media.DefaultNotifyMaximumInterval)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
+	notifyMaximumAttempts, err := parsePositiveInt32("MEDIA_NOTIFY_MAXIMUM_ATTEMPTS", media.DefaultNotifyMaximumAttempts)
+	if err != nil {
+		return media.MediaWorkflowConfig{}, err
+	}
+
 	return media.MediaWorkflowConfig{
-		HighCardinalityLabels: highCardinalityLabels,
-		MinCropX:              minCropX,
-		MinCropY:              minCropY,
-		DetectCropTimeout:     detectCropTimeout,
-		TranscodeTimeout:      transcodeTimeout,
-		H265CRF:               h265CRF,
-		ProgressLogInterval:   progressLogInterval,
+		HighCardinalityLabels:    highCardinalityLabels,
+		MinCropX:                 minCropX,
+		MinCropY:                 minCropY,
+		DetectCropTimeout:        detectCropTimeout,
+		TranscodeTimeout:         transcodeTimeout,
+		H265CRF:                  h265CRF,
+		ProgressLogInterval:      progressLogInterval,
+		NotifyInitialInterval:    notifyInitialInterval,
+		NotifyBackoffCoefficient: notifyBackoffCoefficient,
+		NotifyMaximumInterval:    notifyMaximumInterval,
+		NotifyMaximumAttempts:    notifyMaximumAttempts,
 	}, nil
 }
 
@@ -385,6 +409,67 @@ func parseTimeout(envVar string, defaultVal time.Duration) (time.Duration, error
 	}
 
 	return d, nil
+}
+
+// parsePositiveTimeout reads a strictly-positive Go duration from the named
+// environment variable. Empty input returns defaultVal; zero or negative
+// values are a fatal error. Used for retry-policy intervals where a
+// non-positive value would either disable retries or send Temporal into a
+// busy loop.
+func parsePositiveTimeout(envVar string, defaultVal time.Duration) (time.Duration, error) {
+	d, err := parseTimeout(envVar, defaultVal)
+	if err != nil {
+		return 0, err
+	}
+
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration (got %q)", envVar, os.Getenv(envVar))
+	}
+
+	return d, nil
+}
+
+// parsePositiveInt32 reads a positive int32 from the named env var. Empty
+// input returns defaultVal; non-integer, non-positive, or out-of-range values
+// are a fatal error.
+func parsePositiveInt32(envVar string, defaultVal int32) (int32, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a positive integer (got %q): %w", envVar, raw, err)
+	}
+
+	if v <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer (got %q)", envVar, raw)
+	}
+
+	return int32(v), nil
+}
+
+// parseBackoffCoefficient reads a Temporal RetryPolicy backoff coefficient
+// from the named env var. Empty input returns defaultVal; values < 1.0 are
+// rejected because Temporal requires the coefficient to be >= 1 (a value of
+// 1 means constant spacing; > 1 means exponential growth).
+func parseBackoffCoefficient(envVar string, defaultVal float64) (float64, error) {
+	raw := os.Getenv(envVar)
+	if raw == "" {
+		return defaultVal, nil
+	}
+
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a float >= 1.0 (got %q): %w", envVar, raw, err)
+	}
+
+	if v < 1.0 {
+		return 0, fmt.Errorf("%s must be a float >= 1.0 (got %q)", envVar, raw)
+	}
+
+	return v, nil
 }
 
 // validateHardwareDevicePath rejects paths that exist but are not character
