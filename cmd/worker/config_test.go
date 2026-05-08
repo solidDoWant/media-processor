@@ -424,6 +424,168 @@ func TestLoadConfigIdleExitAfter(t *testing.T) {
 	}
 }
 
+func TestParsePositiveTimeout(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal time.Duration
+		expected   time.Duration
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{name: "unset returns default", envValue: "", defaultVal: 5 * time.Second, expected: 5 * time.Second},
+		{name: "valid positive duration", envValue: "10s", defaultVal: 5 * time.Second, expected: 10 * time.Second},
+		{name: "zero rejected", envValue: "0s", defaultVal: 5 * time.Second, errFunc: require.Error},
+		{name: "negative rejected", envValue: "-1s", defaultVal: 5 * time.Second, errFunc: require.Error},
+		{name: "unparseable rejected", envValue: "soon", defaultVal: 5 * time.Second, errFunc: require.Error},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_POSITIVE_TIMEOUT_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parsePositiveTimeout(envVar, test.defaultVal)
+			errFunc(t, err)
+
+			if err != nil {
+				assert.Contains(t, err.Error(), envVar)
+				return
+			}
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
+func TestParsePositiveInt32(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal int32
+		expected   int32
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{name: "unset returns default", envValue: "", defaultVal: 15, expected: 15},
+		{name: "valid positive integer", envValue: "30", defaultVal: 15, expected: 30},
+		{name: "zero rejected", envValue: "0", defaultVal: 15, errFunc: require.Error},
+		{name: "negative rejected", envValue: "-3", defaultVal: 15, errFunc: require.Error},
+		{name: "non-integer rejected", envValue: "many", defaultVal: 15, errFunc: require.Error},
+		{name: "above int32 max rejected", envValue: "2147483648", defaultVal: 15, errFunc: require.Error},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_POSITIVE_INT32_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parsePositiveInt32(envVar, test.defaultVal)
+			errFunc(t, err)
+
+			if err != nil {
+				assert.Contains(t, err.Error(), envVar)
+				assert.Contains(t, err.Error(), test.envValue)
+
+				return
+			}
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
+func TestParseBackoffCoefficient(t *testing.T) {
+	tests := []struct {
+		name       string
+		envValue   string
+		defaultVal float64
+		expected   float64
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{name: "unset returns default", envValue: "", defaultVal: 1.5, expected: 1.5},
+		{name: "constant spacing accepted", envValue: "1.0", defaultVal: 1.5, expected: 1.0},
+		{name: "exponential growth accepted", envValue: "2.0", defaultVal: 1.5, expected: 2.0},
+		{name: "below 1.0 rejected", envValue: "0.5", defaultVal: 1.5, errFunc: require.Error},
+		{name: "negative rejected", envValue: "-1", defaultVal: 1.5, errFunc: require.Error},
+		{name: "non-numeric rejected", envValue: "fast", defaultVal: 1.5, errFunc: require.Error},
+		{name: "NaN rejected", envValue: "NaN", defaultVal: 1.5, errFunc: require.Error},
+		{name: "positive infinity rejected", envValue: "Inf", defaultVal: 1.5, errFunc: require.Error},
+		{name: "negative infinity rejected", envValue: "-Inf", defaultVal: 1.5, errFunc: require.Error},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const envVar = "TEST_PARSE_BACKOFF_COEFFICIENT_VAR"
+			t.Setenv(envVar, test.envValue)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			got, err := parseBackoffCoefficient(envVar, test.defaultVal)
+			errFunc(t, err)
+
+			if err != nil {
+				assert.Contains(t, err.Error(), envVar)
+				assert.Contains(t, err.Error(), test.envValue)
+
+				return
+			}
+
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
+// TestLoadWorkflowConfigNotifyDefaults verifies that loadWorkflowConfig
+// resolves the four Notify retry-policy fields to the package-level
+// DefaultNotify* values when the corresponding env vars are unset, so the
+// worker's retry policy matches the documented defaults without depending
+// on NewActivities' zero-value fallback.
+func TestLoadWorkflowConfigNotifyDefaults(t *testing.T) {
+	for _, key := range []string{
+		"MEDIA_NOTIFY_INITIAL_INTERVAL",
+		"MEDIA_NOTIFY_BACKOFF_COEFFICIENT",
+		"MEDIA_NOTIFY_MAXIMUM_INTERVAL",
+		"MEDIA_NOTIFY_MAXIMUM_ATTEMPTS",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := loadWorkflowConfig()
+	require.NoError(t, err)
+	assert.Equal(t, media.DefaultNotifyInitialInterval, cfg.NotifyInitialInterval)
+	assert.Equal(t, media.DefaultNotifyBackoffCoefficient, cfg.NotifyBackoffCoefficient)
+	assert.Equal(t, media.DefaultNotifyMaximumInterval, cfg.NotifyMaximumInterval)
+	assert.Equal(t, media.DefaultNotifyMaximumAttempts, cfg.NotifyMaximumAttempts)
+}
+
+// TestLoadWorkflowConfigNotifyOverrides verifies that operator-supplied values
+// for the four MEDIA_NOTIFY_* env vars flow through to MediaWorkflowConfig.
+func TestLoadWorkflowConfigNotifyOverrides(t *testing.T) {
+	t.Setenv("MEDIA_NOTIFY_INITIAL_INTERVAL", "2s")
+	t.Setenv("MEDIA_NOTIFY_BACKOFF_COEFFICIENT", "2.0")
+	t.Setenv("MEDIA_NOTIFY_MAXIMUM_INTERVAL", "30s")
+	t.Setenv("MEDIA_NOTIFY_MAXIMUM_ATTEMPTS", "25")
+
+	cfg, err := loadWorkflowConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Second, cfg.NotifyInitialInterval)
+	assert.Equal(t, 2.0, cfg.NotifyBackoffCoefficient)
+	assert.Equal(t, 30*time.Second, cfg.NotifyMaximumInterval)
+	assert.Equal(t, int32(25), cfg.NotifyMaximumAttempts)
+}
+
 func TestParseTimeout(t *testing.T) {
 	tests := []struct {
 		name       string

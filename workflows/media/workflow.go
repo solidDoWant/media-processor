@@ -21,16 +21,38 @@ func (a *Activities) activityOptions(activityName string, timeout time.Duration,
 	}
 }
 
+// notifyActivityOptions builds the ActivityOptions for the Notify activity.
+// Notify uses a richer RetryPolicy than the other activities: the typical
+// failure mode is the arr service not yet seeing the transcoded file because
+// of NFS attribute-cache staleness on its side, so the policy retries
+// frequently at first (covering arr command-queue saturation) and grows out
+// past the typical NFS acdirmax window. All four knobs are tunable via env
+// vars on the worker; defaults live in DefaultNotify* constants in this
+// package.
+func (a *Activities) notifyActivityOptions() workflow.ActivityOptions {
+	return workflow.ActivityOptions{
+		TaskQueue:           ActivityTaskQueueByName(a.cfg.TaskQueuePrefix, NotifyActivityName),
+		StartToCloseTimeout: defaultNotifyTimeout,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    a.cfg.NotifyInitialInterval,
+			BackoffCoefficient: a.cfg.NotifyBackoffCoefficient,
+			MaximumInterval:    a.cfg.NotifyMaximumInterval,
+			MaximumAttempts:    a.cfg.NotifyMaximumAttempts,
+		},
+	}
+}
+
 // MediaWorkflow processes one media file end-to-end. The body is straight-line
 // Go: probe, branch on validity, run the per-path activities. A defer block
 // invokes the failure-webhook activity when the workflow returns an error.
 //
 // Each activity is invoked with the retry policy that fits its idempotency
-// profile: idempotent operations (Notify, Cleanup) use retryableMaxAttempts
-// so transient flakes do not fail the run; everything else (Probe,
-// DetectCrop, Transcode, NotifyFailure) uses defaultMaxAttempts (single
-// attempt) because retrying would either duplicate non-idempotent side
-// effects or repeat expensive work that will not recover.
+// profile: Notify uses a configurable multi-attempt policy (see
+// notifyActivityOptions) tuned for NFS-cache stalls on the arr side; Cleanup
+// uses cleanupMaxAttempts so transient filesystem flakes do not fail the run;
+// everything else (Probe, DetectCrop, Transcode, NotifyFailure) uses
+// defaultMaxAttempts (single attempt) because retrying would either duplicate
+// non-idempotent side effects or repeat expensive work that will not recover.
 //
 // Per-run application metrics are emitted by the activities themselves through
 // the SDK MetricsHandler. End-to-end workflow latency comes for free from the
@@ -79,7 +101,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		// (RunCleanup tolerates ErrNotExist) but still writes the .done
 		// sentinel when PreserveSource is set. No transcode happened, so an
 		// empty TranscodeOutput suppresses output-side pruning.
-		invalidCleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, retryableMaxAttempts))
+		invalidCleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, cleanupMaxAttempts))
 
 		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input, TranscodeOutput{}).Get(invalidCleanupCtx, nil); err != nil {
 			return err
@@ -104,13 +126,13 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		return err
 	}
 
-	notifyCtx := workflow.WithActivityOptions(ctx, a.activityOptions(NotifyActivityName, defaultNotifyTimeout, retryableMaxAttempts))
+	notifyCtx := workflow.WithActivityOptions(ctx, a.notifyActivityOptions())
 
 	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
 		return err
 	}
 
-	cleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, retryableMaxAttempts))
+	cleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, cleanupMaxAttempts))
 
 	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input, transcode).Get(cleanupCtx, nil); err != nil {
 		return err

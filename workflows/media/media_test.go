@@ -361,6 +361,62 @@ func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
 		"transcode activity should observe the HeartbeatTimeout derived from the configured progress interval")
 }
 
+// TestNotifyActivityOptions_BuildsRetryPolicyFromConfig verifies that
+// notifyActivityOptions assembles the four-knob Temporal RetryPolicy from
+// MediaWorkflowConfig (after NewActivities applies defaults to zero values),
+// so operator-supplied env vars actually drive the retry behavior at the
+// activity invocation site.
+func TestNotifyActivityOptions_BuildsRetryPolicyFromConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      MediaWorkflowConfig
+		expected MediaWorkflowConfig
+	}{
+		{
+			name: "zero values resolve to package defaults",
+			cfg:  MediaWorkflowConfig{},
+			expected: MediaWorkflowConfig{
+				NotifyInitialInterval:    DefaultNotifyInitialInterval,
+				NotifyBackoffCoefficient: DefaultNotifyBackoffCoefficient,
+				NotifyMaximumInterval:    DefaultNotifyMaximumInterval,
+				NotifyMaximumAttempts:    DefaultNotifyMaximumAttempts,
+			},
+		},
+		{
+			name: "operator overrides flow through to RetryPolicy",
+			cfg: MediaWorkflowConfig{
+				NotifyInitialInterval:    2 * time.Second,
+				NotifyBackoffCoefficient: 2.0,
+				NotifyMaximumInterval:    30 * time.Second,
+				NotifyMaximumAttempts:    25,
+			},
+			expected: MediaWorkflowConfig{
+				NotifyInitialInterval:    2 * time.Second,
+				NotifyBackoffCoefficient: 2.0,
+				NotifyMaximumInterval:    30 * time.Second,
+				NotifyMaximumAttempts:    25,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, err := NewActivities(test.cfg, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{})
+			require.NoError(t, err)
+
+			opts := a.notifyActivityOptions()
+			require.NotNil(t, opts.RetryPolicy)
+			assert.Equal(t, test.expected.NotifyInitialInterval, opts.RetryPolicy.InitialInterval)
+			assert.Equal(t, test.expected.NotifyBackoffCoefficient, opts.RetryPolicy.BackoffCoefficient)
+			assert.Equal(t, test.expected.NotifyMaximumInterval, opts.RetryPolicy.MaximumInterval)
+			assert.Equal(t, test.expected.NotifyMaximumAttempts, opts.RetryPolicy.MaximumAttempts)
+
+			assert.Equal(t, ActivityTaskQueueByName(a.cfg.TaskQueuePrefix, NotifyActivityName), opts.TaskQueue)
+			assert.Equal(t, defaultNotifyTimeout, opts.StartToCloseTimeout)
+		})
+	}
+}
+
 // stubLibraryClient lives in testhelpers_test.go and satisfies medialib.ArrLibrary
 // for tests that do not exercise the live library calls.
 var _ medialib.ArrLibrary = (*stubLibraryClient)(nil)

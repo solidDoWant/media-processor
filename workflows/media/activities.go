@@ -54,8 +54,8 @@ func WithHardwareDevicePath(path string) ActivitiesOption {
 }
 
 // NewActivities constructs an Activities ready for registration. Defaults are
-// applied to cfg.TaskQueuePrefix, cfg.DetectCropTimeout, and cfg.TranscodeTimeout
-// when zero.
+// applied to cfg.TaskQueuePrefix, cfg.DetectCropTimeout, cfg.TranscodeTimeout,
+// and the four cfg.Notify* retry-policy fields when zero.
 func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.ArrLibrary, webhookClient *webhook.Client, opts ...ActivitiesOption) (*Activities, error) {
 	if cfg.TaskQueuePrefix == "" {
 		cfg.TaskQueuePrefix = DefaultTaskQueuePrefix
@@ -67,6 +67,22 @@ func NewActivities(cfg MediaWorkflowConfig, radarrClient, sonarrClient medialib.
 
 	if cfg.TranscodeTimeout == 0 {
 		cfg.TranscodeTimeout = DefaultTranscodeTimeout
+	}
+
+	if cfg.NotifyInitialInterval == 0 {
+		cfg.NotifyInitialInterval = DefaultNotifyInitialInterval
+	}
+
+	if cfg.NotifyBackoffCoefficient == 0 {
+		cfg.NotifyBackoffCoefficient = DefaultNotifyBackoffCoefficient
+	}
+
+	if cfg.NotifyMaximumInterval == 0 {
+		cfg.NotifyMaximumInterval = DefaultNotifyMaximumInterval
+	}
+
+	if cfg.NotifyMaximumAttempts == 0 {
+		cfg.NotifyMaximumAttempts = DefaultNotifyMaximumAttempts
 	}
 
 	a := &Activities{

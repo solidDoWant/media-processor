@@ -126,12 +126,24 @@ const (
 	// detectcrop / transcode) or duplicate a non-idempotent side effect
 	// (webhook).
 	defaultMaxAttempts = 1
-	// retryableMaxAttempts is the RetryPolicy MaximumAttempts applied to the
-	// notify and cleanup activities. Both are idempotent — the arr scan
-	// command is a no-op when re-issued for an already-imported file, and
-	// RunCleanup tolerates ErrNotExist — so retries are safe and useful when
-	// the arr service or filesystem is transiently unavailable.
-	retryableMaxAttempts = 3
+	// cleanupMaxAttempts is the RetryPolicy MaximumAttempts applied to the
+	// cleanup activity. RunCleanup tolerates ErrNotExist so retries are safe
+	// when the filesystem is transiently unavailable.
+	cleanupMaxAttempts = 3
+)
+
+// Defaults for the Notify activity's retry policy. Notify is idempotent
+// (re-issuing a Sonarr/Radarr scan for an already-imported file is a no-op)
+// and the most common failure mode is the arr service not yet seeing the
+// transcoded file because of NFS attribute-cache staleness on its side. The
+// schedule (5s, 7.5s, 11s, 17s, 25s, 38s, 57s, 60s × 7 = ~9min wall time)
+// retries quickly to clear transient command-queue saturation while still
+// extending past a typical 60s NFS acdirmax window.
+const (
+	DefaultNotifyInitialInterval    = 5 * time.Second
+	DefaultNotifyBackoffCoefficient = 1.5
+	DefaultNotifyMaximumInterval    = 60 * time.Second
+	DefaultNotifyMaximumAttempts    = int32(15)
 )
 
 // MediaWorkflowConfig holds the configuration for the media processing workflow
@@ -166,6 +178,19 @@ type MediaWorkflowConfig struct {
 	// ProgressLogInterval controls how often a progress log line is emitted
 	// during transcoding. Zero disables progress logging.
 	ProgressLogInterval time.Duration
+	// NotifyInitialInterval is the RetryPolicy InitialInterval for the Notify
+	// activity. When zero, NewActivities applies DefaultNotifyInitialInterval.
+	NotifyInitialInterval time.Duration
+	// NotifyBackoffCoefficient is the RetryPolicy BackoffCoefficient for the
+	// Notify activity. When zero, NewActivities applies
+	// DefaultNotifyBackoffCoefficient.
+	NotifyBackoffCoefficient float64
+	// NotifyMaximumInterval is the RetryPolicy MaximumInterval for the Notify
+	// activity. When zero, NewActivities applies DefaultNotifyMaximumInterval.
+	NotifyMaximumInterval time.Duration
+	// NotifyMaximumAttempts is the RetryPolicy MaximumAttempts for the Notify
+	// activity. When zero, NewActivities applies DefaultNotifyMaximumAttempts.
+	NotifyMaximumAttempts int32
 }
 
 // MediaInput is an alias for the shared input type so existing callers within
