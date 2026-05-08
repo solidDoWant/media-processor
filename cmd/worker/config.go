@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -451,9 +452,12 @@ func parsePositiveInt32(envVar string, defaultVal int32) (int32, error) {
 }
 
 // parseBackoffCoefficient reads a Temporal RetryPolicy backoff coefficient
-// from the named env var. Empty input returns defaultVal; values < 1.0 are
-// rejected because Temporal requires the coefficient to be >= 1 (a value of
-// 1 means constant spacing; > 1 means exponential growth).
+// from the named env var. Empty input returns defaultVal; values < 1.0,
+// NaN, and ±Inf are rejected because Temporal requires the coefficient to
+// be a finite real number >= 1 (a value of 1 means constant spacing; > 1
+// means exponential growth). The NaN check is necessary because
+// strconv.ParseFloat accepts "NaN" and "Inf" without error and NaN
+// silently fails ordering comparisons (NaN < 1.0 is false).
 func parseBackoffCoefficient(envVar string, defaultVal float64) (float64, error) {
 	raw := os.Getenv(envVar)
 	if raw == "" {
@@ -462,11 +466,11 @@ func parseBackoffCoefficient(envVar string, defaultVal float64) (float64, error)
 
 	v, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%s must be a float >= 1.0 (got %q): %w", envVar, raw, err)
+		return 0, fmt.Errorf("%s must be a finite float >= 1.0 (got %q): %w", envVar, raw, err)
 	}
 
-	if v < 1.0 {
-		return 0, fmt.Errorf("%s must be a float >= 1.0 (got %q)", envVar, raw)
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 1.0 {
+		return 0, fmt.Errorf("%s must be a finite float >= 1.0 (got %q)", envVar, raw)
 	}
 
 	return v, nil

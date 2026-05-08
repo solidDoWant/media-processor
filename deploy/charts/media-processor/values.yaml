@@ -240,8 +240,8 @@ config:
       # notify tunes the Temporal RetryPolicy on the Notify activity, which issues
       # the Sonarr/Radarr scan command after a transcode and blocks until the import
       # completes. The default schedule (5s, 7.5s, 11s, 17s, 25s, 38s, 57s, then 60s
-      # × 8 = ~9 min total wall time) retries quickly to clear arr command-queue
-      # saturation while extending past a typical 60s NFS acdirmax window — the
+      # × 7 across 15 attempts ≈ 9–10 min total wall time) retries quickly to clear
+      # arr command-queue saturation while extending past a typical 60s NFS acdirmax window — the
       # most common failure mode is the arr service not yet seeing the new file
       # because of NFS attribute-cache staleness on its mount. Each value below maps
       # 1:1 to a MEDIA_NOTIFY_* env var on the worker; leave empty for the binary

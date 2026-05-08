@@ -309,19 +309,24 @@ free-form secretKeyRef because CA bundles use varying Secret layouts.
   {{- $_ := set $sharedWorkerEnv "MEDIA_PROGRESS_LOG_INTERVAL" .Values.config.worker.media.transcode.progressLogInterval -}}
 {{- end -}}
 
-{{/* MEDIA_NOTIFY_* — Temporal RetryPolicy knobs for the Notify activity. */}}
+{{/* MEDIA_NOTIFY_* — Temporal RetryPolicy knobs for the Notify activity.
+     Use `ne (toString $v) ""` rather than a truthy `if $v` so an operator-
+     supplied numeric `0` reaches the binary and fails fast (the binary
+     rejects 0 as out-of-range), instead of being silently dropped here as
+     a falsy value and falling back to the default. */}}
 {{- if .Values.config.worker.media.notify -}}
-  {{- if .Values.config.worker.media.notify.initialInterval -}}
-    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_INITIAL_INTERVAL" .Values.config.worker.media.notify.initialInterval -}}
+  {{- $notify := .Values.config.worker.media.notify -}}
+  {{- if ne (toString $notify.initialInterval) "" -}}
+    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_INITIAL_INTERVAL" (toString $notify.initialInterval) -}}
   {{- end -}}
-  {{- if .Values.config.worker.media.notify.backoffCoefficient -}}
-    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_BACKOFF_COEFFICIENT" (.Values.config.worker.media.notify.backoffCoefficient | toString) -}}
+  {{- if ne (toString $notify.backoffCoefficient) "" -}}
+    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_BACKOFF_COEFFICIENT" (toString $notify.backoffCoefficient) -}}
   {{- end -}}
-  {{- if .Values.config.worker.media.notify.maximumInterval -}}
-    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_MAXIMUM_INTERVAL" .Values.config.worker.media.notify.maximumInterval -}}
+  {{- if ne (toString $notify.maximumInterval) "" -}}
+    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_MAXIMUM_INTERVAL" (toString $notify.maximumInterval) -}}
   {{- end -}}
-  {{- if .Values.config.worker.media.notify.maximumAttempts -}}
-    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_MAXIMUM_ATTEMPTS" (.Values.config.worker.media.notify.maximumAttempts | toString) -}}
+  {{- if ne (toString $notify.maximumAttempts) "" -}}
+    {{- $_ := set $sharedWorkerEnv "MEDIA_NOTIFY_MAXIMUM_ATTEMPTS" (toString $notify.maximumAttempts) -}}
   {{- end -}}
 {{- end -}}
 

@@ -517,6 +517,9 @@ func TestParseBackoffCoefficient(t *testing.T) {
 		{name: "below 1.0 rejected", envValue: "0.5", defaultVal: 1.5, errFunc: require.Error},
 		{name: "negative rejected", envValue: "-1", defaultVal: 1.5, errFunc: require.Error},
 		{name: "non-numeric rejected", envValue: "fast", defaultVal: 1.5, errFunc: require.Error},
+		{name: "NaN rejected", envValue: "NaN", defaultVal: 1.5, errFunc: require.Error},
+		{name: "positive infinity rejected", envValue: "Inf", defaultVal: 1.5, errFunc: require.Error},
+		{name: "negative infinity rejected", envValue: "-Inf", defaultVal: 1.5, errFunc: require.Error},
 	}
 
 	for _, test := range tests {
