@@ -542,7 +542,7 @@ func TestParseBackoffCoefficient(t *testing.T) {
 				return
 			}
 
-			assert.InDelta(t, test.expected, got, 0.0001)
+			assert.Equal(t, test.expected, got)
 		})
 	}
 }
@@ -565,7 +565,7 @@ func TestLoadWorkflowConfigNotifyDefaults(t *testing.T) {
 	cfg, err := loadWorkflowConfig()
 	require.NoError(t, err)
 	assert.Equal(t, media.DefaultNotifyInitialInterval, cfg.NotifyInitialInterval)
-	assert.InDelta(t, media.DefaultNotifyBackoffCoefficient, cfg.NotifyBackoffCoefficient, 0.0001)
+	assert.Equal(t, media.DefaultNotifyBackoffCoefficient, cfg.NotifyBackoffCoefficient)
 	assert.Equal(t, media.DefaultNotifyMaximumInterval, cfg.NotifyMaximumInterval)
 	assert.Equal(t, media.DefaultNotifyMaximumAttempts, cfg.NotifyMaximumAttempts)
 }
@@ -581,7 +581,7 @@ func TestLoadWorkflowConfigNotifyOverrides(t *testing.T) {
 	cfg, err := loadWorkflowConfig()
 	require.NoError(t, err)
 	assert.Equal(t, 2*time.Second, cfg.NotifyInitialInterval)
-	assert.InDelta(t, 2.0, cfg.NotifyBackoffCoefficient, 0.0001)
+	assert.Equal(t, 2.0, cfg.NotifyBackoffCoefficient)
 	assert.Equal(t, 30*time.Second, cfg.NotifyMaximumInterval)
 	assert.Equal(t, int32(25), cfg.NotifyMaximumAttempts)
 }

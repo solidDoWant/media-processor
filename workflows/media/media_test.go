@@ -407,7 +407,7 @@ func TestNotifyActivityOptions_BuildsRetryPolicyFromConfig(t *testing.T) {
 			opts := a.notifyActivityOptions()
 			require.NotNil(t, opts.RetryPolicy)
 			assert.Equal(t, test.expected.NotifyInitialInterval, opts.RetryPolicy.InitialInterval)
-			assert.InDelta(t, test.expected.NotifyBackoffCoefficient, opts.RetryPolicy.BackoffCoefficient, 0.0001)
+			assert.Equal(t, test.expected.NotifyBackoffCoefficient, opts.RetryPolicy.BackoffCoefficient)
 			assert.Equal(t, test.expected.NotifyMaximumInterval, opts.RetryPolicy.MaximumInterval)
 			assert.Equal(t, test.expected.NotifyMaximumAttempts, opts.RetryPolicy.MaximumAttempts)
 
