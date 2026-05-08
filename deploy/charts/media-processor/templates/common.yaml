@@ -1047,5 +1047,23 @@ stringData:
   {{- end -}}
 {{- end -}}
 
+{{/* Drop persistence items whose advancedMounts dict became empty after the
+   scaledjob strip (e.g. chart-built output / hardware-device volumes that are
+   only referenced by scaledjob workers). bjw-s' volumes helper treats
+   `advancedMounts: {}` the same as "no mount config supplied" and falls back
+   to mounting the volume at `/<identifier>` on every container of every
+   controller — which would shadow real mount points (e.g. the input volume's
+   /media/input ends up under a stray /media mount) and break the watcher pod.
+   The persistence item is still consumed by the chart-rendered ScaledJob
+   (which uses the pre-strip values via the inline scaledjob helper), so
+   dropping it from .Values here only affects the bjw-s generate pass. */}}
+{{- range $persistenceKey, $persistenceValues := $valuesPersistence -}}
+  {{- if hasKey $persistenceValues "advancedMounts" -}}
+    {{- if empty (index $persistenceValues "advancedMounts") -}}
+      {{- $_ := unset $valuesPersistence $persistenceKey -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
 {{/* Hand off the rest of bjw-s rendering. */}}
 {{- include "bjw-s.common.loader.generate" . }}
