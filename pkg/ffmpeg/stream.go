@@ -64,10 +64,14 @@ type copyStreamState struct {
 	outStream *astiav.Stream
 	frames    int64 // encoded frames written; used for progress reporting
 	// lastWrittenDts is the DTS of the most recent packet handed to the muxer
-	// for outStream, in outStream's timebase. Used by receiveAndWritePackets to
-	// repair non-monotonic DTS coming out of the encoder (notably hevc_qsv on
-	// VFR sources, where Intel's libmfx runtime computes DecodeTimeStamp
-	// assuming uniform input cadence). NoPtsValue before the first write.
+	// for outStream, in outStream's timebase. Used to clamp non-monotonic DTS
+	// before the muxer's strict monotonicity check sees it — both from
+	// encoders that emit out-of-order DTS (hevc_qsv on VFR sources, where
+	// Intel's libmfx runtime computes DecodeTimeStamp assuming uniform input
+	// cadence) and from copy-path sources whose authored timestamps regress
+	// (PGS subtitle streams from some BluRay-authoring tools, where Block
+	// timestamps go briefly backwards between adjacent display sets).
+	// NoPtsValue before the first write.
 	lastWrittenDts int64
 }
 
@@ -84,17 +88,23 @@ func (css *copyStreamState) encoderContext() *astiav.CodecContext               
 func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	packet.RescaleTs(css.inStream.TimeBase(), css.outStream.TimeBase())
 	packet.SetStreamIndex(css.outStream.Index())
+	css.repairNonMonotonicDts(packet)
 
 	css.frames++
-	// sendProgress must read packet.Pts() before WriteInterleavedFrame, which
-	// takes ownership of the packet and zeroes its fields.
+	// sendProgress and the DTS snapshot must read packet fields before
+	// WriteInterleavedFrame, which takes ownership of the packet and zeroes
+	// them.
 	if progressCh != nil {
 		sendProgress(progressCh, css.frames, packet, css.outStream, totalDuration)
 	}
 
+	writtenDts := packet.Dts()
+
 	if err := outputFmt.WriteInterleavedFrame(packet); err != nil {
 		return fmt.Errorf("ffmpeg: writing remuxed packet for stream %d: %w", css.outStream.Index(), err)
 	}
+
+	css.lastWrittenDts = writtenDts
 
 	return nil
 }
@@ -146,19 +156,20 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 // repairNonMonotonicDts rewrites pkt's DTS (and PTS, if needed to keep
 // DTS <= PTS) so that it is strictly greater than the last DTS written to the
 // output stream. Mirrors the clamp in fftools/ffmpeg_mux.c::mux_fixup_ts that
-// lets the FFmpeg CLI tolerate the non-monotonic DTS the hevc_qsv encoder
-// emits on variable-frame-rate sources. No-op on the first packet, on packets
-// without a DTS value, or when the encoder DTS is already monotonic — so
-// well-formed encodes produce bit-identical output.
+// lets the FFmpeg CLI tolerate non-monotonic DTS — both from encoders that
+// emit out-of-order DTS (notably hevc_qsv on VFR sources) and from copy-path
+// sources whose authored timestamps regress. No-op on the first packet, on
+// packets without a DTS value, or when the incoming DTS is already
+// monotonic — so well-formed sources produce bit-identical output.
 func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
 	newDts, newPts, clamped := monotonicDtsClamp(css.lastWrittenDts, pkt.Dts(), pkt.Pts())
 	if !clamped {
 		return
 	}
 
-	slog.Warn("ffmpeg: clamping non-monotonic encoder DTS",
+	slog.Warn("ffmpeg: clamping non-monotonic DTS",
 		slog.Int("stream", css.outStream.Index()),
-		slog.Int64("encoder_dts", pkt.Dts()),
+		slog.Int64("packet_dts", pkt.Dts()),
 		slog.Int64("previous_dts", css.lastWrittenDts),
 		slog.Int64("corrected_dts", newDts),
 	)
