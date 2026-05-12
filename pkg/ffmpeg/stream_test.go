@@ -1,10 +1,12 @@
 package ffmpeg
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/asticode/go-astiav"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMonotonicDtsClamp covers the pure timestamp-clamp logic used by
@@ -155,4 +157,110 @@ func TestMonotonicDtsClamp_FMABFailureSequence(t *testing.T) {
 			"muxed DTS must be strictly monotonic at packet %d (got %d after %d)",
 			i, muxedDts[i], muxedDts[i-1])
 	}
+}
+
+// TestCopyStreamState_processPacket_RepairsNonMonotonicSourceDts verifies that
+// the pure-copy packet path repairs non-monotonic DTS coming from the input
+// source before submitting packets to the muxer. Without the repair,
+// libavformat's strict DTS monotonicity check rejects the second submission
+// with EINVAL ("Application provided invalid, non monotonically increasing
+// dts to muxer").
+//
+// The motivating production failure is a PGS subtitle stream whose authored
+// Block timestamps go briefly backwards between adjacent display sets. The
+// ffmpeg CLI silently clamps these at its stream-output layer (sost); our
+// in-process transcoder reached the muxer directly, so the activity failed
+// on the first regression. The same clamp logic already exists for encoded
+// streams (receiveAndWritePackets, monotonicDtsClamp) — this test exercises
+// the parallel path on copy streams.
+func TestCopyStreamState_processPacket_RepairsNonMonotonicSourceDts(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.mkv")
+
+	inputFmt := astiav.AllocFormatContext()
+	require.NotNil(t, inputFmt)
+
+	defer inputFmt.Free()
+
+	require.NoError(t, inputFmt.OpenInput("testdata/video_with_subrip_subtitle.mkv", nil, nil))
+	defer inputFmt.CloseInput()
+
+	require.NoError(t, inputFmt.FindStreamInfo(nil))
+
+	var inAudioStream *astiav.Stream
+
+	for _, stream := range inputFmt.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
+			inAudioStream = stream
+			break
+		}
+	}
+
+	require.NotNil(t, inAudioStream, "test fixture must carry an audio stream")
+
+	outputFmt, err := astiav.AllocOutputFormatContext(nil, "matroska", outputPath)
+	require.NoError(t, err)
+
+	defer outputFmt.Free()
+
+	outStream := outputFmt.NewStream(nil)
+	require.NotNil(t, outStream)
+	require.NoError(t, inAudioStream.CodecParameters().Copy(outStream.CodecParameters()))
+	outStream.CodecParameters().SetCodecTag(0)
+	outStream.SetTimeBase(inAudioStream.TimeBase())
+
+	ioCtx, err := astiav.OpenIOContext(outputPath, astiav.NewIOContextFlags(astiav.IOContextFlagWrite), nil, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = ioCtx.Close() }()
+
+	outputFmt.SetPb(ioCtx)
+
+	require.NoError(t, outputFmt.WriteHeader(nil))
+
+	css := &copyStreamState{inStream: inAudioStream}
+	css.setOutputStream(outStream)
+
+	pkt := astiav.AllocPacket()
+	defer pkt.Free()
+
+	readAudioPacket := func() {
+		t.Helper()
+
+		for {
+			err := inputFmt.ReadFrame(pkt)
+			require.NoError(t, err, "input must supply enough audio packets for the test")
+
+			if pkt.StreamIndex() == inAudioStream.Index() {
+				return
+			}
+
+			pkt.Unref()
+		}
+	}
+
+	// Override the natural DTS on both packets so the regression on the second
+	// is precisely controlled rather than dependent on whatever the demuxer
+	// happens to emit.
+	readAudioPacket()
+	pkt.SetDts(100)
+	pkt.SetPts(100)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"first packet (monotonic DTS) must be accepted by the muxer")
+
+	pkt.Unref()
+
+	readAudioPacket()
+	pkt.SetDts(50)
+	pkt.SetPts(50)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"non-monotonic source DTS must be repaired on the copy path so the matroska muxer accepts the packet")
+
+	pkt.Unref()
+
+	require.NoError(t, outputFmt.WriteTrailer())
+
+	assert.Greater(t, css.lastWrittenDts, int64(100),
+		"copyStreamState.lastWrittenDts must advance strictly past the previous packet's DTS after the repair")
 }
