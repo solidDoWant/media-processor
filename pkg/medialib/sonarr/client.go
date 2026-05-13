@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -149,7 +151,11 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) str
 // When a pending tracked download for the episode is found in the queue, its
 // download client ID is included so Sonarr calls VerifyImport and removes the
 // item from the downloads queue.
-func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
+// expectedSize, when positive, is the size of the local source file in bytes
+// and enables a post-check that distinguishes a benign race (Sonarr's own
+// completed-download handler imported the file first) from a real failure
+// (Sonarr kept a different pre-existing file) — see episodeFileSize.
+func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expectedSize int64) error {
 	downloadClientID := c.findTrackedDownloadID(ctx, filePath)
 
 	requestPayload := struct {
@@ -174,10 +180,52 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "sonarr"); err != nil {
+		// Sonarr's own completed-download handler can race our scan and import
+		// the file before our command runs. In that case, the scan command
+		// finishes with result="unsuccessful" (nothing left at the path), but
+		// the episode is already imported. To distinguish that benign race
+		// from a real failure (e.g. transient Sonarr error causing our file
+		// to be rejected while a pre-existing lower-quality file is kept),
+		// compare Sonarr's stored EpisodeFile.Size to expectedSize. A match
+		// proves Sonarr has our file; a mismatch (or unknown size) leaves
+		// the original error in place so Temporal can retry.
+		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
+			if size, ok := c.episodeFileSize(ctx, filePath); ok && size == expectedSize {
+				slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",
+					"file_path", filePath, "size", size)
+
+				return nil
+			}
+		}
+
 		return fmt.Errorf("wait for command for %q: %w", filePath, err)
 	}
 
 	return nil
+}
+
+// episodeFileSize returns the size in bytes of the file Sonarr currently has
+// for the episode identified by filePath. The second return is false when
+// the episode cannot be parsed, has no file, or any lookup fails — callers
+// should treat that as "do not recover" so the original scan error remains
+// in force.
+func (c *Client) episodeFileSize(ctx context.Context, filePath string) (int64, bool) {
+	ep, err := c.getEpisodeByFilePath(ctx, filePath)
+	if err != nil {
+		return 0, false
+	}
+
+	full, err := c.sonarr.GetEpisodeByIDContext(ctx, ep.GetID())
+	if err != nil || full == nil || !full.HasFile || full.EpisodeFileID == 0 {
+		return 0, false
+	}
+
+	files, err := c.sonarr.GetEpisodeFilesContext(ctx, full.EpisodeFileID)
+	if err != nil || len(files) == 0 || files[0] == nil {
+		return 0, false
+	}
+
+	return files[0].Size, true
 }
 
 // fetchCommandStatus implements arrcommand.Fetcher. It hits Sonarr's

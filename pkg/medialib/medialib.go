@@ -144,7 +144,13 @@ type ArrLibrary interface {
 	// ImportByFilePath translates path to the arr service's view and sends a
 	// DownloadedMoviesScan (Radarr) or DownloadedEpisodesScan (Sonarr) command,
 	// triggering the arr service's normal download-completion import pipeline.
-	ImportByFilePath(ctx context.Context, path string) error
+	// expectedSize is the size of the local source file in bytes. It is used
+	// as a post-check tiebreaker when the scan command finishes with no
+	// successful imports: if the library item's stored file matches
+	// expectedSize, the import is treated as having succeeded (typically
+	// because the arr service's own completed-download handler raced our
+	// scan). A non-positive expectedSize disables the post-check.
+	ImportByFilePath(ctx context.Context, path string, expectedSize int64) error
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.
 	GetInfo(ctx context.Context, path string) (MediaInfo, error)

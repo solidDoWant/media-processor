@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -394,7 +395,18 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 		importPath = filepath.Join(remotePath, rel)
 	}
 
-	if err := library.ImportByFilePath(ctx, importPath); err != nil {
+	// Stat the local output before invoking the scan so the client can
+	// post-check the imported file size when the arr service races our scan
+	// and reports "no successful imports". The stat is on the worker's view
+	// (transcode.DestFilePath), which is the same bytes the arr service will
+	// see once it imports. Stat failures degrade gracefully: a zero size
+	// disables the post-check.
+	var expectedSize int64
+	if info, statErr := os.Stat(transcode.DestFilePath); statErr == nil {
+		expectedSize = info.Size()
+	}
+
+	if err := library.ImportByFilePath(ctx, importPath, expectedSize); err != nil {
 		wrappedErr := fmt.Errorf("notify library: %w", err)
 		logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
 
