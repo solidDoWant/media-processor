@@ -11,10 +11,19 @@ package arrcommand
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// ErrNoSuccessfulImports is returned (wrapped) when a command completes with
+// result="unsuccessful". This commonly means the file at the scan path is no
+// longer eligible for import — for example, the arr service's own
+// completed-download handler raced our explicit scan and already imported
+// the file. Callers can detect via errors.Is and post-check whether the
+// import actually happened before treating it as a hard failure.
+var ErrNoSuccessfulImports = errors.New("no successful imports")
 
 // DefaultPollInterval is used when the caller passes a non-positive interval.
 // Sonarr/Radarr command status updates are inexpensive (a single DB read on
@@ -76,7 +85,7 @@ func Wait(ctx context.Context, fetch Fetcher, id int64, interval time.Duration, 
 		switch strings.ToLower(status.Status) {
 		case "completed":
 			if strings.EqualFold(status.Result, "unsuccessful") {
-				return fmt.Errorf("%s command %d completed but reported no successful imports: %s", service, id, status.Message)
+				return fmt.Errorf("%s command %d completed but reported %w: %s", service, id, ErrNoSuccessfulImports, status.Message)
 			}
 
 			return nil

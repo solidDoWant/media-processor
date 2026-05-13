@@ -29,10 +29,12 @@ const fastPollInterval = time.Millisecond
 // sonarrTestServerConfig holds configuration for test HTTP servers.
 type sonarrTestServerConfig struct {
 	parseResp       *sonarrlib.ParseOutput
-	seriesByID      *sonarrlib.Series  // response for /api/v3/series/{id}
-	queueResp       *sonarrlib.Queue   // single-page queue response; nil returns empty queue
-	queuePages      []*sonarrlib.Queue // multi-page queue responses; index 0 = page 1; takes priority over queueResp
-	queueHTTPStatus int                // override HTTP status for /api/v3/queue; 0 means 200
+	seriesByID      *sonarrlib.Series      // response for /api/v3/series/{id}
+	episodeByID     *sonarrlib.Episode     // response for /api/v3/episode/{id}; nil → 404
+	episodeFile     *sonarrlib.EpisodeFile // single file returned by /api/v3/episodeFile; nil → empty array
+	queueResp       *sonarrlib.Queue       // single-page queue response; nil returns empty queue
+	queuePages      []*sonarrlib.Queue     // multi-page queue responses; index 0 = page 1; takes priority over queueResp
+	queueHTTPStatus int                    // override HTTP status for /api/v3/queue; 0 means 200
 	imageBody       []byte
 	imageType       string
 	// commandStatuses is the sequence of status values returned by GET
@@ -161,6 +163,26 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 	mux.HandleFunc("/api/v3/series/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(cfg.seriesByID))
+	})
+
+	mux.HandleFunc("/api/v3/episode/", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.episodeByID == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(cfg.episodeByID))
+	})
+
+	mux.HandleFunc("/api/v3/episodeFile", func(w http.ResponseWriter, r *http.Request) {
+		var files []*sonarrlib.EpisodeFile
+		if cfg.episodeFile != nil {
+			files = []*sonarrlib.EpisodeFile{cfg.episodeFile}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(files))
 	})
 
 	mux.HandleFunc("/MediaCover/", func(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +319,7 @@ func TestImportByFilePath(t *testing.T) {
 
 			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), test.path)
+			err := client.ImportByFilePath(t.Context(), test.path, 0)
 
 			errFunc := test.errFunc
 			if errFunc == nil {
@@ -358,7 +380,7 @@ func TestGetInfo_UnreachableURL(t *testing.T) {
 func TestImportByFilePath_UnreachableURL(t *testing.T) {
 	client := sonarr.New(sonarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+	err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", 0)
 	require.Error(t, err)
 }
 
@@ -427,12 +449,113 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 
 			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv")
+			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", 0)
 			test.errFunc(t, err)
 
 			if test.errSubstring != "" && err != nil {
 				assert.Contains(t, err.Error(), test.errSubstring)
 			}
+		})
+	}
+}
+
+// TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch verifies the
+// race-recovery post-check: when the scan command finishes with
+// result="unsuccessful" but Sonarr's stored episode file size matches the
+// caller's expectedSize, ImportByFilePath treats the scan as having
+// succeeded (Sonarr's own completed-download handler already imported the
+// file). When sizes disagree, the episode lacks a file, or the lookup
+// fails, the original "no successful imports" error must propagate so the
+// workflow retries.
+func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
+	const matchingSize int64 = 12345
+
+	episodeParseOutput := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.Contains(t, err.Error(), "no successful imports")
+	}
+
+	tests := []struct {
+		name         string
+		expectedSize int64
+		parseResp    *sonarrlib.ParseOutput
+		episodeByID  *sonarrlib.Episode
+		episodeFile  *sonarrlib.EpisodeFile
+		errFunc      require.ErrorAssertionFunc
+	}{
+		{
+			name:         "size matches: scan treated as success",
+			expectedSize: matchingSize,
+			parseResp:    episodeParseOutput,
+			episodeByID:  &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
+			episodeFile:  &sonarrlib.EpisodeFile{ID: 7, Size: matchingSize},
+		},
+		{
+			name:         "size mismatches: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    episodeParseOutput,
+			episodeByID:  &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
+			episodeFile:  &sonarrlib.EpisodeFile{ID: 7, Size: matchingSize + 1},
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "episode has no file: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    episodeParseOutput,
+			episodeByID:  &sonarrlib.Episode{ID: 200, HasFile: false},
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "episode unidentifiable by parse: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    &sonarrlib.ParseOutput{},
+			episodeByID:  nil,
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "expectedSize zero disables post-check: original error propagates",
+			expectedSize: 0,
+			parseResp:    episodeParseOutput,
+			episodeByID:  &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
+			episodeFile:  &sonarrlib.EpisodeFile{ID: 7, Size: matchingSize},
+			errFunc:      propagatesUnsuccessful,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseResp:            test.parseResp,
+				episodeByID:          test.episodeByID,
+				episodeFile:          test.episodeFile,
+				commandStatuses:      []string{"completed"},
+				commandResult:        "unsuccessful",
+				commandStatusMessage: "no eligible files",
+			})
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", test.expectedSize)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
 		})
 	}
 }

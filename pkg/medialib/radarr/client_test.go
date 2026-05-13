@@ -172,7 +172,7 @@ func TestImportByFilePath(t *testing.T) {
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), test.path)
+			err := client.ImportByFilePath(t.Context(), test.path, 0)
 
 			errFunc := test.errFunc
 			if errFunc == nil {
@@ -253,12 +253,98 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
+			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", 0)
 			test.errFunc(t, err)
 
 			if test.errSubstring != "" && err != nil {
 				assert.Contains(t, err.Error(), test.errSubstring)
 			}
+		})
+	}
+}
+
+// TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch verifies the
+// race-recovery post-check: when the scan command finishes with
+// result="unsuccessful" but Radarr's stored movie file size matches the
+// caller's expectedSize, ImportByFilePath treats the scan as having
+// succeeded (Radarr's own completed-download handler already imported the
+// file). When sizes disagree, the movie lacks a file, or the lookup fails,
+// the original "no successful imports" error must propagate so the
+// workflow retries.
+func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
+	const matchingSize int64 = 67890
+
+	knownMovie := &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}
+
+	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.Contains(t, err.Error(), "no successful imports")
+	}
+
+	tests := []struct {
+		name         string
+		expectedSize int64
+		parseResp    *parseResponse
+		movieByID    *radarrlib.Movie
+		errFunc      require.ErrorAssertionFunc
+	}{
+		{
+			name:         "size matches: scan treated as success",
+			expectedSize: matchingSize,
+			parseResp:    &parseResponse{Movie: knownMovie},
+			movieByID:    &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: matchingSize}},
+		},
+		{
+			name:         "size mismatches: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    &parseResponse{Movie: knownMovie},
+			movieByID:    &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: matchingSize + 1}},
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "movie has no file: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    &parseResponse{Movie: knownMovie},
+			movieByID:    &radarrlib.Movie{ID: 42, HasFile: false},
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "movie unidentifiable by parse: original error propagates",
+			expectedSize: matchingSize,
+			parseResp:    &parseResponse{Movie: nil},
+			movieByID:    nil,
+			errFunc:      propagatesUnsuccessful,
+		},
+		{
+			name:         "expectedSize zero disables post-check: original error propagates",
+			expectedSize: 0,
+			parseResp:    &parseResponse{Movie: knownMovie},
+			movieByID:    &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: matchingSize}},
+			errFunc:      propagatesUnsuccessful,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newTestServerWithConfig(t, testServerConfig{
+				parseResp:            test.parseResp,
+				movieByID:            test.movieByID,
+				commandStatuses:      []string{"completed"},
+				commandResult:        "unsuccessful",
+				commandStatusMessage: "no eligible files",
+			})
+			t.Cleanup(srv.Close)
+
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", test.expectedSize)
+
+			errFunc := test.errFunc
+			if errFunc == nil {
+				errFunc = require.NoError
+			}
+
+			errFunc(t, err)
 		})
 	}
 }
@@ -296,7 +382,7 @@ func TestGetInfo_UnreachableURL(t *testing.T) {
 func TestImportByFilePath_UnreachableURL(t *testing.T) {
 	client := radarr.New(radarr.Config{URL: unreachableURL, APIKey: "test-key"})
 
-	err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv")
+	err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", 0)
 	require.Error(t, err)
 }
 

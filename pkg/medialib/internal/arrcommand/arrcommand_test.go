@@ -57,7 +57,9 @@ func TestWait(t *testing.T) {
 			statuses: []arrcommand.Status{
 				{Status: "completed", Result: "unsuccessful", Message: "no eligible files"},
 			},
-			errFunc:      require.Error,
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.ErrorIs(t, err, arrcommand.ErrNoSuccessfulImports, msgAndArgs...)
+			},
 			errSubstring: "no successful imports",
 			wantCalls:    1,
 		},

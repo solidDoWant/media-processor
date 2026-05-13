@@ -49,17 +49,20 @@ func copyTwoAudioTestVideo(t *testing.T) string {
 
 // stubLibraryClient implements medialib.ArrLibrary for testing.
 type stubLibraryClient struct {
-	err         error
-	importCalls []string
-	infoResult  medialib.MediaInfo
-	infoErr     error
-	posterBytes []byte
-	posterMime  string
-	posterErr   error
+	err             error
+	importCalls     []string
+	importCallSizes []int64
+	infoResult      medialib.MediaInfo
+	infoErr         error
+	posterBytes     []byte
+	posterMime      string
+	posterErr       error
 }
 
-func (s *stubLibraryClient) ImportByFilePath(_ context.Context, path string) error {
+func (s *stubLibraryClient) ImportByFilePath(_ context.Context, path string, expectedSize int64) error {
 	s.importCalls = append(s.importCalls, path)
+	s.importCallSizes = append(s.importCallSizes, expectedSize)
+
 	return s.err
 }
 

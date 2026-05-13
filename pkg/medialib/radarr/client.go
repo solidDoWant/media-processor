@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -115,7 +117,11 @@ func (c *Client) GetInfo(ctx context.Context, filePath string) (medialib.MediaIn
 // until Radarr reports the command has reached a terminal status.
 // Blocking is required so the caller can safely operate on filePath (e.g. prune the
 // containing directory) once Radarr has finished moving the file into its library.
-func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
+// expectedSize, when positive, is the size of the local source file in bytes
+// and enables a post-check that distinguishes a benign race (Radarr's own
+// completed-download handler imported the file first) from a real failure
+// (Radarr kept a different pre-existing file) — see movieFileSize.
+func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expectedSize int64) error {
 	requestPayload := struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
@@ -135,10 +141,38 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string) error {
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "radarr"); err != nil {
+		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
+			if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
+				slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
+					"file_path", filePath, "size", size)
+
+				return nil
+			}
+		}
+
 		return fmt.Errorf("wait for command for %q: %w", filePath, err)
 	}
 
 	return nil
+}
+
+// movieFileSize returns the size in bytes of the file Radarr currently has
+// for the movie identified by filePath. The second return is false when
+// the movie cannot be parsed, has no file, or any lookup fails — callers
+// should treat that as "do not recover" so the original scan error remains
+// in force.
+func (c *Client) movieFileSize(ctx context.Context, filePath string) (int64, bool) {
+	parsed, err := c.parseFilePath(ctx, filePath)
+	if err != nil || parsed == nil {
+		return 0, false
+	}
+
+	full, err := c.radarr.GetMovieByIDContext(ctx, parsed.ID)
+	if err != nil || full == nil || !full.HasFile || full.MovieFile == nil {
+		return 0, false
+	}
+
+	return full.MovieFile.Size, true
 }
 
 // fetchCommandStatus implements arrcommand.Fetcher. It hits Radarr's
