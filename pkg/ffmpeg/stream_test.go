@@ -259,8 +259,22 @@ func TestCopyStreamState_processPacket_RepairsNonMonotonicSourceDts(t *testing.T
 
 	pkt.Unref()
 
+	assert.Equal(t, int64(1), css.clampedCount,
+		"clampedCount must increment on the first repaired packet")
+
+	readAudioPacket()
+	pkt.SetDts(60)
+	pkt.SetPts(60)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"second non-monotonic packet must also be repaired and accepted")
+
+	pkt.Unref()
+
 	require.NoError(t, outputFmt.WriteTrailer())
 
 	assert.Greater(t, css.lastWrittenDts, int64(100),
 		"copyStreamState.lastWrittenDts must advance strictly past the previous packet's DTS after the repair")
+	assert.Equal(t, int64(2), css.clampedCount,
+		"clampedCount must accumulate across every repaired packet so the summary log reflects the true total")
 }

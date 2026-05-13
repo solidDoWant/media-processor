@@ -127,4 +127,5 @@ func (sss *subtitleStreamState) processPacket(packet *astiav.Packet, outputFmt *
 
 func (sss *subtitleStreamState) free() {
 	sss.converter.free()
+	sss.copyStreamState.free()
 }
