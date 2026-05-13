@@ -180,15 +180,6 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "sonarr"); err != nil {
-		// Sonarr's own completed-download handler can race our scan and import
-		// the file before our command runs. In that case, the scan command
-		// finishes with result="unsuccessful" (nothing left at the path), but
-		// the episode is already imported. To distinguish that benign race
-		// from a real failure (e.g. transient Sonarr error causing our file
-		// to be rejected while a pre-existing lower-quality file is kept),
-		// compare Sonarr's stored EpisodeFile.Size to expectedSize. A match
-		// proves Sonarr has our file; a mismatch (or unknown size) leaves
-		// the original error in place so Temporal can retry.
 		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
 			if size, ok := c.episodeFileSize(ctx, filePath); ok && size == expectedSize {
 				slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",

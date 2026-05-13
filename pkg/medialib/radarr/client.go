@@ -141,15 +141,6 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "radarr"); err != nil {
-		// Radarr's own completed-download handler can race our scan and import
-		// the file before our command runs. In that case, the scan command
-		// finishes with result="unsuccessful" (nothing left at the path), but
-		// the movie is already imported. To distinguish that benign race
-		// from a real failure (e.g. transient Radarr error causing our file
-		// to be rejected while a pre-existing lower-quality file is kept),
-		// compare Radarr's stored MovieFile.Size to expectedSize. A match
-		// proves Radarr has our file; a mismatch (or unknown size) leaves
-		// the original error in place so Temporal can retry.
 		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
 			if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
 				slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
