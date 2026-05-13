@@ -122,6 +122,8 @@ func (vss *videoStreamState) free() {
 			vss.plan.cropFilter.frame.Free()
 		}
 	}
+
+	vss.copyStreamState.free()
 }
 
 // setupDecoder selects and configures the decoder codec context for the video

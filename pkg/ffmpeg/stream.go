@@ -73,6 +73,10 @@ type copyStreamState struct {
 	// timestamps go briefly backwards between adjacent display sets).
 	// NoPtsValue before the first write.
 	lastWrittenDts int64
+	// clampedCount caps log volume from repairNonMonotonicDts: only the first
+	// clamp on a stream logs a detailed warn line, and logClampSummary later
+	// emits the total. Pathological sources can regress on thousands of packets.
+	clampedCount int64
 }
 
 func (css *copyStreamState) inputStream() *astiav.Stream  { return css.inStream }
@@ -80,6 +84,7 @@ func (css *copyStreamState) outputStream() *astiav.Stream { return css.outStream
 func (css *copyStreamState) setOutputStream(out *astiav.Stream) {
 	css.outStream = out
 	css.lastWrittenDts = astiav.NoPtsValue
+	css.clampedCount = 0
 }
 
 func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
@@ -115,7 +120,12 @@ func (css *copyStreamState) flush(_ *astiav.FormatContext, _ chan<- Progress, _ 
 
 func (css *copyStreamState) applyOutputOverrides(_ *astiav.Stream) error { return nil }
 
-func (css *copyStreamState) free() {}
+// free must be invoked by every embedding type's free() — Go does not promote
+// the embedded method once the outer type defines its own — so the DTS-clamp
+// summary is emitted exactly once per stream.
+func (css *copyStreamState) free() {
+	css.logClampSummary()
+}
 
 // receiveAndWritePackets drains encoded packets from the encoder context and
 // writes each to the output. css.frames is incremented per written packet.
@@ -167,18 +177,36 @@ func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
 		return
 	}
 
-	slog.Warn("ffmpeg: clamping non-monotonic DTS",
-		slog.Int("stream", css.outStream.Index()),
-		slog.Int64("packet_dts", pkt.Dts()),
-		slog.Int64("previous_dts", css.lastWrittenDts),
-		slog.Int64("corrected_dts", newDts),
-	)
+	if css.clampedCount == 0 {
+		slog.Warn("ffmpeg: clamping non-monotonic DTS",
+			slog.Int("stream", css.outStream.Index()),
+			slog.Int64("packet_dts", pkt.Dts()),
+			slog.Int64("previous_dts", css.lastWrittenDts),
+			slog.Int64("corrected_dts", newDts),
+		)
+	}
+
+	css.clampedCount++
 
 	pkt.SetDts(newDts)
 
 	if newPts != pkt.Pts() {
 		pkt.SetPts(newPts)
 	}
+}
+
+// logClampSummary skips the single-clamp case because repairNonMonotonicDts
+// already logged that packet in detail — a summary saying "1 clamp" would
+// just duplicate the existing line.
+func (css *copyStreamState) logClampSummary() {
+	if css.clampedCount <= 1 || css.outStream == nil {
+		return
+	}
+
+	slog.Warn("ffmpeg: clamped non-monotonic DTS on stream",
+		slog.Int("stream", css.outStream.Index()),
+		slog.Int64("total_clamps", css.clampedCount),
+	)
 }
 
 // monotonicDtsClamp computes the DTS and PTS for an outgoing packet so that

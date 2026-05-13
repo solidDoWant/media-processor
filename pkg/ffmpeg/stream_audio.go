@@ -59,6 +59,8 @@ func (ass *audioStreamState) free() {
 	if ass.encoder.fifoFrame != nil {
 		ass.encoder.fifoFrame.Free()
 	}
+
+	ass.copyStreamState.free()
 }
 
 // setupDecoder initialises the software decoder codec context for the audio stream.
