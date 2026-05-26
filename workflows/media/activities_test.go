@@ -54,12 +54,13 @@ func TestNotify_CallsLibraryImport(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.Notify,
 		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
-		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv", DestFileSizeBytes: 745_031_981},
 	)
 	require.NoError(t, err)
 
 	require.Len(t, radarr.importCalls, 1)
 	assert.Equal(t, "/out/movie.mkv", radarr.importCalls[0])
+	assert.Equal(t, int64(745_031_981), radarr.importCallSizes[0])
 }
 
 func TestNotify_OutputRemotePathSubstitutedInImportCall(t *testing.T) {
