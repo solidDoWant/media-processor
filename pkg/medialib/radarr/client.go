@@ -142,7 +142,13 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "radarr"); err != nil {
 		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
-			if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
+			if size, ok := c.movieFileSize(ctx, filePath); !ok {
+				slog.WarnContext(ctx, "radarr scan reported no imports and movie file lookup failed; cannot recover",
+					"file_path", filePath, "expected_size", expectedSize)
+			} else if size != expectedSize {
+				return fmt.Errorf("radarr already has a file of size %d for %q but expected %d: %w",
+					size, filePath, expectedSize, medialib.ErrLibraryFileMismatch)
+			} else {
 				slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
 					"file_path", filePath, "size", size)
 

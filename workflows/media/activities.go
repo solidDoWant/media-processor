@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -398,10 +399,16 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 	// which may no longer be present if the arr service has already moved it
 	// during a directory-level import (e.g. a series pack).
 	if err := library.ImportByFilePath(ctx, importPath, transcode.DestFileSizeBytes); err != nil {
-		wrappedErr := fmt.Errorf("notify library: %w", err)
-		logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
+		var finalErr error
+		if errors.Is(err, medialib.ErrLibraryFileMismatch) {
+			finalErr = temporal.NewNonRetryableApplicationError(err.Error(), errTypeNonRetryable, err)
+		} else {
+			finalErr = fmt.Errorf("notify library: %w", err)
+		}
 
-		return wrappedErr
+		logStepResult(ctx, "notify", input.FilePath, start, finalErr)
+
+		return finalErr
 	}
 
 	logStepResult(ctx, "notify", input.FilePath, start, nil)

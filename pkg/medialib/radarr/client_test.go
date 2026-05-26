@@ -281,6 +281,11 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 		assert.Contains(t, err.Error(), "no successful imports")
 	}
 
+	propagatesFileMismatch := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.True(t, errors.Is(err, medialib.ErrLibraryFileMismatch), "expected ErrLibraryFileMismatch, got: %v", err)
+	}
+
 	tests := []struct {
 		name         string
 		expectedSize int64
@@ -295,11 +300,11 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			movieByID:    &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: matchingSize}},
 		},
 		{
-			name:         "size mismatches: original error propagates",
+			name:         "size mismatches: ErrLibraryFileMismatch returned",
 			expectedSize: matchingSize,
 			parseResp:    &parseResponse{Movie: knownMovie},
 			movieByID:    &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: matchingSize + 1}},
-			errFunc:      propagatesUnsuccessful,
+			errFunc:      propagatesFileMismatch,
 		},
 		{
 			name:         "movie has no file: original error propagates",

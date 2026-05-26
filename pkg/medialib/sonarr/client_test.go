@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +57,8 @@ type sonarrTestServerConfig struct {
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
 	onParse func(t *testing.T, r *http.Request)
+	// onQueueDelete is called with the queue record ID when DELETE /api/v3/queue/{id} is hit.
+	onQueueDelete func(t *testing.T, id int64)
 }
 
 func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
@@ -111,6 +114,23 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 		}
 
 		require.NoError(t, json.NewEncoder(w).Encode(q))
+	})
+
+	mux.HandleFunc("/api/v3/queue/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/queue/")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		require.NoError(t, err)
+
+		if cfg.onQueueDelete != nil {
+			cfg.onQueueDelete(t, id)
+		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -219,28 +239,30 @@ func TestImportByFilePath(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                 string
-		path                 string
-		parseResp            *sonarrlib.ParseOutput
-		queueResp            *sonarrlib.Queue
-		queuePages           []*sonarrlib.Queue
-		queueHTTPStatus      int
-		wantCmdName          string
-		wantCmdPath          string
-		wantDownloadClientID string
-		errFunc              require.ErrorAssertionFunc
+		name               string
+		path               string
+		parseResp          *sonarrlib.ParseOutput
+		queueResp          *sonarrlib.Queue
+		queuePages         []*sonarrlib.Queue
+		queueHTTPStatus    int
+		wantCmdName        string
+		wantCmdPath        string
+		wantQueueDeletedID int64 // 0 = no DELETE expected
+		errFunc            require.ErrorAssertionFunc
 	}{
 		{
-			name:                 "pending queue record found: downloadClientId included in command",
-			path:                 "/tv/Breaking.Bad.S01E01.mkv",
-			parseResp:            episodeParseOutput,
-			queueResp:            &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{pendingRecord}},
-			wantCmdName:          "DownloadedEpisodesScan",
-			wantCmdPath:          "/tv/Breaking.Bad.S01E01.mkv",
-			wantDownloadClientID: "nzb-abc123",
+			// Queue record found: command uses only Path (no DownloadClientId),
+			// and the queue record is deleted after successful import.
+			name:               "pending queue record found: queue record deleted after import",
+			path:               "/tv/Breaking.Bad.S01E01.mkv",
+			parseResp:          episodeParseOutput,
+			queueResp:          &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{pendingRecord}},
+			wantCmdName:        "DownloadedEpisodesScan",
+			wantCmdPath:        "/tv/Breaking.Bad.S01E01.mkv",
+			wantQueueDeletedID: 1,
 		},
 		{
-			name:        "episode unrecognized: command sent without downloadClientId",
+			name:        "episode unrecognized: command sent without queue delete",
 			path:        "/tv/Breaking.Bad.S01E01.mkv",
 			parseResp:   &sonarrlib.ParseOutput{},
 			queueResp:   &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{pendingRecord}},
@@ -248,7 +270,7 @@ func TestImportByFilePath(t *testing.T) {
 			wantCmdPath: "/tv/Breaking.Bad.S01E01.mkv",
 		},
 		{
-			name:        "no matching queue record: command sent without downloadClientId",
+			name:        "no matching queue record: command sent without queue delete",
 			path:        "/tv/Breaking.Bad.S01E01.mkv",
 			parseResp:   episodeParseOutput,
 			queueResp:   &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{}},
@@ -257,7 +279,7 @@ func TestImportByFilePath(t *testing.T) {
 		},
 		{
 			// Sonarr already imported the episode on its own before we scanned.
-			name:      "queue record already imported: command sent without downloadClientId",
+			name:      "queue record already imported: command sent without queue delete",
 			path:      "/tv/Breaking.Bad.S01E01.mkv",
 			parseResp: episodeParseOutput,
 			queueResp: &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{
@@ -268,7 +290,7 @@ func TestImportByFilePath(t *testing.T) {
 		},
 		{
 			// Queue API unreachable: fall back gracefully rather than blocking the import.
-			name:            "queue API error: command sent without downloadClientId",
+			name:            "queue API error: command sent without queue delete",
 			path:            "/tv/Breaking.Bad.S01E01.mkv",
 			parseResp:       episodeParseOutput,
 			queueHTTPStatus: http.StatusInternalServerError,
@@ -276,8 +298,8 @@ func TestImportByFilePath(t *testing.T) {
 			wantCmdPath:     "/tv/Breaking.Bad.S01E01.mkv",
 		},
 		{
-			// Match found on second page: verifies pagination terminates early on hit.
-			name:      "match on second queue page: downloadClientId from second page included",
+			// Match found on second page: queue record from second page is deleted after import.
+			name:      "match on second queue page: queue record from second page deleted after import",
 			path:      "/tv/Breaking.Bad.S01E01.mkv",
 			parseResp: episodeParseOutput,
 			queuePages: []*sonarrlib.Queue{
@@ -292,9 +314,9 @@ func TestImportByFilePath(t *testing.T) {
 					Records:      []*sonarrlib.QueueRecord{pendingRecord},
 				},
 			},
-			wantCmdName:          "DownloadedEpisodesScan",
-			wantCmdPath:          "/tv/Breaking.Bad.S01E01.mkv",
-			wantDownloadClientID: "nzb-abc123",
+			wantCmdName:        "DownloadedEpisodesScan",
+			wantCmdPath:        "/tv/Breaking.Bad.S01E01.mkv",
+			wantQueueDeletedID: 1,
 		},
 	}
 
@@ -306,6 +328,8 @@ func TestImportByFilePath(t *testing.T) {
 				DownloadClientId string `json:"downloadClientId"`
 			}
 
+			var deletedQueueID int64
+
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
 				parseResp:       test.parseResp,
 				queueResp:       test.queueResp,
@@ -313,6 +337,9 @@ func TestImportByFilePath(t *testing.T) {
 				queueHTTPStatus: test.queueHTTPStatus,
 				onCommand: func(t *testing.T, r *http.Request) {
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
+				},
+				onQueueDelete: func(_ *testing.T, id int64) {
+					deletedQueueID = id
 				},
 			})
 			t.Cleanup(srv.Close)
@@ -331,8 +358,10 @@ func TestImportByFilePath(t *testing.T) {
 			if err == nil {
 				assert.Equal(t, test.wantCmdName, gotCmd.Name)
 				assert.Equal(t, test.wantCmdPath, gotCmd.Path)
-				assert.Equal(t, test.wantDownloadClientID, gotCmd.DownloadClientId)
+				assert.Empty(t, gotCmd.DownloadClientId, "DownloadClientId must never be included in the scan command")
 			}
+
+			assert.Equal(t, test.wantQueueDeletedID, deletedQueueID, "queue record deletion")
 		})
 	}
 }
@@ -487,6 +516,11 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 		assert.Contains(t, err.Error(), "no successful imports")
 	}
 
+	propagatesFileMismatch := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.True(t, errors.Is(err, medialib.ErrLibraryFileMismatch), "expected ErrLibraryFileMismatch, got: %v", err)
+	}
+
 	tests := []struct {
 		name         string
 		expectedSize int64
@@ -503,12 +537,12 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			episodeFile:  &sonarrlib.EpisodeFile{ID: 7, Size: matchingSize},
 		},
 		{
-			name:         "size mismatches: original error propagates",
+			name:         "size mismatches: ErrLibraryFileMismatch returned",
 			expectedSize: matchingSize,
 			parseResp:    episodeParseOutput,
 			episodeByID:  &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
 			episodeFile:  &sonarrlib.EpisodeFile{ID: 7, Size: matchingSize + 1},
-			errFunc:      propagatesUnsuccessful,
+			errFunc:      propagatesFileMismatch,
 		},
 		{
 			name:         "episode has no file: original error propagates",

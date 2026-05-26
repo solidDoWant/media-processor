@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/tally/v4"
 	contribtally "go.temporal.io/sdk/contrib/tally"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/solidDoWant/media-processor/pkg/medialib"
@@ -89,6 +91,21 @@ func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
 	)
 	require.Error(t, err, "library import failure should propagate")
+}
+
+func TestNotify_LibraryFileMismatchIsNonRetryable(t *testing.T) {
+	radarr := &stubLibraryClient{err: fmt.Errorf("existing file: %w", medialib.ErrLibraryFileMismatch)}
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	_, err := env.ExecuteActivity(a.Notify,
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv", DestFileSizeBytes: 100},
+	)
+	require.Error(t, err)
+
+	var appErr *temporal.ApplicationError
+	require.ErrorAs(t, err, &appErr)
+	assert.True(t, appErr.NonRetryable(), "ErrLibraryFileMismatch must produce a non-retryable application error")
 }
 
 func TestCleanup_DeletesSource(t *testing.T) {

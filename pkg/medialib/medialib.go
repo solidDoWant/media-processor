@@ -11,6 +11,14 @@ import (
 // ErrNotFound is returned when a media item is not found in the library.
 var ErrNotFound = errors.New("not found in library")
 
+// ErrLibraryFileMismatch is returned by ImportByFilePath when the arr service
+// already has a file for the requested media item but that file's size differs
+// from expectedSize. This indicates the arr service's existing file is from a
+// different import (not the file we just produced) and the service declined to
+// replace it. Retrying will not help; the operator must resolve the conflict in
+// the arr service before the workflow can succeed.
+var ErrLibraryFileMismatch = errors.New("library already has a different file for this media item")
+
 // MediaType identifies whether a media file is a movie or a TV show episode.
 type MediaType string
 
@@ -150,6 +158,9 @@ type ArrLibrary interface {
 	// expectedSize, the import is treated as having succeeded (typically
 	// because the arr service's own completed-download handler raced our
 	// scan). A non-positive expectedSize disables the post-check.
+	// Returns ErrLibraryFileMismatch (wrapped) when the arr service already
+	// has a file of a different size and declined to replace it — this
+	// condition will not resolve on retry.
 	ImportByFilePath(ctx context.Context, path string, expectedSize int64) error
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.

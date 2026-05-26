@@ -99,14 +99,13 @@ func (c *Client) GetInfo(ctx context.Context, filePath string) (medialib.MediaIn
 	return c.getEpisodeByFilePath(ctx, filePath)
 }
 
-// findTrackedDownloadID returns the download client's native ID for the pending
-// tracked download that corresponds to the episode at path, or "" if none is
-// found. API errors are treated as "no match" so callers always get a safe
-// fallback.
-func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) string {
+// findQueueRecordID returns the Sonarr queue record ID for the pending tracked
+// download that corresponds to the episode at filePath, or 0 if none is found.
+// API errors are treated as "no match" so callers always get a safe fallback.
+func (c *Client) findQueueRecordID(ctx context.Context, filePath string) int64 {
 	episode, err := c.getEpisodeByFilePath(ctx, filePath)
 	if err != nil {
-		return ""
+		return 0
 	}
 
 	const pageSize = 100
@@ -114,7 +113,7 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) str
 	for page, fetched := 1, 0; ; page++ {
 		curr, err := c.sonarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
 		if err != nil {
-			return ""
+			return 0
 		}
 
 		for _, record := range curr.Records {
@@ -127,11 +126,11 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) str
 				continue
 			}
 
-			if record.DownloadID == "" {
+			if record.ID == 0 {
 				continue
 			}
 
-			return record.DownloadID
+			return record.ID
 		}
 
 		fetched += len(curr.Records)
@@ -140,7 +139,7 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) str
 		}
 	}
 
-	return ""
+	return 0
 }
 
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedEpisodesScan command
@@ -148,24 +147,25 @@ func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) str
 // until Sonarr reports the command has reached a terminal status.
 // Blocking is required so the caller can safely operate on filePath (e.g. prune the
 // containing directory) once Sonarr has finished moving the file into its library.
-// When a pending tracked download for the episode is found in the queue, its
-// download client ID is included so Sonarr calls VerifyImport and removes the
-// item from the downloads queue.
+// The Sonarr queue record for the episode is deleted after a successful import so
+// the download no longer shows as ImportPending. DownloadClientId is intentionally
+// omitted from the scan command: including it causes Sonarr to scan the download
+// client's content directory (rather than filePath), which for series packs imports
+// all episodes from the original download location and can produce unexpected
+// batch-episode records.
 // expectedSize, when positive, is the size of the local source file in bytes
 // and enables a post-check that distinguishes a benign race (Sonarr's own
 // completed-download handler imported the file first) from a real failure
 // (Sonarr kept a different pre-existing file) — see episodeFileSize.
 func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expectedSize int64) error {
-	downloadClientID := c.findTrackedDownloadID(ctx, filePath)
+	queueRecordID := c.findQueueRecordID(ctx, filePath)
 
 	requestPayload := struct {
-		Name             string `json:"name"`
-		Path             string `json:"path"`
-		DownloadClientId string `json:"downloadClientId,omitempty"`
+		Name string `json:"name"`
+		Path string `json:"path"`
 	}{
-		Name:             "DownloadedEpisodesScan",
-		Path:             filePath,
-		DownloadClientId: downloadClientID,
+		Name: "DownloadedEpisodesScan",
+		Path: filePath,
 	}
 
 	var body bytes.Buffer
@@ -185,11 +185,13 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file lookup failed; cannot recover",
 					"file_path", filePath, "expected_size", expectedSize)
 			} else if size != expectedSize {
-				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file size does not match expected; cannot recover",
-					"file_path", filePath, "sonarr_size", size, "expected_size", expectedSize)
+				return fmt.Errorf("sonarr already has a file of size %d for %q but expected %d: %w",
+					size, filePath, expectedSize, medialib.ErrLibraryFileMismatch)
 			} else {
 				slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",
 					"file_path", filePath, "size", size)
+
+				c.deleteQueueRecord(ctx, filePath, queueRecordID)
 
 				return nil
 			}
@@ -198,7 +200,25 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 		return fmt.Errorf("wait for command for %q: %w", filePath, err)
 	}
 
+	c.deleteQueueRecord(ctx, filePath, queueRecordID)
+
 	return nil
+}
+
+// deleteQueueRecord removes the Sonarr queue record for this import.
+// RemoveFromClient is false so the torrent stays in the download client —
+// series packs share one torrent across all episodes, and removing it when
+// the first episode completes would disrupt episodes still being processed.
+// Errors are logged but not propagated; queue cleanup is best-effort.
+func (c *Client) deleteQueueRecord(ctx context.Context, filePath string, queueRecordID int64) {
+	if queueRecordID == 0 {
+		return
+	}
+
+	if err := c.sonarr.DeleteQueueContext(ctx, queueRecordID, &starr.QueueDeleteOpts{RemoveFromClient: starr.False()}); err != nil {
+		slog.WarnContext(ctx, "failed to delete sonarr queue record after import; item may remain as ImportPending",
+			"file_path", filePath, "queue_record_id", queueRecordID, "error", err)
+	}
 }
 
 // episodeFileSize returns the size in bytes of the file Sonarr currently has
