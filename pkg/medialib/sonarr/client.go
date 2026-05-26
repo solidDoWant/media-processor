@@ -181,7 +181,13 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "sonarr"); err != nil {
 		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
-			if size, ok := c.episodeFileSize(ctx, filePath); ok && size == expectedSize {
+			if size, ok := c.episodeFileSize(ctx, filePath); !ok {
+				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file lookup failed; cannot recover",
+					"file_path", filePath, "expected_size", expectedSize)
+			} else if size != expectedSize {
+				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file size does not match expected; cannot recover",
+					"file_path", filePath, "sonarr_size", size, "expected_size", expectedSize)
+			} else {
 				slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",
 					"file_path", filePath, "size", size)
 
