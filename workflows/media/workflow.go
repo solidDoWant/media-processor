@@ -110,11 +110,19 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		return nil
 	}
 
-	cropCtx := workflow.WithActivityOptions(ctx, a.activityOptions(DetectCropActivityName, a.cfg.DetectCropTimeout, defaultMaxAttempts))
-
 	var crop DetectCropOutput
-	if err := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); err != nil {
-		return err
+
+	// When crop detection is disabled for this watch, skip the detect-crop
+	// activity entirely. A nil crop means no crop filter is applied (the full
+	// frame is transcoded), so no detect-crop worker is needed for these files.
+	if input.SkipCropDetection {
+		log.Info("crop detection skipped (disabled for watch)", "file", input.FilePath)
+	} else {
+		cropCtx := workflow.WithActivityOptions(ctx, a.activityOptions(DetectCropActivityName, a.cfg.DetectCropTimeout, defaultMaxAttempts))
+
+		if err := workflow.ExecuteActivity(cropCtx, DetectCropActivityName, input, probe).Get(cropCtx, &crop); err != nil {
+			return err
+		}
 	}
 
 	transcodeOpts := a.activityOptions(TranscodeActivityName, a.cfg.TranscodeTimeout, defaultMaxAttempts)

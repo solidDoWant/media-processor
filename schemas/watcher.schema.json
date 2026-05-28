@@ -68,6 +68,10 @@
           "type": "boolean",
           "description": "RetainEmptyDirectories controls whether empty parent directories are removed after the\nsource file is deleted. When false or omitted (the default), parent directories that\nbecome empty as a result of source-file deletion are pruned bottom-up, stopping at the\nwatch root. When true, no directory removal is performed."
         },
+        "skipCropDetection": {
+          "type": "boolean",
+          "description": "SkipCropDetection disables the crop-detection step for files from this watch. When true,\nthe workflow does not run the detect-crop activity and transcodes the full frame without\na crop filter. When false or omitted (the default), crop detection runs as normal."
+        },
         "output": {
           "$ref": "#/$defs/WatchEntryOutput",
           "description": "Output describes where processed files are written and how the output path is translated\nfor the arr service."

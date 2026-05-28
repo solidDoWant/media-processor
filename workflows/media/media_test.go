@@ -53,6 +53,35 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestMediaWorkflow_SkipCropDetection_SkipsDetectCropAndTranscodesWithoutCrop(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	newWorkflowActivities(t).Register(env)
+
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	transOut := TranscodeOutput{DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/file.mkv"}
+
+	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
+	// DetectCrop must NOT be invoked: no .Return is registered for it, so the
+	// mock fails the test if it is called. Transcode must receive a zero-value
+	// DetectCropOutput (nil crop) so the full frame is transcoded.
+	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, expectCrop(DetectCropOutput{})).
+		Return(transOut, nil).Once()
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut)).Return(nil).Once()
+
+	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{
+		FilePath:          "/in/file.mp4",
+		MediaType:         medialib.MovieType,
+		OutputPath:        "/out",
+		SkipCropDetection: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
 func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -429,4 +458,11 @@ var _ medialib.ArrLibrary = (*stubLibraryClient)(nil)
 // Using mock.Anything would let either regression slip through.
 func expectTranscode(want TranscodeOutput) any {
 	return mock.MatchedBy(func(got TranscodeOutput) bool { return got == want })
+}
+
+// expectCrop matches the DetectCropOutput argument passed to the transcode
+// activity. A zero-value DetectCropOutput (nil Crop) means no crop filter is
+// applied, which is what the skip-crop-detection path must forward.
+func expectCrop(want DetectCropOutput) any {
+	return mock.MatchedBy(func(got DetectCropOutput) bool { return got == want })
 }

@@ -483,6 +483,7 @@ func scan(ctx context.Context, cfg *Config, instruments *scanInstruments, dispat
 				PreserveSource:         w.PreserveSource,
 				WatchRoot:              absWatchRoot,
 				RetainEmptyDirectories: w.RetainEmptyDirectories,
+				SkipCropDetection:      w.SkipCropDetection,
 				OutputPath:             absOutputPath,
 				OutputRemotePath:       outputRemotePath,
 			})

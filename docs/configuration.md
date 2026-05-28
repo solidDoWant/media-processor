@@ -49,6 +49,7 @@ watches:
       path: /processed/archive
     preserveSource: true           # keep the original file
     retainEmptyDirectories: true   # leave empty directories in place
+    skipCropDetection: true        # transcode the full frame, no crop detection
 ```
 
 ### Fields
@@ -64,6 +65,7 @@ watches:
 | `watches[].ignorePatterns`         | []string | `[]`    | Regular expressions in [RE2 syntax](https://github.com/google/re2/wiki/Syntax). A file whose path matches any pattern is silently skipped; a directory match skips the entire subtree.                                  |
 | `watches[].preserveSource`         | bool     | `false` | When `true`, the source file is kept after successful transcoding.                                                                                                                                                      |
 | `watches[].retainEmptyDirectories` | bool     | `false` | When `true`, parent directories that become empty after source deletion are left in place rather than being deleted up to the watch root.                                                                               |
+| `watches[].skipCropDetection`      | bool     | `false` | When `true`, crop detection is skipped for files from this watch and the full frame is transcoded without a crop filter. Useful for sources known to have no black bars, avoiding the detect-crop step entirely.        |
 
 ## Temporal client configuration file
 
