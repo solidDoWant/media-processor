@@ -138,6 +138,10 @@ type WatchEntry struct {
 	// become empty as a result of source-file deletion are pruned bottom-up, stopping at the
 	// watch root. When true, no directory removal is performed.
 	RetainEmptyDirectories bool `yaml:"retainEmptyDirectories,omitempty"`
+	// SkipCropDetection disables the crop-detection step for files from this watch. When true,
+	// the workflow does not run the detect-crop activity and transcodes the full frame without
+	// a crop filter. When false or omitted (the default), crop detection runs as normal.
+	SkipCropDetection bool `yaml:"skipCropDetection,omitempty"`
 	// Output describes where processed files are written and how the output path is translated
 	// for the arr service.
 	Output WatchEntryOutput `yaml:"output"`
