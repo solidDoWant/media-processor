@@ -29,6 +29,43 @@ import (
 // See pkg/ffmpeg/testdata/README.md for the regeneration procedure.
 const testVFRHEVCSourcePath = "testdata/video_vfr_hevc.mkv"
 
+// TestTranscode_SoftwareDecodeToQSV verifies that a source whose codec has no
+// Intel hardware decoder (mpeg4-ASP in AVI) transcodes successfully to H.265
+// with the QSV encoder when no crop is applied. This exercises the software
+// decode + hardware encode path: each decoded frame is converted on the CPU
+// (yuv420p→NV12) and then uploaded to a GPU surface before encoding.
+//
+// A regression allocated the CPU scaler destination and the GPU upload surface
+// into the same frame field, so the software scaler wrote into a hardware
+// surface and ffmpeg aborted with "scaling video frame: Invalid argument"
+// (swscale's "bad dst image pointers"). Requires QSV hardware (qsvtest build
+// tag).
+func TestTranscode_SoftwareDecodeToQSV(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testMpeg4AVISourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		HardwareAccel(ffmpeg.HWAccelQSV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err, "QSV transcode of a software-decoded source must succeed")
+
+	info, err := ffprobe.Probe(t.Context(), output)
+	require.NoError(t, err)
+
+	var foundH265 bool
+
+	for _, stream := range info.Streams {
+		if stream.CodecType == ffprobe.CodecTypeVideo && stream.CodecName == "hevc" {
+			foundH265 = true
+			break
+		}
+	}
+
+	assert.True(t, foundH265, "output must contain an H.265 video stream")
+}
+
 // TestTranscode_CropWithQSV verifies that the vpp_qsv crop path produces output
 // with the correct dimensions when QSV hardware is available.
 // Requires QSV hardware (qsvtest build tag).

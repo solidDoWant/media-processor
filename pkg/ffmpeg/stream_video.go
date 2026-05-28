@@ -21,11 +21,15 @@ type videoCropFilterState struct {
 }
 
 type videoEncoderState struct {
-	codecID                 astiav.CodecID
-	codec                   *astiav.Codec
-	codecContext            *astiav.CodecContext
-	packet                  *astiav.Packet
-	frame                   *astiav.Frame
+	codecID      astiav.CodecID
+	codec        *astiav.Codec
+	codecContext *astiav.CodecContext
+	packet       *astiav.Packet
+	frame        *astiav.Frame
+	// swFrame is the CPU-side scaler destination used only on the SW decode +
+	// HW encode path. The scaled frame is uploaded into frame (a GPU surface)
+	// before encoding; it is nil on all other paths.
+	swFrame                 *astiav.Frame
 	usesHardwareAccelerator bool
 	hardwareFrameContext    *astiav.HardwareFramesContext
 	softwareFrameContext    *astiav.SoftwareScaleContext
@@ -107,6 +111,10 @@ func (vss *videoStreamState) free() {
 
 	if vss.encoder.frame != nil {
 		vss.encoder.frame.Free()
+	}
+
+	if vss.encoder.swFrame != nil {
+		vss.encoder.swFrame.Free()
 	}
 
 	if vss.encoder.hardwareFrameContext != nil {
@@ -794,17 +802,28 @@ func (vss *videoStreamState) setupVideoConversion(profile hwProfile) error {
 
 		vss.encoder.softwareFrameContext = softwareFrameContext
 
-		vss.encoder.frame = astiav.AllocFrame()
-		if vss.encoder.frame == nil {
+		scaledFrame := astiav.AllocFrame()
+		if scaledFrame == nil {
 			return errors.New("failed to allocate scaled frame")
 		}
 
-		vss.encoder.frame.SetWidth(srcW)
-		vss.encoder.frame.SetHeight(srcH)
-		vss.encoder.frame.SetPixelFormat(encoderPixelFormat)
+		scaledFrame.SetWidth(srcW)
+		scaledFrame.SetHeight(srcH)
+		scaledFrame.SetPixelFormat(encoderPixelFormat)
 
-		if err := vss.encoder.frame.AllocBuffer(0); err != nil {
+		if err := scaledFrame.AllocBuffer(0); err != nil {
 			return fmt.Errorf("allocating scaled frame buffer: %w", err)
+		}
+
+		// On the SW decode + HW encode path the scaler must write to a CPU
+		// frame, which is then uploaded to a GPU surface (vss.encoder.frame)
+		// allocated below; scaling directly into a hardware surface makes
+		// swscale fail with "bad dst image pointers". On the pure SW path the
+		// scaled frame is fed straight to the encoder.
+		if vss.encoder.usesHardwareAccelerator {
+			vss.encoder.swFrame = scaledFrame
+		} else {
+			vss.encoder.frame = scaledFrame
 		}
 	}
 
@@ -880,13 +899,21 @@ func (vss *videoStreamState) encodeVideoFrame(frame *astiav.Frame, outputFmt *as
 	if !vss.plan.encoderReceivesHWFrames {
 		// Software decode path: convert pixel format if needed.
 		if vss.encoder.softwareFrameContext != nil {
-			if err := vss.encoder.softwareFrameContext.ScaleFrame(encFrame, vss.encoder.frame); err != nil {
+			// On the SW decode + HW encode path the scaler writes to a CPU
+			// frame (swFrame) that is uploaded to a GPU surface below. On the
+			// pure SW path it writes directly to the encoder input frame.
+			scaledFrame := vss.encoder.frame
+			if vss.encoder.usesHardwareAccelerator {
+				scaledFrame = vss.encoder.swFrame
+			}
+
+			if err := vss.encoder.softwareFrameContext.ScaleFrame(encFrame, scaledFrame); err != nil {
 				return fmt.Errorf("ffmpeg: scaling video frame: %w", err)
 			}
 
-			vss.encoder.frame.SetPts(encFrame.Pts())
-			vss.encoder.frame.SetPictureType(astiav.PictureTypeNone)
-			encFrame = vss.encoder.frame
+			scaledFrame.SetPts(encFrame.Pts())
+			scaledFrame.SetPictureType(astiav.PictureTypeNone)
+			encFrame = scaledFrame
 		}
 
 		// Upload to hardware memory when using SW decode + HW encode.
