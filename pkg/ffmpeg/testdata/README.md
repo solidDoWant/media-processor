@@ -6,7 +6,7 @@ Derived from `pkg/ffprobe/testdata/video.mp4` (first ~5 seconds of Big Buck Bunn
 
 Generation command:
 
-```
+```bash
 ffmpeg -i pkg/ffprobe/testdata/video.mp4 -vf "pad=iw:ih+40:0:20:black" pkg/ffmpeg/testdata/video_black_bars.mp4
 ```
 
@@ -21,7 +21,7 @@ A 2 s 320x180 mpeg4-ASP (Simple Profile) clip in an AVI container, transcoded fr
 
 Generation command:
 
-```
+```bash
 ffmpeg -y -i pkg/ffprobe/testdata/video.mp4 -t 2 -an -c:v mpeg4 -q:v 4 pkg/ffmpeg/testdata/video_mpeg4.avi
 ```
 
@@ -36,7 +36,7 @@ A synthetic 12-frame (0.5 s at 24 fps) H.264 clip used to verify crop detection 
 
 Generation command:
 
-```
+```bash
 ffmpeg -f lavfi -i "color=c=blue:size=320x180:rate=24:duration=0.5" -vf "pad=iw:ih+40:0:20:black" -c:v libx264 -y pkg/ffmpeg/testdata/video_short_bars.mp4
 ```
 
