@@ -47,44 +47,48 @@ func New(cfg Config) *Client {
 	return &Client{cfg: cfg, radarr: radarrlib.New(s)}
 }
 
-// getMovieByFilePath returns the movie identified by parsing the file path.
-// Uses Radarr's parse endpoint, so it works for pre-import files.
-// Returns medialib.ErrNotFound if no movie is identified.
-func (c *Client) getMovieByFilePath(ctx context.Context, filePath string) (*medialib.Movie, error) {
-	movie, err := c.parseFilePath(ctx, filePath)
-	if err != nil {
-		return nil, fmt.Errorf("parse file path: %w", err)
-	}
-
-	if movie == nil {
-		return nil, medialib.ErrNotFound
-	}
-
-	return medialib.NewMovie(movie.ID, movie.Title, movie.Year), nil
-}
-
-// parseFilePath calls Radarr's /api/v3/parse endpoint to identify a movie
-// from a file path. Returns nil if Radarr cannot identify the movie.
-//
-// The title parameter (filename stem without extension) is used instead of the
-// path parameter because Radarr's parse endpoint matches path against library
-// paths only, returning 204 No Content for download paths that haven't been
-// imported yet.
-func (c *Client) parseFilePath(ctx context.Context, filePath string) (*radarrlib.Movie, error) {
+// getMovieByTitle resolves a movie from a release title string — a file-name
+// stem or a release folder name — via Radarr's /parse endpoint, which parses
+// the string as a release name and matches it to a movie in the library. This
+// works for files that have not been imported yet. Radarr's /parse accepts only
+// a title (it has no path variant, unlike Sonarr's). Returns
+// medialib.ErrNotFound when no movie is identified.
+func (c *Client) getMovieByTitle(ctx context.Context, title string) (*medialib.Movie, error) {
 	var output struct {
 		Movie *radarrlib.Movie `json:"movie"`
 	}
 
-	base := filepath.Base(filePath)
 	q := make(url.Values)
-	q.Set("title", strings.TrimSuffix(base, filepath.Ext(base)))
+	q.Set("title", title)
 
 	req := starr.Request{URI: radarrlib.APIver + "/parse", Query: q}
 	if err := c.radarr.GetInto(ctx, req, &output); err != nil {
-		return nil, fmt.Errorf("api.Get(parse): %w", err)
+		return nil, fmt.Errorf("get movie by title %q: %w", title, err)
 	}
 
-	return output.Movie, nil
+	if output.Movie == nil {
+		return nil, medialib.ErrNotFound
+	}
+
+	return medialib.NewMovie(output.Movie.ID, output.Movie.Title, output.Movie.Year), nil
+}
+
+// getMovieByFilePath identifies the movie for a file path. It tries the file
+// name first, then falls back to the containing folder name — release titles
+// usually live in the folder while the file itself is often an unparseable
+// hash. Works for pre-import files. Returns medialib.ErrNotFound if neither
+// identifies a movie.
+func (c *Client) getMovieByFilePath(ctx context.Context, filePath string) (*medialib.Movie, error) {
+	base := filepath.Base(filePath)
+
+	movie, err := c.getMovieByTitle(ctx, strings.TrimSuffix(base, filepath.Ext(base)))
+	if err == nil || !errors.Is(err, medialib.ErrNotFound) {
+		return movie, err
+	}
+
+	// The file name didn't identify the movie (e.g. a release hash); fall back
+	// to the release folder name, left intact (no extension stripping).
+	return c.getMovieByTitle(ctx, filepath.Base(filepath.Dir(filePath)))
 }
 
 // GetPosterImage implements medialib.ArrLibrary. It returns the raw poster
@@ -112,22 +116,74 @@ func (c *Client) GetInfo(ctx context.Context, filePath string) (medialib.MediaIn
 	return c.getMovieByFilePath(ctx, filePath)
 }
 
+// findTrackedDownloadID returns the download client's native ID for the pending
+// tracked download that corresponds to the movie at filePath, or "" if none is
+// found. An unidentifiable movie and API errors are both treated as "no match"
+// so callers always get a safe fallback.
+func (c *Client) findTrackedDownloadID(ctx context.Context, filePath string) string {
+	movie, err := c.getMovieByFilePath(ctx, filePath)
+	if err != nil {
+		return ""
+	}
+
+	const pageSize = 100
+
+	for page, fetched := 1, 0; ; page++ {
+		curr, err := c.radarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
+		if err != nil {
+			return ""
+		}
+
+		for _, record := range curr.Records {
+			if record.MovieID == 0 || record.MovieID != movie.GetID() {
+				continue
+			}
+
+			// Skip records already marked imported — Radarr completed this on its own.
+			if strings.EqualFold(record.TrackedDownloadState, "imported") {
+				continue
+			}
+
+			if record.DownloadID == "" {
+				continue
+			}
+
+			return record.DownloadID
+		}
+
+		fetched += len(curr.Records)
+		if fetched >= curr.TotalRecords || len(curr.Records) == 0 {
+			break
+		}
+	}
+
+	return ""
+}
+
 // ImportByFilePath implements medialib.ArrLibrary. It sends a DownloadedMoviesScan command
 // for filePath, causing Radarr to import the file at filePath into the library, and blocks
 // until Radarr reports the command has reached a terminal status.
 // Blocking is required so the caller can safely operate on filePath (e.g. prune the
 // containing directory) once Radarr has finished moving the file into its library.
+// When a pending tracked download for the movie is found in the queue, its download
+// client ID is included so Radarr associates the import with the tracked download —
+// letting it identify the movie even when the file name is an unparseable hash — and
+// calls VerifyImport to clear the download from the queue.
 // expectedSize, when positive, is the size of the local source file in bytes
 // and enables a post-check that distinguishes a benign race (Radarr's own
 // completed-download handler imported the file first) from a real failure
 // (Radarr kept a different pre-existing file) — see movieFileSize.
 func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expectedSize int64) error {
+	downloadClientID := c.findTrackedDownloadID(ctx, filePath)
+
 	requestPayload := struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
+		Name             string `json:"name"`
+		Path             string `json:"path"`
+		DownloadClientId string `json:"downloadClientId,omitempty"`
 	}{
-		Name: "DownloadedMoviesScan",
-		Path: filePath,
+		Name:             "DownloadedMoviesScan",
+		Path:             filePath,
+		DownloadClientId: downloadClientID,
 	}
 
 	var body bytes.Buffer
@@ -162,12 +218,16 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 // should treat that as "do not recover" so the original scan error remains
 // in force.
 func (c *Client) movieFileSize(ctx context.Context, filePath string) (int64, bool) {
-	parsed, err := c.parseFilePath(ctx, filePath)
-	if err != nil || parsed == nil {
+	// getMovieByFilePath falls back to the containing folder name when the file
+	// name is an unparseable hash; without that the race post-check could not
+	// identify the movie and a benign race (Radarr imported our transcode
+	// first) would surface as a spurious failure.
+	movie, err := c.getMovieByFilePath(ctx, filePath)
+	if err != nil {
 		return 0, false
 	}
 
-	full, err := c.radarr.GetMovieByIDContext(ctx, parsed.ID)
+	full, err := c.radarr.GetMovieByIDContext(ctx, movie.GetID())
 	if err != nil || full == nil || !full.HasFile || full.MovieFile == nil {
 		return 0, false
 	}
