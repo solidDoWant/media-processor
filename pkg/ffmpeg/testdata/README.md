@@ -6,8 +6,23 @@ Derived from `pkg/ffprobe/testdata/video.mp4` (first ~5 seconds of Big Buck Bunn
 
 Generation command:
 
-```
+```bash
 ffmpeg -i pkg/ffprobe/testdata/video.mp4 -vf "pad=iw:ih+40:0:20:black" pkg/ffmpeg/testdata/video_black_bars.mp4
+```
+
+- **Source**: [Big Buck Bunny](https://peach.blender.org/) by Blender Foundation
+- **License**: [Creative Commons Attribution 3.0 (CC BY 3.0)](https://creativecommons.org/licenses/by/3.0/)
+- **Copyright**: © 2008, Blender Foundation
+- **Attribution**: "Big Buck Bunny" by Blender Foundation (https://www.blender.org)
+
+## video_mpeg4.avi
+
+A 2 s 320x180 mpeg4-ASP (Simple Profile) clip in an AVI container, transcoded from the first 2 seconds of `pkg/ffprobe/testdata/video.mp4`. mpeg4-ASP has no Intel hardware decoder, so this fixture deterministically forces the software-decode + hardware-encode pipeline: decoded `yuv420p` frames are scaled to `NV12` on the CPU and uploaded to a GPU surface before encoding. Used by the QSV/VAAPI software-decode regression tests (`TestTranscode_SoftwareDecodeToQSV`, `TestTranscode_SoftwareDecodeToVAAPI`), which transcode it to H.265 with no crop. Before the fix the software scaler's destination frame and the GPU upload surface shared a single field, so swscale wrote into a hardware surface and failed with "scaling video frame: Invalid argument" (swscale's "bad dst image pointers").
+
+Generation command:
+
+```bash
+ffmpeg -y -i pkg/ffprobe/testdata/video.mp4 -t 2 -an -c:v mpeg4 -q:v 4 pkg/ffmpeg/testdata/video_mpeg4.avi
 ```
 
 - **Source**: [Big Buck Bunny](https://peach.blender.org/) by Blender Foundation
@@ -21,7 +36,7 @@ A synthetic 12-frame (0.5 s at 24 fps) H.264 clip used to verify crop detection 
 
 Generation command:
 
-```
+```bash
 ffmpeg -f lavfi -i "color=c=blue:size=320x180:rate=24:duration=0.5" -vf "pad=iw:ih+40:0:20:black" -c:v libx264 -y pkg/ffmpeg/testdata/video_short_bars.mp4
 ```
 

@@ -43,6 +43,12 @@ func probeStreamDispositions(t *testing.T, path string) map[int]astiav.Dispositi
 // testVideoPath is the shared input file for all transcode tests.
 const testVideoPath = "../../pkg/ffprobe/testdata/video.mp4"
 
+// testMpeg4AVISourcePath is an mpeg4-ASP (DivX) clip in an AVI container.
+// mpeg4-ASP has no Intel hardware decoder, so it deterministically forces the
+// software-decode + hardware-encode pipeline exercised by the QSV/VAAPI
+// regression tests. See testdata/README.md for the regeneration procedure.
+const testMpeg4AVISourcePath = "testdata/video_mpeg4.avi"
+
 // TestTranscode_H265_MKV verifies that transcoding to H.265/MKV produces a
 // valid output file containing an H.265 video stream.
 func TestTranscode_H265_MKV(t *testing.T) {
