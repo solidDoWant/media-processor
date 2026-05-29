@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,26 @@ func TestNotify_LibraryImportFailurePropagates(t *testing.T) {
 	require.Error(t, err, "library import failure should propagate")
 }
 
+// TestNotify_NotInLibrarySkipsWithoutError verifies that when the library
+// reports the media item is no longer present (medialib.ErrNotFound), Notify
+// treats it as a benign skip: it returns no error (so the workflow does not
+// retry or fire the failure webhook) and signals ImportSkipped so Cleanup
+// removes the orphaned output file.
+func TestNotify_NotInLibrarySkipsWithoutError(t *testing.T) {
+	radarr := &stubLibraryClient{err: fmt.Errorf("notify: %w", medialib.ErrNotFound)}
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	val, err := env.ExecuteActivity(a.Notify,
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+	)
+	require.NoError(t, err, "a media item no longer in the library is a benign skip, not a failure")
+
+	var got NotifyOutput
+	require.NoError(t, val.Get(&got))
+	assert.True(t, got.ImportSkipped, "Notify should signal the import was skipped")
+}
+
 func TestCleanup_DeletesSource(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")
@@ -98,7 +119,7 @@ func TestCleanup_DeletesSource(t *testing.T) {
 
 	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
-	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{}, NotifyOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
@@ -114,7 +135,7 @@ func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 
 	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
 		FilePath: srcPath, MediaType: medialib.MovieType, PreserveSource: true,
-	}, TranscodeOutput{})
+	}, TranscodeOutput{}, NotifyOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(srcPath)
@@ -125,6 +146,69 @@ func TestCleanup_PreserveSourceWritesSentinel(t *testing.T) {
 	assert.NoError(t, sentErr, "sentinel should be written next to the preserved source")
 }
 
+// TestCleanup_ImportSkippedRemovesOutputFile verifies that when Notify skipped
+// the import (the media item is no longer in the library), Cleanup removes the
+// orphaned transcoded output file — which a successful arr import would
+// normally have consumed — and then prunes the now-empty output directory.
+func TestCleanup_ImportSkippedRemovesOutputFile(t *testing.T) {
+	srcRoot := t.TempDir()
+	srcPath := filepath.Join(srcRoot, "movie.mkv")
+	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
+
+	outputRoot := t.TempDir()
+	outSub := filepath.Join(outputRoot, "Movie.2020")
+	require.NoError(t, os.MkdirAll(outSub, 0o755))
+	destFilePath := filepath.Join(outSub, "movie.mkv")
+	require.NoError(t, os.WriteFile(destFilePath, []byte("transcoded"), 0o600))
+
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
+		FilePath:   srcPath,
+		MediaType:  medialib.MovieType,
+		WatchRoot:  srcRoot,
+		OutputPath: outputRoot,
+	}, TranscodeOutput{DestFilePath: destFilePath}, NotifyOutput{ImportSkipped: true})
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(destFilePath)
+	assert.True(t, os.IsNotExist(statErr), "orphaned output file should be removed when the import was skipped")
+
+	_, statErr = os.Stat(outSub)
+	assert.True(t, os.IsNotExist(statErr), "emptied output subdir should be pruned after the output file is removed")
+
+	_, statErr = os.Stat(srcPath)
+	assert.True(t, os.IsNotExist(statErr), "source should still be deleted")
+}
+
+// TestCleanup_ImportNotSkippedLeavesExistingOutputFile verifies that in the
+// normal (import succeeded) case Cleanup does not delete the output file. The
+// arr service is responsible for moving it; Cleanup only prunes empty dirs.
+func TestCleanup_ImportNotSkippedLeavesExistingOutputFile(t *testing.T) {
+	srcRoot := t.TempDir()
+	srcPath := filepath.Join(srcRoot, "movie.mkv")
+	require.NoError(t, os.WriteFile(srcPath, []byte("source"), 0o600))
+
+	outputRoot := t.TempDir()
+	outSub := filepath.Join(outputRoot, "Movie.2020")
+	require.NoError(t, os.MkdirAll(outSub, 0o755))
+	destFilePath := filepath.Join(outSub, "movie.mkv")
+	require.NoError(t, os.WriteFile(destFilePath, []byte("transcoded"), 0o600))
+
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{
+		FilePath:   srcPath,
+		MediaType:  medialib.MovieType,
+		WatchRoot:  srcRoot,
+		OutputPath: outputRoot,
+	}, TranscodeOutput{DestFilePath: destFilePath}, NotifyOutput{})
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(destFilePath)
+	assert.NoError(t, statErr, "output file must be left in place when the import was not skipped")
+}
+
 func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")
@@ -133,7 +217,7 @@ func TestCleanup_AlreadyDeletedSourceIsNotAnError(t *testing.T) {
 
 	a, env := newActivityEnv(t, MediaWorkflowConfig{}, &stubLibraryClient{}, &stubLibraryClient{}, &webhook.Client{}, nil)
 
-	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{})
+	_, err := env.ExecuteActivity(a.Cleanup, MediaInput{FilePath: srcPath, MediaType: medialib.MovieType}, TranscodeOutput{}, NotifyOutput{})
 	require.NoError(t, err, "cleanup must be idempotent so retries do not fail when the file is already gone")
 }
 
@@ -162,7 +246,7 @@ func TestCleanup_PrunesOutputDirAfterImport(t *testing.T) {
 		MediaType:  medialib.MovieType,
 		WatchRoot:  srcRoot,
 		OutputPath: outputRoot,
-	}, TranscodeOutput{DestFilePath: destFilePath})
+	}, TranscodeOutput{DestFilePath: destFilePath}, NotifyOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(outSub)
@@ -192,7 +276,7 @@ func TestCleanup_RetainEmptyDirsSkipsOutputPruning(t *testing.T) {
 		WatchRoot:              srcRoot,
 		OutputPath:             outputRoot,
 		RetainEmptyDirectories: true,
-	}, TranscodeOutput{DestFilePath: destFilePath})
+	}, TranscodeOutput{DestFilePath: destFilePath}, NotifyOutput{})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(outSub)

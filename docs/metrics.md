@@ -38,6 +38,7 @@ For Kubernetes, ensure `terminationGracePeriodSeconds` on the worker pod is at l
 | `media_workflow_subtitle_track_count`        | gauge     | tracks  | Subtitle track count from the most recent probe per label combination.                                                         |
 | `media_workflow_invalid_files_total`         | counter   | —       | Files skipped because they could not be probed or contained no video stream.                                                   |
 | `media_workflow_artwork_fetch_skipped_total` | counter   | —       | Transcode runs where artwork fetch was attempted but yielded no embeddable image.                                              |
+| `media_workflow_import_skipped_not_in_library_total` | counter | —    | Files whose Radarr/Sonarr import was skipped because the media item is no longer in the library (the movie/series was removed or is no longer monitored). The transcode still completed; the workflow removes the orphaned output and finishes successfully without firing the failure webhook. |
 | `media_workflow_metrics_errors_total`        | counter   | —       | Radarr/Sonarr `GetInfo` lookups that did not return a result while resolving high-cardinality tags — either a backend error (unreachable, auth failure, etc.) or the library could not parse the filename to a known item. |
 
 End-to-end workflow latency, schedule-to-start latency, retry counts, and worker poll metrics are emitted by the Temporal SDK — see the [Temporal SDK metrics section](#worker--temporal-sdk) below. Per-activity execution latency is also available there, but only with SDK tags; the application-side `media_workflow_transcode_duration_seconds` above carries the media-domain tags needed to slice runtime by codec, hardware acceleration, and crop.
@@ -117,6 +118,7 @@ Worker application metrics carry the tags listed below. Per-metric coverage vari
 | `media_workflow_destination_file_size_bytes` | same as `media_workflow_source_file_size_bytes`                                                                                                           |
 | `media_workflow_transcode_duration_seconds`  | same as `media_workflow_source_file_size_bytes`                                                                                                           |
 | `media_workflow_artwork_fetch_skipped_total` | _(none)_                                                                                                                                                  |
+| `media_workflow_import_skipped_not_in_library_total` | `media_type`, `mapping_name`                                                                                                                      |
 | `media_workflow_metrics_errors_total`        | _(none)_                                                                                                                                                  |
 
 ### Worker — Temporal SDK tags

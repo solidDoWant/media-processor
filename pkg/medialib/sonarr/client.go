@@ -180,18 +180,36 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "sonarr"); err != nil {
-		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
-			if size, ok := c.episodeFileSize(ctx, filePath); !ok {
-				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file lookup failed; cannot recover",
-					"file_path", filePath, "expected_size", expectedSize)
-			} else if size != expectedSize {
-				slog.WarnContext(ctx, "sonarr scan reported no imports and episode file size does not match expected; cannot recover",
-					"file_path", filePath, "sonarr_size", size, "expected_size", expectedSize)
-			} else {
-				slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",
-					"file_path", filePath, "size", size)
+		if errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
+			// The scan imported nothing. Before treating that as a failure to
+			// retry, check whether the episode is still in the library: if
+			// Sonarr can no longer match the file to a library episode (the
+			// series was removed or the episode is no longer monitored), the
+			// import can never succeed. Surface medialib.ErrNotFound so the
+			// caller treats this as a benign skip rather than burning the full
+			// retry budget on it.
+			if _, lookupErr := c.getEpisodeByFilePath(ctx, filePath); errors.Is(lookupErr, medialib.ErrNotFound) {
+				slog.InfoContext(ctx, "sonarr scan reported no imports and episode is no longer in the library; skipping import",
+					"file_path", filePath)
 
-				return nil
+				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotFound)
+			}
+
+			// The episode is still in the library, so fall through to the
+			// benign-race size post-check documented on expectedSize above.
+			if expectedSize > 0 {
+				if size, ok := c.episodeFileSize(ctx, filePath); !ok {
+					slog.WarnContext(ctx, "sonarr scan reported no imports and episode file lookup failed; cannot recover",
+						"file_path", filePath, "expected_size", expectedSize)
+				} else if size != expectedSize {
+					slog.WarnContext(ctx, "sonarr scan reported no imports and episode file size does not match expected; cannot recover",
+						"file_path", filePath, "sonarr_size", size, "expected_size", expectedSize)
+				} else {
+					slog.InfoContext(ctx, "sonarr scan reported no imports but episode file size matches local output; treating as success",
+						"file_path", filePath, "size", size)
+
+					return nil
+				}
 			}
 		}
 

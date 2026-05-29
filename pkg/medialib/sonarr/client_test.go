@@ -439,7 +439,14 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 			}
 
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
-				parseResp:               &sonarrlib.ParseOutput{},
+				// Resolve a library episode so an unsuccessful scan is treated
+				// as a genuine failure rather than the no-longer-in-library
+				// skip. The failed/aborted/HTTP-error cases never reach the
+				// parse check, so this is inert for them.
+				parseResp: &sonarrlib.ParseOutput{
+					ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{},
+					Episodes:          []*sonarrlib.Episode{{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1}},
+				},
 				commandStatuses:         test.commandStatuses,
 				commandResult:           test.commandResult,
 				commandStatusMessage:    test.commandMessage,
@@ -518,13 +525,6 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			errFunc:      propagatesUnsuccessful,
 		},
 		{
-			name:         "episode unidentifiable by parse: original error propagates",
-			expectedSize: matchingSize,
-			parseResp:    &sonarrlib.ParseOutput{},
-			episodeByID:  nil,
-			errFunc:      propagatesUnsuccessful,
-		},
-		{
 			name:         "expectedSize zero disables post-check: original error propagates",
 			expectedSize: 0,
 			parseResp:    episodeParseOutput,
@@ -558,6 +558,32 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			errFunc(t, err)
 		})
 	}
+}
+
+// TestImportByFilePath_NotInLibraryReturnsNotFound verifies that when a scan
+// finishes with no successful imports and Sonarr can no longer match the file
+// to a library episode (the series was removed or the episode is no longer
+// monitored), ImportByFilePath returns medialib.ErrNotFound rather than the
+// generic "no successful imports" error. The caller relies on this sentinel to
+// skip the import as a benign no-op instead of retrying for the full retry
+// budget.
+func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
+	const expectedSize int64 = 12345
+
+	// An empty ParseOutput makes Sonarr's /parse report no episode — the
+	// episode is no longer in the library.
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+		parseResp:            &sonarrlib.ParseOutput{},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", expectedSize)
+	require.ErrorIs(t, err, medialib.ErrNotFound)
 }
 
 func TestGetInfo(t *testing.T) {

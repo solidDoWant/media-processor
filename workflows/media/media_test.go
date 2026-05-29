@@ -43,8 +43,8 @@ func TestMediaWorkflow_ValidPath_RunsAllActivitiesInOrder(t *testing.T) {
 	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
 	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(cropOut, nil).Once()
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
-	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut)).Return(nil).Once()
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(NotifyOutput{}, nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut), mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -67,8 +67,8 @@ func TestMediaWorkflow_SkipCropDetection_SkipsDetectCropAndTranscodesWithoutCrop
 	// DetectCropOutput (nil crop) so the full frame is transcoded.
 	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, expectCrop(DetectCropOutput{})).
 		Return(transOut, nil).Once()
-	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut)).Return(nil).Once()
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(NotifyOutput{}, nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut), mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{
 		FilePath:          "/in/file.mp4",
@@ -91,7 +91,7 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 		Return(ProbeOutput{IsValidMedia: false}, nil).Once()
 	// Invalid-media path skips Transcode; Cleanup must receive a zero-value
 	// TranscodeOutput so output-side pruning is suppressed.
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{})).Return(nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{}), mock.Anything).Return(nil).Once()
 
 	// DetectCrop, Transcode, and Notify must NOT be invoked. The mock fails
 	// the test if any unexpected call arrives because no .Return was
@@ -101,6 +101,36 @@ func TestMediaWorkflow_InvalidPath_SkipsTranscodeAndCallsCleanup(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+// TestMediaWorkflow_NotInLibrarySkipsImportAndCleansUp verifies that when
+// Notify reports the media item is no longer in the library (ImportSkipped),
+// the workflow completes successfully without firing the failure webhook and
+// forwards the skip signal to Cleanup so the orphaned output is removed.
+func TestMediaWorkflow_NotInLibrarySkipsImportAndCleansUp(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	newWorkflowActivities(t).Register(env)
+
+	probeOut := ProbeOutput{IsValidMedia: true, VideoCodec: "h264", Format: "mp4", VideoWidth: 1920, VideoHeight: 1080}
+	transOut := TranscodeOutput{DestCodec: "hevc", DestContainer: "mkv", DestFilePath: "/out/file.mkv"}
+
+	env.OnActivity(ProbeActivityName, mock.Anything, mock.Anything).Return(probeOut, nil).Once()
+	env.OnActivity(DetectCropActivityName, mock.Anything, mock.Anything, mock.Anything).Return(DetectCropOutput{}, nil).Once()
+	env.OnActivity(TranscodeActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(transOut, nil).Once()
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(NotifyOutput{ImportSkipped: true}, nil).Once()
+	// Cleanup must receive the skip signal so it removes the orphaned output.
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(transOut), expectNotify(NotifyOutput{ImportSkipped: true})).
+		Return(nil).Once()
+
+	// NotifyFailure must NOT be invoked: a skipped import is not a failure. No
+	// .Return is registered for it, so the mock fails the test if it is called.
+
+	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError(), "a skipped import is a benign success, not a workflow failure")
 	env.AssertExpectations(t)
 }
 
@@ -173,17 +203,17 @@ func TestMediaWorkflow_NotifyAndCleanupRetry(t *testing.T) {
 	cleanupAttempts := 0
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) (NotifyOutput, error) {
 			notifyAttempts++
 			if notifyAttempts < 3 {
-				return errors.New("transient notify failure")
+				return NotifyOutput{}, errors.New("transient notify failure")
 			}
 
-			return nil
+			return NotifyOutput{}, nil
 		})
 
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"})).
-		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"}), mock.Anything).
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput, _ NotifyOutput) error {
 			cleanupAttempts++
 			if cleanupAttempts < 3 {
 				return errors.New("transient cleanup failure")
@@ -217,9 +247,9 @@ func TestMediaWorkflow_NonRetryableInputErrorOnNotifyDoesNotRetry(t *testing.T) 
 	notifyAttempts := 0
 
 	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).
-		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) error {
+		Return(func(_ context.Context, _ MediaInput, _ TranscodeOutput) (NotifyOutput, error) {
 			notifyAttempts++
-			return temporal.NewNonRetryableApplicationError("unknown media type", errTypeNonRetryable, nil)
+			return NotifyOutput{}, temporal.NewNonRetryableApplicationError("unknown media type", errTypeNonRetryable, nil)
 		})
 
 	env.OnActivity(NotifyFailureActivityName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -379,8 +409,8 @@ func TestMediaWorkflow_TranscodeHeartbeatTimeoutMatchesConfig(t *testing.T) {
 			return TranscodeOutput{DestFilePath: "/out/file.mkv"}, nil
 		}).Once()
 
-	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"})).Return(nil).Once()
+	env.OnActivity(NotifyActivityName, mock.Anything, mock.Anything, mock.Anything).Return(NotifyOutput{}, nil).Once()
+	env.OnActivity(CleanupActivityName, mock.Anything, mock.Anything, expectTranscode(TranscodeOutput{DestFilePath: "/out/file.mkv"}), mock.Anything).Return(nil).Once()
 
 	env.ExecuteWorkflow(MediaWorkflowName, MediaInput{FilePath: "/in/file.mp4", MediaType: medialib.MovieType, OutputPath: "/out"})
 
@@ -465,4 +495,12 @@ func expectTranscode(want TranscodeOutput) any {
 // applied, which is what the skip-crop-detection path must forward.
 func expectCrop(want DetectCropOutput) any {
 	return mock.MatchedBy(func(got DetectCropOutput) bool { return got == want })
+}
+
+// expectNotify builds a mock matcher that asserts the Cleanup activity received
+// the exact NotifyOutput the workflow forwarded from Notify. Equality matters:
+// the skip path must forward ImportSkipped so Cleanup removes the orphaned
+// output, and the normal path must forward a zero value so it does not.
+func expectNotify(want NotifyOutput) any {
+	return mock.MatchedBy(func(got NotifyOutput) bool { return got == want })
 }

@@ -150,6 +150,11 @@ type ArrLibrary interface {
 	// expectedSize, the import is treated as having succeeded (typically
 	// because the arr service's own completed-download handler raced our
 	// scan). A non-positive expectedSize disables the post-check.
+	//
+	// Returns ErrNotFound when the scan reports no successful imports and the
+	// media item is no longer in the library (removed or no longer monitored),
+	// so the import can never succeed. Callers should treat this as a benign
+	// skip rather than a retryable failure.
 	ImportByFilePath(ctx context.Context, path string, expectedSize int64) error
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.
