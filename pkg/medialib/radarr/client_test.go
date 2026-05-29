@@ -192,6 +192,7 @@ func TestImportByFilePath(t *testing.T) {
 func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 	tests := []struct {
 		name             string
+		parseResp        *parseResponse
 		commandStatuses  []string
 		commandResult    string
 		commandHTTPError int
@@ -209,7 +210,11 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 			commandResult:   "successful",
 		},
 		{
+			// The movie is still in the library (parse resolves it), so an
+			// unsuccessful scan is a genuine failure rather than the
+			// no-longer-in-library skip — it must surface as an error.
 			name:            "completed with unsuccessful result surfaces as error",
+			parseResp:       &parseResponse{Movie: &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}},
 			commandStatuses: []string{"completed"},
 			commandResult:   "unsuccessful",
 			commandMessage:  "no eligible files",
@@ -244,6 +249,7 @@ func TestImportByFilePath_BlocksUntilTerminalStatus(t *testing.T) {
 			}
 
 			srv := newTestServerWithConfig(t, testServerConfig{
+				parseResp:               test.parseResp,
 				commandStatuses:         test.commandStatuses,
 				commandResult:           test.commandResult,
 				commandStatusMessage:    test.commandMessage,
@@ -309,13 +315,6 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			errFunc:      propagatesUnsuccessful,
 		},
 		{
-			name:         "movie unidentifiable by parse: original error propagates",
-			expectedSize: matchingSize,
-			parseResp:    &parseResponse{Movie: nil},
-			movieByID:    nil,
-			errFunc:      propagatesUnsuccessful,
-		},
-		{
 			name:         "expectedSize zero disables post-check: original error propagates",
 			expectedSize: 0,
 			parseResp:    &parseResponse{Movie: knownMovie},
@@ -347,6 +346,31 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 			errFunc(t, err)
 		})
 	}
+}
+
+// TestImportByFilePath_NotInLibraryReturnsNotFound verifies that when a scan
+// finishes with no successful imports and Radarr can no longer match the file
+// to a library movie (the movie was removed or is no longer monitored),
+// ImportByFilePath returns medialib.ErrNotFound rather than the generic
+// "no successful imports" error. The caller relies on this sentinel to skip
+// the import as a benign no-op instead of retrying for the full retry budget.
+func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
+	const expectedSize int64 = 67890
+
+	// parseResp with a nil movie makes Radarr's /parse report no match — the
+	// movie is no longer in the library.
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseResp:            &parseResponse{Movie: nil},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", expectedSize)
+	require.ErrorIs(t, err, medialib.ErrNotFound)
 }
 
 func TestGetInfo_UsesFileStemAsTitleParam(t *testing.T) {

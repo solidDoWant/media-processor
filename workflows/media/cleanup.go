@@ -22,6 +22,25 @@ func WriteSentinel(filePath string) error {
 	return nil
 }
 
+// RemoveOutputFile deletes the transcoded output file at destFilePath. It is
+// called when the library import was skipped because the media item is no
+// longer in the arr library: the arr service normally consumes the file by
+// moving it into the library, but that import will not run, so the output
+// would otherwise be left orphaned under the output tree. A missing file is
+// tolerated so the operation is safe to retry after a partial cleanup, and a
+// blank path is a no-op (e.g. the invalid-media path, which never transcodes).
+func RemoveOutputFile(destFilePath string) error {
+	if destFilePath == "" {
+		return nil
+	}
+
+	if err := os.Remove(destFilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete output file: %w", err)
+	}
+
+	return nil
+}
+
 // RunCleanup deletes the original source file after successful processing and,
 // unless retainEmptyDirs is true, removes any parent directories that become
 // empty as a result, stopping at watchRoot.

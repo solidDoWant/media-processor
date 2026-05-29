@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -357,13 +358,29 @@ func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe ProbeOutp
 	}
 }
 
+// NotifyOutput is the result of the Notify activity. ImportSkipped is true when
+// the library import was deliberately skipped because the media item is no
+// longer present in the arr library (the movie/series was removed or is no
+// longer monitored). The workflow forwards it to Cleanup so the orphaned
+// transcoded output file — which a successful arr import would normally consume
+// by moving it into the library — is removed.
+type NotifyOutput struct {
+	ImportSkipped bool `json:"import_skipped,omitempty"`
+}
+
 // Notify issues the library import (Sonarr/Radarr scan command). The import is
 // idempotent in practice — re-issuing the same scan for an already-imported
 // file is a no-op — so the workflow retries this activity on transient
 // failures. Pure-data errors (unknown media type, output_remote_path outside
 // the output tree) are returned as non-retryable so Temporal does not burn the
 // retry budget on inputs that cannot recover.
-func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode TranscodeOutput) error {
+//
+// When the arr service reports the media item is no longer in its library, the
+// import can never succeed. That is an expected, benign outcome rather than a
+// failure: Notify records it, returns NotifyOutput{ImportSkipped: true} with a
+// nil error so the workflow proceeds to Cleanup (which removes the orphaned
+// output file), and avoids both the retry budget and the failure webhook.
+func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode TranscodeOutput) (NotifyOutput, error) {
 	start := time.Now()
 
 	library, err := getArrLibrary(input.MediaType, a.radarrClient, a.sonarrClient)
@@ -371,7 +388,7 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 		nonRetryable := temporal.NewNonRetryableApplicationError(err.Error(), errTypeNonRetryable, err)
 		logStepResult(ctx, "notify", input.FilePath, start, nonRetryable)
 
-		return nonRetryable
+		return NotifyOutput{}, nonRetryable
 	}
 
 	importPath := transcode.DestFilePath
@@ -388,7 +405,7 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 			)
 			logStepResult(ctx, "notify", input.FilePath, start, nonRetryable)
 
-			return nonRetryable
+			return NotifyOutput{}, nonRetryable
 		}
 
 		importPath = filepath.Join(remotePath, rel)
@@ -398,15 +415,26 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 	// which may no longer be present if the arr service has already moved it
 	// during a directory-level import (e.g. a series pack).
 	if err := library.ImportByFilePath(ctx, importPath, transcode.DestFileSizeBytes); err != nil {
+		// Benign skip, not a failure (see the doc above): return success so
+		// Temporal does not retry and the failure webhook does not fire.
+		if errors.Is(err, medialib.ErrNotFound) {
+			activity.GetLogger(ctx).Info("media item no longer in library; skipping import",
+				"file", input.FilePath, "import_path", importPath)
+			activity.GetMetricsHandler(ctx).WithTags(baseTags(input)).Counter(metricImportSkippedNotInLibrary).Inc(1)
+			logStepResult(ctx, "notify", input.FilePath, start, nil)
+
+			return NotifyOutput{ImportSkipped: true}, nil
+		}
+
 		wrappedErr := fmt.Errorf("notify library: %w", err)
 		logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
 
-		return wrappedErr
+		return NotifyOutput{}, wrappedErr
 	}
 
 	logStepResult(ctx, "notify", input.FilePath, start, nil)
 
-	return nil
+	return NotifyOutput{}, nil
 }
 
 // Cleanup deletes the source file or writes the .done sentinel, then prunes
@@ -418,8 +446,19 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 // Shared between the valid and invalid paths — in the invalid path the
 // source has already been removed by Probe (RunCleanup is a near-no-op),
 // transcode.DestFilePath is empty, and output pruning is skipped.
-func (a *Activities) Cleanup(ctx context.Context, input MediaInput, transcode TranscodeOutput) error {
+// When notify.ImportSkipped is set (the media item is no longer in the arr
+// library), the arr service will not move the transcoded file into its
+// library, so the orphaned output file is removed here before pruning.
+func (a *Activities) Cleanup(ctx context.Context, input MediaInput, transcode TranscodeOutput, notify NotifyOutput) error {
 	start := time.Now()
+
+	if notify.ImportSkipped {
+		if err := RemoveOutputFile(transcode.DestFilePath); err != nil {
+			logStepResult(ctx, "cleanup", input.FilePath, start, err)
+
+			return err
+		}
+	}
 
 	var err error
 	if input.PreserveSource {

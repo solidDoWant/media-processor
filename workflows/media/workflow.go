@@ -103,7 +103,7 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 		// empty TranscodeOutput suppresses output-side pruning.
 		invalidCleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, cleanupMaxAttempts))
 
-		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input, TranscodeOutput{}).Get(invalidCleanupCtx, nil); err != nil {
+		if err := workflow.ExecuteActivity(invalidCleanupCtx, CleanupActivityName, input, TranscodeOutput{}, NotifyOutput{}).Get(invalidCleanupCtx, nil); err != nil {
 			return err
 		}
 
@@ -136,13 +136,14 @@ func (a *Activities) MediaWorkflow(ctx workflow.Context, input MediaInput) (err 
 
 	notifyCtx := workflow.WithActivityOptions(ctx, a.notifyActivityOptions())
 
-	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, nil); err != nil {
+	var notify NotifyOutput
+	if err := workflow.ExecuteActivity(notifyCtx, NotifyActivityName, input, transcode).Get(notifyCtx, &notify); err != nil {
 		return err
 	}
 
 	cleanupCtx := workflow.WithActivityOptions(ctx, a.activityOptions(CleanupActivityName, defaultFinalizeTimeout, cleanupMaxAttempts))
 
-	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input, transcode).Get(cleanupCtx, nil); err != nil {
+	if err := workflow.ExecuteActivity(cleanupCtx, CleanupActivityName, input, transcode, notify).Get(cleanupCtx, nil); err != nil {
 		return err
 	}
 

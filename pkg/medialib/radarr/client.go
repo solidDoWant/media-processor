@@ -197,12 +197,29 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 	}
 
 	if err := arrcommand.Wait(ctx, c.fetchCommandStatus, resp.ID, c.cfg.CommandPollInterval, "radarr"); err != nil {
-		if expectedSize > 0 && errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
-			if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
-				slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
-					"file_path", filePath, "size", size)
+		if errors.Is(err, arrcommand.ErrNoSuccessfulImports) {
+			// The scan imported nothing. Before treating that as a failure to
+			// retry, check whether the movie is still in the library: if Radarr
+			// can no longer match the file to a library movie (the movie was
+			// removed or is no longer monitored), the import can never succeed.
+			// Surface medialib.ErrNotFound so the caller treats this as a benign
+			// skip rather than burning the full retry budget on it.
+			if _, lookupErr := c.getMovieByFilePath(ctx, filePath); errors.Is(lookupErr, medialib.ErrNotFound) {
+				slog.InfoContext(ctx, "radarr scan reported no imports and movie is no longer in the library; skipping import",
+					"file_path", filePath)
 
-				return nil
+				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotFound)
+			}
+
+			// The movie is still in the library, so fall through to the
+			// benign-race size post-check documented on expectedSize above.
+			if expectedSize > 0 {
+				if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
+					slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
+						"file_path", filePath, "size", size)
+
+					return nil
+				}
 			}
 		}
 

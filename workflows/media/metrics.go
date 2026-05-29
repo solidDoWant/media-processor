@@ -30,15 +30,18 @@ var (
 // Metric names. The tally→Prometheus naming scope appends _total to counters
 // and _seconds to timers; histograms are emitted verbatim.
 const (
-	metricInvalidFiles          = "media_workflow_invalid_files"
-	metricArtworkFetchSkipped   = "media_workflow_artwork_fetch_skipped"
-	metricMetricsErrors         = "media_workflow_metrics_errors"
-	metricAudioTrackCount       = "media_workflow_audio_track_count"
-	metricSubtitleTrackCount    = "media_workflow_subtitle_track_count"
-	metricSourceDurationSeconds = "media_workflow_source_duration_seconds"
-	metricSourceFileSizeBytes   = "media_workflow_source_file_size_bytes"
-	metricDestFileSizeBytes     = "media_workflow_destination_file_size_bytes"
-	metricTranscodeDurationSecs = "media_workflow_transcode_duration_seconds"
+	metricInvalidFiles        = "media_workflow_invalid_files"
+	metricArtworkFetchSkipped = "media_workflow_artwork_fetch_skipped"
+	// metricImportSkippedNotInLibrary counts files whose library import was
+	// skipped because the media item is no longer in the arr library.
+	metricImportSkippedNotInLibrary = "media_workflow_import_skipped_not_in_library"
+	metricMetricsErrors             = "media_workflow_metrics_errors"
+	metricAudioTrackCount           = "media_workflow_audio_track_count"
+	metricSubtitleTrackCount        = "media_workflow_subtitle_track_count"
+	metricSourceDurationSeconds     = "media_workflow_source_duration_seconds"
+	metricSourceFileSizeBytes       = "media_workflow_source_file_size_bytes"
+	metricDestFileSizeBytes         = "media_workflow_destination_file_size_bytes"
+	metricTranscodeDurationSecs     = "media_workflow_transcode_duration_seconds"
 )
 
 // baseTags returns the tag map carried by every media-workflow metric
