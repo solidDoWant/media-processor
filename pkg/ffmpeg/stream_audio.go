@@ -273,10 +273,45 @@ func (ass *audioStreamState) processPacket(packet *astiav.Packet, outputFmt *ast
 	}
 }
 
+// resampleFrame converts the decoded frame into the encoder's resample output
+// frame. Some decoders change the decoded sample format, channel layout, or
+// sample rate partway through a stream: DTS-HD MA is the canonical case, where
+// the lossy core decodes to planar float (fltp) and the lossless extension
+// decodes to planar 32-bit int (s32p). swr_convert_frame locks its input
+// configuration on the first frame it sees and rejects any later frame whose
+// format differs with AVERROR_INPUT_CHANGED ("Input changed"). When that
+// happens, reallocate the resampler so it reconfigures from the new input frame
+// and retry, rather than aborting the whole transcode. Reinitialising discards
+// any samples buffered in the old resampler's internal delay line — a few
+// milliseconds at the transition point — which is preferable to failing the job.
+func (ass *audioStreamState) resampleFrame(frame *astiav.Frame) error {
+	err := ass.encoder.resampleContext.ConvertFrame(frame, ass.encoder.frame)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, astiav.ErrInputChanged) {
+		return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
+	}
+
+	ass.encoder.resampleContext.Free()
+
+	ass.encoder.resampleContext = astiav.AllocSoftwareResampleContext()
+	if ass.encoder.resampleContext == nil {
+		return errors.New("ffmpeg: reallocating software resample context after input change")
+	}
+
+	if err := ass.encoder.resampleContext.ConvertFrame(frame, ass.encoder.frame); err != nil {
+		return fmt.Errorf("ffmpeg: resampling audio frame after resampler reinit: %w", err)
+	}
+
+	return nil
+}
+
 // encodeAudioFrame resamples (if needed) and encodes a single decoded audio frame.
 func (ass *audioStreamState) encodeAudioFrame(frame *astiav.Frame, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
 	if ass.encoder.resampleContext != nil {
-		if err := ass.encoder.resampleContext.ConvertFrame(frame, ass.encoder.frame); err != nil {
+		if err := ass.resampleFrame(frame); err != nil {
 			return fmt.Errorf("ffmpeg: resampling audio frame: %w", err)
 		}
 	}
