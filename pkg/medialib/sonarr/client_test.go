@@ -35,8 +35,12 @@ type sonarrTestServerConfig struct {
 	queueResp       *sonarrlib.Queue       // single-page queue response; nil returns empty queue
 	queuePages      []*sonarrlib.Queue     // multi-page queue responses; index 0 = page 1; takes priority over queueResp
 	queueHTTPStatus int                    // override HTTP status for /api/v3/queue; 0 means 200
-	imageBody       []byte
-	imageType       string
+	// manualImport is the array returned by GET /api/v3/manualimport; nil
+	// returns an empty array. Each entry's Path and Rejections drive the
+	// not-upgrade detection.
+	manualImport []*sonarrlib.ManualImportOutput
+	imageBody    []byte
+	imageType    string
 	// commandStatuses is the sequence of status values returned by GET
 	// /api/v3/command/{id} on successive polls. The last entry is reused for
 	// any further polls. Empty defaults to a single "completed" entry.
@@ -111,6 +115,16 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 		}
 
 		require.NoError(t, json.NewEncoder(w).Encode(q))
+	})
+
+	mux.HandleFunc("/api/v3/manualimport", func(w http.ResponseWriter, r *http.Request) {
+		items := cfg.manualImport
+		if items == nil {
+			items = []*sonarrlib.ManualImportOutput{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(items))
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -587,15 +601,20 @@ func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 }
 
 // TestImportByFilePath_NotUpgradeReturnsNotUpgrade verifies that when a scan
-// finishes with no successful imports and the episode's queue record reports
-// the release was rejected because the existing library file is already as good
-// or better, ImportByFilePath returns medialib.ErrNotUpgrade rather than the
-// generic "no successful imports" error. The caller relies on this sentinel to
-// skip the import as a benign no-op instead of retrying for the full retry
-// budget. The rejection is checked before the size post-check, so a stored
-// file whose size differs from expectedSize must not mask it.
+// finishes with no successful imports and Sonarr's manual-import evaluation of
+// the file reports it was rejected because the existing library file is already
+// as good or better, ImportByFilePath returns medialib.ErrNotUpgrade rather than
+// the generic "no successful imports" error. The caller relies on this sentinel
+// to skip the import as a benign no-op instead of retrying for the full retry
+// budget. Detection runs off the manual-import endpoint (not the queue), so the
+// rejection is found even when the tracked download has already left the queue;
+// it is also checked before the size post-check, so a stored file whose size
+// differs from expectedSize must not mask it.
 func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
-	const expectedSize int64 = 12345
+	const (
+		expectedSize int64 = 12345
+		importPath         = "/tv/Breaking.Bad.S01E01.mkv"
+	)
 
 	parseResp := &sonarrlib.ParseOutput{
 		Title: "Breaking Bad",
@@ -609,12 +628,12 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 		},
 	}
 
-	notUpgradeMsgs := []*starr.StatusMessage{{
-		Title: "king.of.the.hill.s14e09.mkv",
-		Messages: []string{
-			"Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)",
-		},
-	}}
+	rejectedItem := func(reason string) []*sonarrlib.ManualImportOutput {
+		return []*sonarrlib.ManualImportOutput{{
+			Path:       importPath,
+			Rejections: []*sonarrlib.Rejection{{Reason: reason, Type: "permanent"}},
+		}}
+	}
 
 	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
 		require.Error(t, err, msgAndArgs...)
@@ -623,34 +642,25 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		queueRecords []*sonarrlib.QueueRecord
+		manualImport []*sonarrlib.ManualImportOutput
 		episodeByID  *sonarrlib.Episode
 		episodeFile  *sonarrlib.EpisodeFile
 		errFunc      require.ErrorAssertionFunc
 	}{
 		{
 			name:         "custom format non-upgrade rejection",
-			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: notUpgradeMsgs}},
+			manualImport: rejectedItem("Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)"),
 		},
 		{
-			name: "quality non-upgrade rejection",
-			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
-				Title:    "king.of.the.hill.s14e09.mkv",
-				Messages: []string{"Not an upgrade for existing episode file(s)"},
-			}}}},
+			name:         "quality non-upgrade rejection",
+			manualImport: rejectedItem("Not an upgrade for existing episode file(s)"),
 		},
 		{
-			name: "rejection on the attached download",
-			queueRecords: []*sonarrlib.QueueRecord{
-				{EpisodeID: 200, DownloadID: "current", StatusMessages: notUpgradeMsgs},
-			},
-		},
-		{
-			name: "unrelated status message falls through to size post-check",
-			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
-				Title:    "king.of.the.hill.s14e09.mkv",
-				Messages: []string{"Unable to parse file"},
-			}}}},
+			name: "unrelated rejection falls through to size post-check",
+			manualImport: []*sonarrlib.ManualImportOutput{{
+				Path:       importPath,
+				Rejections: []*sonarrlib.Rejection{{Reason: "Unable to parse file", Type: "permanent"}},
+			}},
 			// Episode has a stored file whose size differs from expectedSize, so
 			// the size post-check cannot recover and the generic error propagates.
 			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
@@ -658,15 +668,11 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 			errFunc:     propagatesUnsuccessful,
 		},
 		{
-			name: "rejection on a different download does not skip the current import",
-			queueRecords: []*sonarrlib.QueueRecord{
-				// The pending download the scan attaches to (found first by
-				// findTrackedDownloadID) carries no rejection.
-				{EpisodeID: 200, DownloadID: "current", TrackedDownloadState: "importPending"},
-				// A stale record for the same episode carries an old not-upgrade
-				// rejection; it must not be mistaken for this import's outcome.
-				{EpisodeID: 200, DownloadID: "stale", StatusMessages: notUpgradeMsgs},
-			},
+			name: "rejection on a different file is ignored",
+			manualImport: []*sonarrlib.ManualImportOutput{{
+				Path:       "/tv/Some.Other.Episode.mkv",
+				Rejections: []*sonarrlib.Rejection{{Reason: "Not an upgrade for existing episode file(s)", Type: "permanent"}},
+			}},
 			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: false},
 			errFunc:     propagatesUnsuccessful,
 		},
@@ -678,7 +684,7 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 				parseResp:            parseResp,
 				episodeByID:          test.episodeByID,
 				episodeFile:          test.episodeFile,
-				queueResp:            &sonarrlib.Queue{Records: test.queueRecords},
+				manualImport:         test.manualImport,
 				commandStatuses:      []string{"completed"},
 				commandResult:        "unsuccessful",
 				commandStatusMessage: "Failed to import",
@@ -687,7 +693,7 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 
 			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", expectedSize)
+			err := client.ImportByFilePath(t.Context(), importPath, expectedSize)
 
 			if test.errFunc != nil {
 				test.errFunc(t, err)

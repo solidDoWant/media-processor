@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -254,61 +255,51 @@ func (c *Client) episodeFileSize(ctx context.Context, filePath string) (int64, b
 	return files[0].Size, true
 }
 
-// rejectedAsNotUpgrade reports whether the episode identified by filePath has a
-// queue record whose status messages indicate Sonarr refused the import because
-// the existing library file is already as good or better ("not an upgrade" /
-// "not a Custom Format upgrade"). An unidentifiable episode, API errors, and a
-// missing record all return false so the caller falls back to its normal
-// failure handling.
+// rejectedAsNotUpgrade reports whether importing filePath is permanently
+// rejected because the library already holds an equal or better file ("not an
+// upgrade" / "not a Custom Format upgrade"). It asks Sonarr's manual-import
+// endpoint to evaluate the file fresh, so the rejection is detected whether or
+// not a tracked download still exists in the queue — the queue record is gone
+// once Sonarr has finished processing a competing release for the same episode.
 //
-// downloadClientID is the tracked download the scan was attached to. When set,
-// only that download's record is inspected so a stale or unrelated record for
-// the same episode cannot turn a retryable failure into a permanent skip; when
-// empty (no tracked download was found), records are matched by episode alone.
+// downloadClientID, when set, is forwarded so Sonarr can associate the file
+// with its tracked download. API errors and an output that does not contain a
+// matching, rejected entry return false so the caller falls back to its normal
+// failure handling.
 func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath, downloadClientID string) bool {
-	episode, err := c.getEpisodeByFilePath(ctx, filePath)
-	if err != nil {
+	query := make(url.Values)
+	query.Set("folder", filepath.Dir(filePath))
+	query.Set("filterExistingFiles", "false")
+
+	if downloadClientID != "" {
+		query.Set("downloadId", downloadClientID)
+	}
+
+	// Sonarr's GET /manualimport returns an array; starr's typed helper decodes
+	// it into a single value, so request it raw into a slice instead.
+	var items []struct {
+		Path       string `json:"path"`
+		Rejections []struct {
+			Reason string `json:"reason"`
+		} `json:"rejections"`
+	}
+
+	req := starr.Request{URI: sonarrlib.APIver + "/manualimport", Query: query}
+	if err := c.sonarr.GetInto(ctx, req, &items); err != nil {
 		return false
 	}
 
-	const pageSize = 100
+	base := filepath.Base(filePath)
 
-	for page, fetched := 1, 0; ; page++ {
-		curr, err := c.sonarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
-		if err != nil {
-			return false
+	for _, item := range items {
+		if filepath.Base(item.Path) != base {
+			continue
 		}
 
-		for _, record := range curr.Records {
-			if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
-				continue
+		for _, rejection := range item.Rejections {
+			if arrcommand.IsNotUpgradeRejection(rejection.Reason) {
+				return true
 			}
-
-			// Skip records that aren't the download the scan was attached to, and
-			// records Sonarr already imported on its own — neither reflects the
-			// outcome of this import attempt.
-			if downloadClientID != "" && record.DownloadID != "" && record.DownloadID != downloadClientID {
-				continue
-			}
-
-			if strings.EqualFold(record.TrackedDownloadState, "imported") {
-				continue
-			}
-
-			for _, statusMessage := range record.StatusMessages {
-				if statusMessage == nil {
-					continue
-				}
-
-				if arrcommand.IsNotUpgradeRejection(statusMessage.Messages...) {
-					return true
-				}
-			}
-		}
-
-		fetched += len(curr.Records)
-		if fetched >= curr.TotalRecords || len(curr.Records) == 0 {
-			break
 		}
 	}
 

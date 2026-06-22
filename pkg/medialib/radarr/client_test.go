@@ -35,9 +35,12 @@ type parseResponse struct {
 type testServerConfig struct {
 	parseResp *parseResponse
 	movieByID *radarrlib.Movie // response for /api/v3/movie/{id}
-	queueResp *radarrlib.Queue // single-page queue response; nil returns empty queue
-	imageBody []byte           // raw bytes served at image paths
-	imageType string           // Content-Type for image responses
+	// manualImport is the array returned by GET /api/v3/manualimport; nil
+	// returns an empty array. Each entry's Path and Rejections drive the
+	// not-upgrade detection.
+	manualImport []*radarrlib.ManualImportOutput
+	imageBody    []byte // raw bytes served at image paths
+	imageType    string // Content-Type for image responses
 	// commandStatuses is the sequence of status values returned by GET
 	// /api/v3/command/{id} on successive polls. The last entry is reused for
 	// further polls. Empty defaults to a single "completed" entry.
@@ -124,13 +127,18 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 	})
 
 	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, r *http.Request) {
-		q := cfg.queueResp
-		if q == nil {
-			q = &radarrlib.Queue{Records: []*radarrlib.QueueRecord{}}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.Queue{Records: []*radarrlib.QueueRecord{}}))
+	})
+
+	mux.HandleFunc("/api/v3/manualimport", func(w http.ResponseWriter, r *http.Request) {
+		items := cfg.manualImport
+		if items == nil {
+			items = []*radarrlib.ManualImportOutput{}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(q))
+		require.NoError(t, json.NewEncoder(w).Encode(items))
 	})
 
 	mux.HandleFunc("/api/v3/movie/", func(w http.ResponseWriter, r *http.Request) {
@@ -385,24 +393,29 @@ func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 }
 
 // TestImportByFilePath_NotUpgradeReturnsNotUpgrade verifies that when a scan
-// finishes with no successful imports and the movie's queue record reports the
-// release was rejected because the existing library file is already as good or
-// better, ImportByFilePath returns medialib.ErrNotUpgrade rather than the
-// generic "no successful imports" error. The caller relies on this sentinel to
-// skip the import as a benign no-op instead of retrying for the full retry
-// budget. The rejection is checked before the size post-check, so a stored file
-// whose size differs from expectedSize must not mask it.
+// finishes with no successful imports and Radarr's manual-import evaluation of
+// the file reports it was rejected because the existing library file is already
+// as good or better, ImportByFilePath returns medialib.ErrNotUpgrade rather than
+// the generic "no successful imports" error. The caller relies on this sentinel
+// to skip the import as a benign no-op instead of retrying for the full retry
+// budget. Detection runs off the manual-import endpoint (not the queue), so the
+// rejection is found even when the tracked download has already left the queue;
+// it is also checked before the size post-check, so a stored file whose size
+// differs from expectedSize must not mask it.
 func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
-	const expectedSize int64 = 67890
+	const (
+		expectedSize int64 = 67890
+		importPath         = "/movies/The.Matrix.1999.mkv"
+	)
 
 	knownMovie := &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}
 
-	notUpgradeMsgs := []*starr.StatusMessage{{
-		Title: "The.Matrix.1999.mkv",
-		Messages: []string{
-			"Not a Custom Format upgrade for existing movie file(s). New: [Scene] (90000) do not improve on Existing: [BluRay] (101075)",
-		},
-	}}
+	rejectedItem := func(reason string) []*radarrlib.ManualImportOutput {
+		return []*radarrlib.ManualImportOutput{{
+			Path:       importPath,
+			Rejections: []*radarrlib.Rejection{{Reason: reason, Type: "permanent"}},
+		}}
+	}
 
 	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
 		require.Error(t, err, msgAndArgs...)
@@ -411,48 +424,35 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		queueRecords []*radarrlib.QueueRecord
+		manualImport []*radarrlib.ManualImportOutput
 		movieByID    *radarrlib.Movie
 		errFunc      require.ErrorAssertionFunc
 	}{
 		{
 			name:         "custom format non-upgrade rejection",
-			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: notUpgradeMsgs}},
+			manualImport: rejectedItem("Not a Custom Format upgrade for existing movie file(s). New: [Scene] (90000) do not improve on Existing: [BluRay] (101075)"),
 		},
 		{
-			name: "quality non-upgrade rejection",
-			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: []*starr.StatusMessage{{
-				Title:    "The.Matrix.1999.mkv",
-				Messages: []string{"Not an upgrade for existing movie file(s)"},
-			}}}},
+			name:         "quality non-upgrade rejection",
+			manualImport: rejectedItem("Not an upgrade for existing movie file(s)"),
 		},
 		{
-			name: "rejection on the attached download",
-			queueRecords: []*radarrlib.QueueRecord{
-				{MovieID: 42, DownloadID: "current", StatusMessages: notUpgradeMsgs},
-			},
-		},
-		{
-			name: "unrelated status message falls through to size post-check",
-			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: []*starr.StatusMessage{{
-				Title:    "The.Matrix.1999.mkv",
-				Messages: []string{"Unable to parse file"},
-			}}}},
+			name: "unrelated rejection falls through to size post-check",
+			manualImport: []*radarrlib.ManualImportOutput{{
+				Path:       importPath,
+				Rejections: []*radarrlib.Rejection{{Reason: "Unable to parse file", Type: "permanent"}},
+			}},
 			// Movie has a stored file whose size differs from expectedSize, so the
 			// size post-check cannot recover and the generic error propagates.
 			movieByID: &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: expectedSize + 1}},
 			errFunc:   propagatesUnsuccessful,
 		},
 		{
-			name: "rejection on a different download does not skip the current import",
-			queueRecords: []*radarrlib.QueueRecord{
-				// The pending download the scan attaches to (found first by
-				// findTrackedDownloadID) carries no rejection.
-				{MovieID: 42, DownloadID: "current", TrackedDownloadState: "importPending"},
-				// A stale record for the same movie carries an old not-upgrade
-				// rejection; it must not be mistaken for this import's outcome.
-				{MovieID: 42, DownloadID: "stale", StatusMessages: notUpgradeMsgs},
-			},
+			name: "rejection on a different file is ignored",
+			manualImport: []*radarrlib.ManualImportOutput{{
+				Path:       "/movies/Some.Other.Movie.mkv",
+				Rejections: []*radarrlib.Rejection{{Reason: "Not an upgrade for existing movie file(s)", Type: "permanent"}},
+			}},
 			movieByID: &radarrlib.Movie{ID: 42, HasFile: false},
 			errFunc:   propagatesUnsuccessful,
 		},
@@ -463,7 +463,7 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 			srv := newTestServerWithConfig(t, testServerConfig{
 				parseResp:            &parseResponse{Movie: knownMovie},
 				movieByID:            test.movieByID,
-				queueResp:            &radarrlib.Queue{Records: test.queueRecords},
+				manualImport:         test.manualImport,
 				commandStatuses:      []string{"completed"},
 				commandResult:        "unsuccessful",
 				commandStatusMessage: "Failed to import",
@@ -472,7 +472,7 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 
 			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
 
-			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", expectedSize)
+			err := client.ImportByFilePath(t.Context(), importPath, expectedSize)
 
 			if test.errFunc != nil {
 				test.errFunc(t, err)
