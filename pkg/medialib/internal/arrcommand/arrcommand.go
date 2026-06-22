@@ -25,6 +25,31 @@ import (
 // import actually happened before treating it as a hard failure.
 var ErrNoSuccessfulImports = errors.New("no successful imports")
 
+// notUpgradeMarker is the case-insensitive substring Sonarr/Radarr put in a
+// queue item's status messages when they refuse to import a release because the
+// file already in the library is as good or better. Both the quality variant
+// ("Not an upgrade for existing episode/movie file(s)") and the custom-format
+// variant ("Not a Custom Format upgrade for existing episode/movie file(s)")
+// share "upgrade for existing", which is specific enough not to collide with
+// transient import errors.
+const notUpgradeMarker = "upgrade for existing"
+
+// IsNotUpgradeRejection reports whether any of the given queue status messages
+// indicates the release was rejected because the existing library file is
+// already as good or better (a "not an upgrade" / "not a Custom Format upgrade"
+// rejection). Such a rejection is permanent: re-running the import scan always
+// hits the same comparison, so callers should treat it as a benign skip rather
+// than a retryable failure.
+func IsNotUpgradeRejection(messages ...string) bool {
+	for _, message := range messages {
+		if strings.Contains(strings.ToLower(message), notUpgradeMarker) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // DefaultPollInterval is used when the caller passes a non-positive interval.
 // Sonarr/Radarr command status updates are inexpensive (a single DB read on
 // the server side), but importing a season pack can serialize many commands

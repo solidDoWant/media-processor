@@ -28,18 +28,19 @@ For Kubernetes, ensure `terminationGracePeriodSeconds` on the worker pod is at l
 
 ### Worker — media workflow
 
-| Metric                                       | Type      | Unit    | Description                                                                                              |
-| -------------------------------------------- | --------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| `media_workflow_source_duration_seconds`     | histogram | seconds | Distribution of source media file durations as reported by probe (workload characterization).                                  |
-| `media_workflow_source_file_size_bytes`      | histogram | bytes   | Distribution of source file sizes before transcoding.                                                                          |
-| `media_workflow_destination_file_size_bytes` | histogram | bytes   | Distribution of output file sizes after transcoding. Compare against source for compression ratio.                             |
-| `media_workflow_transcode_duration_seconds`  | histogram | seconds | Wall-clock time spent transcoding. Carries codec / hardware-acceleration / crop tags so runtime can be correlated with input characteristics. Not emitted when an existing output at the destination path is reused without re-encoding (the source/destination size histograms still fire so corpus shape stays accurate). |
-| `media_workflow_audio_track_count`           | gauge     | tracks  | Audio track count from the most recent probe per label combination.                                                            |
-| `media_workflow_subtitle_track_count`        | gauge     | tracks  | Subtitle track count from the most recent probe per label combination.                                                         |
-| `media_workflow_invalid_files_total`         | counter   | —       | Files skipped because they could not be probed or contained no video stream.                                                   |
-| `media_workflow_artwork_fetch_skipped_total` | counter   | —       | Transcode runs where artwork fetch was attempted but yielded no embeddable image.                                              |
-| `media_workflow_import_skipped_not_in_library_total` | counter | —    | Files whose Radarr/Sonarr import was skipped because the media item is no longer in the library (the movie/series was removed or is no longer monitored). The transcode still completed; the workflow removes the orphaned output and finishes successfully without firing the failure webhook. |
-| `media_workflow_metrics_errors_total`        | counter   | —       | Radarr/Sonarr `GetInfo` lookups that did not return a result while resolving high-cardinality tags — either a backend error (unreachable, auth failure, etc.) or the library could not parse the filename to a known item. |
+| Metric                                               | Type      | Unit    | Description                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------------------- | --------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_workflow_source_duration_seconds`             | histogram | seconds | Distribution of source media file durations as reported by probe (workload characterization).                                                                                                                                                                                                                               |
+| `media_workflow_source_file_size_bytes`              | histogram | bytes   | Distribution of source file sizes before transcoding.                                                                                                                                                                                                                                                                       |
+| `media_workflow_destination_file_size_bytes`         | histogram | bytes   | Distribution of output file sizes after transcoding. Compare against source for compression ratio.                                                                                                                                                                                                                          |
+| `media_workflow_transcode_duration_seconds`          | histogram | seconds | Wall-clock time spent transcoding. Carries codec / hardware-acceleration / crop tags so runtime can be correlated with input characteristics. Not emitted when an existing output at the destination path is reused without re-encoding (the source/destination size histograms still fire so corpus shape stays accurate). |
+| `media_workflow_audio_track_count`                   | gauge     | tracks  | Audio track count from the most recent probe per label combination.                                                                                                                                                                                                                                                         |
+| `media_workflow_subtitle_track_count`                | gauge     | tracks  | Subtitle track count from the most recent probe per label combination.                                                                                                                                                                                                                                                      |
+| `media_workflow_invalid_files_total`                 | counter   | —       | Files skipped because they could not be probed or contained no video stream.                                                                                                                                                                                                                                                |
+| `media_workflow_artwork_fetch_skipped_total`         | counter   | —       | Transcode runs where artwork fetch was attempted but yielded no embeddable image.                                                                                                                                                                                                                                           |
+| `media_workflow_import_skipped_not_in_library_total` | counter   | —       | Files whose Radarr/Sonarr import was skipped because the media item is no longer in the library (the movie/series was removed or is no longer monitored). The transcode still completed; the workflow removes the orphaned output and finishes successfully without firing the failure webhook.                             |
+| `media_workflow_import_skipped_not_upgrade_total`    | counter   | —       | Files whose Radarr/Sonarr import was skipped because the library already holds an equal or better file, so the release was rejected as "not an upgrade" (quality or custom-format). The transcode still completed; the workflow removes the orphaned output and finishes successfully without firing the failure webhook.   |
+| `media_workflow_metrics_errors_total`                | counter   | —       | Radarr/Sonarr `GetInfo` lookups that did not return a result while resolving high-cardinality tags — either a backend error (unreachable, auth failure, etc.) or the library could not parse the filename to a known item.                                                                                                  |
 
 End-to-end workflow latency, schedule-to-start latency, retry counts, and worker poll metrics are emitted by the Temporal SDK — see the [Temporal SDK metrics section](#worker--temporal-sdk) below. Per-activity execution latency is also available there, but only with SDK tags; the application-side `media_workflow_transcode_duration_seconds` above carries the media-domain tags needed to slice runtime by codec, hardware acceleration, and crop.
 
@@ -47,36 +48,36 @@ End-to-end workflow latency, schedule-to-start latency, retry counts, and worker
 
 These metrics describe the GPU-aware Temporal slot supplier that gates transcode-activity admission. They are **only emitted on workers whose `WORKER_ACTIVITIES` set includes `transcode`**; pods that don't run the transcode activity register no `media_worker_transcode_*` series. See [configuration.md](configuration.md#transcode-admission-controller) for the operator-tunable inputs and [hardware-acceleration.md](hardware-acceleration.md#static-cap-fallback) for the fallback rules.
 
-| Metric                                                | Type    | Unit    | Labels  | Description                                                                                                                                                                                       |
-| ----------------------------------------------------- | ------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `media_worker_transcode_slots_in_flight`              | gauge   | slots   | —       | Number of transcodes currently holding a slot on this worker.                                                                                                                                      |
-| `media_worker_transcode_slots_blocked_seconds_total`  | counter | seconds | —       | Cumulative seconds reservations spent blocked on the admission controller before being admitted or cancelled.                                                                                       |
-| `media_worker_transcode_load_utilization`             | gauge   | ratio   | —       | EWMA-smoothed load probe reading, in `[0, 1]`. Source depends on the probe in use: i915 GPU video-engine busy ratio on hardware-accelerated workers, container CPU utilization in software mode. |
-| `media_worker_transcode_admission_mode`               | gauge   | —       | `mode`  | Active admission mode. `mode="probe"` is `1` when the load probe drives admission; `mode="static"` is `1` when the supplier has fallen back to static-cap-only mode. The two series are inverse.   |
+| Metric                                               | Type    | Unit    | Labels | Description                                                                                                                                                                                      |
+| ---------------------------------------------------- | ------- | ------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `media_worker_transcode_slots_in_flight`             | gauge   | slots   | —      | Number of transcodes currently holding a slot on this worker.                                                                                                                                    |
+| `media_worker_transcode_slots_blocked_seconds_total` | counter | seconds | —      | Cumulative seconds reservations spent blocked on the admission controller before being admitted or cancelled.                                                                                    |
+| `media_worker_transcode_load_utilization`            | gauge   | ratio   | —      | EWMA-smoothed load probe reading, in `[0, 1]`. Source depends on the probe in use: i915 GPU video-engine busy ratio on hardware-accelerated workers, container CPU utilization in software mode. |
+| `media_worker_transcode_admission_mode`              | gauge   | —       | `mode` | Active admission mode. `mode="probe"` is `1` when the load probe drives admission; `mode="static"` is `1` when the supplier has fallen back to static-cap-only mode. The two series are inverse. |
 
 `media_worker_activity_enabled` is a complementary gauge emitted on **every** worker pod regardless of activity set:
 
-| Metric                          | Type  | Labels    | Description                                                                                                                                                                          |
-| ------------------------------- | ----- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `media_worker_activity_enabled` | gauge | `activity`| `1` if this pod has the named activity enabled, `0` otherwise. One series per known activity. Use `sum by (activity) (media_worker_activity_enabled == 1)` for per-activity pod counts. |
+| Metric                          | Type  | Labels     | Description                                                                                                                                                                             |
+| ------------------------------- | ----- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_worker_activity_enabled` | gauge | `activity` | `1` if this pod has the named activity enabled, `0` otherwise. One series per known activity. Use `sum by (activity) (media_worker_activity_enabled == 1)` for per-activity pod counts. |
 
 `media_worker_idle_exit_seconds_remaining` is emitted **only when `WORKER_IDLE_EXIT_AFTER` is set to a positive duration** (see [configuration.md](configuration.md#worker)). On workers where the feature is disabled, the gauge is not registered.
 
-| Metric                                     | Type  | Unit    | Labels | Description                                                                                                                                                                                                                       |
-| ------------------------------------------ | ----- | ------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metric                                     | Type  | Unit    | Labels | Description                                                                                                                                                                                                                             |
+| ------------------------------------------ | ----- | ------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `media_worker_idle_exit_seconds_remaining` | gauge | seconds | —      | Seconds remaining before the worker initiates an idle-exit drain. Held at the configured `WORKER_IDLE_EXIT_AFTER` value while activity- or workflow-task work is in flight (the timer is paused). Reaches `0` immediately before drain. |
 
 ### Worker — Temporal SDK
 
 The Temporal Go SDK emits its own set of counters and histograms onto the same `/metrics` endpoint. A few that are especially useful operationally:
 
-| Metric                                                | Type      | Description                                                                  |
-| ----------------------------------------------------- | --------- | ---------------------------------------------------------------------------- |
-| `temporal_workflow_endtoend_latency_seconds`          | histogram | Wall-clock time from workflow start to close, tagged by `workflow_type`.     |
+| Metric                                                | Type      | Description                                                                                                                                |
+| ----------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `temporal_workflow_endtoend_latency_seconds`          | histogram | Wall-clock time from workflow start to close, tagged by `workflow_type`.                                                                   |
 | `temporal_activity_execution_latency_seconds`         | histogram | Wall-clock time inside an activity, tagged by `activity_type` and `workflow_type`. Use `activity_type="Transcode"` for transcode duration. |
-| `temporal_activity_schedule_to_start_latency_seconds` | histogram | Time between an activity being scheduled and a worker picking it up — a leading indicator of worker capacity. |
-| `temporal_request_total`                              | counter   | gRPC requests issued by the SDK to the Temporal frontend.                    |
-| `temporal_long_request_latency_seconds`               | histogram | Latency of long-poll RPCs.                                                   |
+| `temporal_activity_schedule_to_start_latency_seconds` | histogram | Time between an activity being scheduled and a worker picking it up — a leading indicator of worker capacity.                              |
+| `temporal_request_total`                              | counter   | gRPC requests issued by the SDK to the Temporal frontend.                                                                                  |
+| `temporal_long_request_latency_seconds`               | histogram | Latency of long-poll RPCs.                                                                                                                 |
 
 Refer to the [Temporal Go SDK metrics reference](https://docs.temporal.io/references/sdk-metrics) for the full catalogue, since the exact set of instruments depends on the SDK version in use.
 
@@ -97,40 +98,41 @@ Refer to the [Temporal Go SDK metrics reference](https://docs.temporal.io/refere
 
 Worker application metrics carry the tags listed below. Per-metric coverage varies because some tags are only knowable later in the run (codec/container after probe; hardware-acceleration and crop only after transcode).
 
-| Tag                     | Values                    | Description                                                                                                                                                                                                          |
-| ----------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `media_type`            | `movie`, `show`           | Type of media being processed.                                                                                                                                                                                       |
-| `mapping_name`          | _(configured watch name)_ | Name of the watch entry that triggered the job.                                                                                                                                                                      |
-| `source_codec`          | e.g. `h264`, `hevc`       | Video codec of the source file.                                                                                                                                                                                      |
-| `destination_codec`     | e.g. `hevc`, `copy`       | Video codec written to the output (`copy` when the source was remuxed without re-encode).                                                                                                                            |
-| `source_container`      | e.g. `matroska,webm`      | Container format of the source file as reported by libavformat (comma-joined list).                                                                                                                                  |
-| `destination_container` | `mkv`                     | Container format of the output file (always `mkv`).                                                                                                                                                                  |
-| `hardware_accelerated`  | `true`, `false`           | `true` when at least one video stream was encoded with a hardware encoder (QSV, VAAPI). `false` when the encoder fell back to software (e.g. libx265), even if `MEDIA_HARDWARE_DEVICE_PATH` is set.                   |
-| `crop_applied`          | `true`, `false`           | Whether a crop filter was applied during transcoding.                                                                                                                                                                |
+| Tag                     | Values                    | Description                                                                                                                                                                                         |
+| ----------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media_type`            | `movie`, `show`           | Type of media being processed.                                                                                                                                                                      |
+| `mapping_name`          | _(configured watch name)_ | Name of the watch entry that triggered the job.                                                                                                                                                     |
+| `source_codec`          | e.g. `h264`, `hevc`       | Video codec of the source file.                                                                                                                                                                     |
+| `destination_codec`     | e.g. `hevc`, `copy`       | Video codec written to the output (`copy` when the source was remuxed without re-encode).                                                                                                           |
+| `source_container`      | e.g. `matroska,webm`      | Container format of the source file as reported by libavformat (comma-joined list).                                                                                                                 |
+| `destination_container` | `mkv`                     | Container format of the output file (always `mkv`).                                                                                                                                                 |
+| `hardware_accelerated`  | `true`, `false`           | `true` when at least one video stream was encoded with a hardware encoder (QSV, VAAPI). `false` when the encoder fell back to software (e.g. libx265), even if `MEDIA_HARDWARE_DEVICE_PATH` is set. |
+| `crop_applied`          | `true`, `false`           | Whether a crop filter was applied during transcoding.                                                                                                                                               |
 
-| Metric                                       | Application tags                                                                                                                                          |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `media_workflow_source_duration_seconds`     | `media_type`, `mapping_name`                                                                                                                              |
-| `media_workflow_audio_track_count`           | `media_type`, `mapping_name`                                                                                                                              |
-| `media_workflow_subtitle_track_count`        | `media_type`, `mapping_name`                                                                                                                              |
-| `media_workflow_invalid_files_total`         | `media_type`, `mapping_name`                                                                                                                              |
-| `media_workflow_source_file_size_bytes`      | `media_type`, `mapping_name`, `source_codec`, `destination_codec`, `source_container`, `destination_container`, `hardware_accelerated`, `crop_applied`    |
-| `media_workflow_destination_file_size_bytes` | same as `media_workflow_source_file_size_bytes`                                                                                                           |
-| `media_workflow_transcode_duration_seconds`  | same as `media_workflow_source_file_size_bytes`                                                                                                           |
-| `media_workflow_artwork_fetch_skipped_total` | _(none)_                                                                                                                                                  |
-| `media_workflow_import_skipped_not_in_library_total` | `media_type`, `mapping_name`                                                                                                                      |
-| `media_workflow_metrics_errors_total`        | _(none)_                                                                                                                                                  |
+| Metric                                               | Application tags                                                                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `media_workflow_source_duration_seconds`             | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_audio_track_count`                   | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_subtitle_track_count`                | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_invalid_files_total`                 | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_source_file_size_bytes`              | `media_type`, `mapping_name`, `source_codec`, `destination_codec`, `source_container`, `destination_container`, `hardware_accelerated`, `crop_applied` |
+| `media_workflow_destination_file_size_bytes`         | same as `media_workflow_source_file_size_bytes`                                                                                                        |
+| `media_workflow_transcode_duration_seconds`          | same as `media_workflow_source_file_size_bytes`                                                                                                        |
+| `media_workflow_artwork_fetch_skipped_total`         | _(none)_                                                                                                                                               |
+| `media_workflow_import_skipped_not_in_library_total` | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_import_skipped_not_upgrade_total`    | `media_type`, `mapping_name`                                                                                                                           |
+| `media_workflow_metrics_errors_total`                | _(none)_                                                                                                                                               |
 
 ### Worker — Temporal SDK tags
 
 Every metric the worker emits — including the application metrics above — additionally carries the SDK-injected tags below. Use them to filter per namespace, per task queue, or per workflow/activity type when you have multiple workers writing to the same Prometheus.
 
-| Tag             | Description                                                                                  |
-| --------------- | -------------------------------------------------------------------------------------------- |
-| `namespace`     | The Temporal namespace the worker is connected to.                                           |
-| `task_queue`    | The Temporal task queue the worker polls.                                                    |
-| `activity_type` | Name of the activity that emitted the metric (present on activity-emitted metrics).          |
-| `workflow_type` | Name of the workflow type (present on workflow-emitted SDK metrics).                         |
+| Tag             | Description                                                                         |
+| --------------- | ----------------------------------------------------------------------------------- |
+| `namespace`     | The Temporal namespace the worker is connected to.                                  |
+| `task_queue`    | The Temporal task queue the worker polls.                                           |
+| `activity_type` | Name of the activity that emitted the metric (present on activity-emitted metrics). |
+| `workflow_type` | Name of the workflow type (present on workflow-emitted SDK metrics).                |
 
 ### Watcher tags
 
@@ -140,14 +142,14 @@ All watcher metrics carry `mapping_name`. `watcher_files_discovered_total`, `wat
 
 Set `METRICS_HIGH_CARDINALITY_LABELS=true` on the worker to attach per-item identification labels to the histograms that already carry the full transcode tag set (`media_workflow_source_file_size_bytes`, `media_workflow_destination_file_size_bytes`, `media_workflow_transcode_duration_seconds`):
 
-| Label            | Applies to                | Description                          |
-| ---------------- | ------------------------- | ------------------------------------ |
-| `id`             | all                       | Library item ID from Radarr/Sonarr.  |
-| `title`          | all                       | Title of the movie or episode.       |
-| `year`           | all                       | Release year.                        |
-| `series_title`   | shows (empty for movies)  | Series title.                        |
-| `season_number`  | shows (empty for movies)  | Season number.                       |
-| `episode_number` | shows (empty for movies)  | Episode number.                      |
+| Label            | Applies to               | Description                         |
+| ---------------- | ------------------------ | ----------------------------------- |
+| `id`             | all                      | Library item ID from Radarr/Sonarr. |
+| `title`          | all                      | Title of the movie or episode.      |
+| `year`           | all                      | Release year.                       |
+| `series_title`   | shows (empty for movies) | Series title.                       |
+| `season_number`  | shows (empty for movies) | Season number.                      |
+| `episode_number` | shows (empty for movies) | Episode number.                     |
 
 When enabled, those three histograms carry the full set of six labels on every observation. For movie observations, the show-only labels (`series_title`, `season_number`, `episode_number`) are present with empty-string values so the label set stays consistent across observations.
 

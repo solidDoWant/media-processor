@@ -35,13 +35,17 @@ const (
 	// metricImportSkippedNotInLibrary counts files whose library import was
 	// skipped because the media item is no longer in the arr library.
 	metricImportSkippedNotInLibrary = "media_workflow_import_skipped_not_in_library"
-	metricMetricsErrors             = "media_workflow_metrics_errors"
-	metricAudioTrackCount           = "media_workflow_audio_track_count"
-	metricSubtitleTrackCount        = "media_workflow_subtitle_track_count"
-	metricSourceDurationSeconds     = "media_workflow_source_duration_seconds"
-	metricSourceFileSizeBytes       = "media_workflow_source_file_size_bytes"
-	metricDestFileSizeBytes         = "media_workflow_destination_file_size_bytes"
-	metricTranscodeDurationSecs     = "media_workflow_transcode_duration_seconds"
+	// metricImportSkippedNotUpgrade counts files whose library import was skipped
+	// because the arr library already holds an equal or better file (the release
+	// was rejected as "not an upgrade").
+	metricImportSkippedNotUpgrade = "media_workflow_import_skipped_not_upgrade"
+	metricMetricsErrors           = "media_workflow_metrics_errors"
+	metricAudioTrackCount         = "media_workflow_audio_track_count"
+	metricSubtitleTrackCount      = "media_workflow_subtitle_track_count"
+	metricSourceDurationSeconds   = "media_workflow_source_duration_seconds"
+	metricSourceFileSizeBytes     = "media_workflow_source_file_size_bytes"
+	metricDestFileSizeBytes       = "media_workflow_destination_file_size_bytes"
+	metricTranscodeDurationSecs   = "media_workflow_transcode_duration_seconds"
 )
 
 // baseTags returns the tag map carried by every media-workflow metric

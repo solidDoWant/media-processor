@@ -112,6 +112,26 @@ func TestNotify_NotInLibrarySkipsWithoutError(t *testing.T) {
 	assert.True(t, got.ImportSkipped, "Notify should signal the import was skipped")
 }
 
+// TestNotify_NotUpgradeSkipsWithoutError verifies that when the library rejects
+// the import because its existing file is already an equal or better version
+// (medialib.ErrNotUpgrade), Notify treats it as a benign skip: it returns no
+// error (so the workflow does not retry or fire the failure webhook) and signals
+// ImportSkipped so Cleanup removes the orphaned output file.
+func TestNotify_NotUpgradeSkipsWithoutError(t *testing.T) {
+	radarr := &stubLibraryClient{err: fmt.Errorf("notify: %w", medialib.ErrNotUpgrade)}
+	a, env := newActivityEnv(t, MediaWorkflowConfig{}, radarr, &stubLibraryClient{}, &webhook.Client{}, nil)
+
+	val, err := env.ExecuteActivity(a.Notify,
+		MediaInput{FilePath: "/in/movie.mkv", MediaType: medialib.MovieType, OutputPath: "/out"},
+		TranscodeOutput{DestFilePath: "/out/movie.mkv"},
+	)
+	require.NoError(t, err, "an existing equal-or-better library file is a benign skip, not a failure")
+
+	var got NotifyOutput
+	require.NoError(t, val.Get(&got))
+	assert.True(t, got.ImportSkipped, "Notify should signal the import was skipped")
+}
+
 func TestCleanup_DeletesSource(t *testing.T) {
 	srcDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "movie.mkv")

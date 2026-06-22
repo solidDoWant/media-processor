@@ -211,8 +211,19 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotFound)
 			}
 
-			// The movie is still in the library, so fall through to the
-			// benign-race size post-check documented on expectedSize above.
+			// The movie is still in the library. If Radarr rejected the import
+			// because its existing file is already as good or better ("not an
+			// upgrade"), the scan can never succeed — surface ErrNotUpgrade so the
+			// caller treats it as a benign skip rather than burning the retry budget.
+			if c.rejectedAsNotUpgrade(ctx, filePath, downloadClientID) {
+				slog.InfoContext(ctx, "radarr scan reported no imports because the existing movie file is already an equal or better version; skipping import",
+					"file_path", filePath)
+
+				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotUpgrade)
+			}
+
+			// Otherwise fall through to the benign-race size post-check
+			// documented on expectedSize above.
 			if expectedSize > 0 {
 				if size, ok := c.movieFileSize(ctx, filePath); ok && size == expectedSize {
 					slog.InfoContext(ctx, "radarr scan reported no imports but movie file size matches local output; treating as success",
@@ -250,6 +261,67 @@ func (c *Client) movieFileSize(ctx context.Context, filePath string) (int64, boo
 	}
 
 	return full.MovieFile.Size, true
+}
+
+// rejectedAsNotUpgrade reports whether the movie identified by filePath has a
+// queue record whose status messages indicate Radarr refused the import because
+// the existing library file is already as good or better ("not an upgrade" /
+// "not a Custom Format upgrade"). An unidentifiable movie, API errors, and a
+// missing record all return false so the caller falls back to its normal
+// failure handling.
+//
+// downloadClientID is the tracked download the scan was attached to. When set,
+// only that download's record is inspected so a stale or unrelated record for
+// the same movie cannot turn a retryable failure into a permanent skip; when
+// empty (no tracked download was found), records are matched by movie alone.
+func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath, downloadClientID string) bool {
+	movie, err := c.getMovieByFilePath(ctx, filePath)
+	if err != nil {
+		return false
+	}
+
+	const pageSize = 100
+
+	for page, fetched := 1, 0; ; page++ {
+		curr, err := c.radarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
+		if err != nil {
+			return false
+		}
+
+		for _, record := range curr.Records {
+			if record.MovieID == 0 || record.MovieID != movie.GetID() {
+				continue
+			}
+
+			// Skip records that aren't the download the scan was attached to, and
+			// records Radarr already imported on its own — neither reflects the
+			// outcome of this import attempt.
+			if downloadClientID != "" && record.DownloadID != "" && record.DownloadID != downloadClientID {
+				continue
+			}
+
+			if strings.EqualFold(record.TrackedDownloadState, "imported") {
+				continue
+			}
+
+			for _, statusMessage := range record.StatusMessages {
+				if statusMessage == nil {
+					continue
+				}
+
+				if arrcommand.IsNotUpgradeRejection(statusMessage.Messages...) {
+					return true
+				}
+			}
+		}
+
+		fetched += len(curr.Records)
+		if fetched >= curr.TotalRecords || len(curr.Records) == 0 {
+			break
+		}
+	}
+
+	return false
 }
 
 // fetchCommandStatus implements arrcommand.Fetcher. It hits Radarr's

@@ -359,11 +359,13 @@ func emitTranscodeMetrics(ctx context.Context, input MediaInput, probe ProbeOutp
 }
 
 // NotifyOutput is the result of the Notify activity. ImportSkipped is true when
-// the library import was deliberately skipped because the media item is no
-// longer present in the arr library (the movie/series was removed or is no
-// longer monitored). The workflow forwards it to Cleanup so the orphaned
-// transcoded output file — which a successful arr import would normally consume
-// by moving it into the library — is removed.
+// the library import was deliberately skipped because the import can never
+// succeed: either the media item is no longer present in the arr library (the
+// movie/series was removed or is no longer monitored), or the library already
+// holds an equal or better file so the release was rejected as "not an upgrade".
+// The workflow forwards it to Cleanup so the orphaned transcoded output file —
+// which a successful arr import would normally consume by moving it into the
+// library — is removed.
 type NotifyOutput struct {
 	ImportSkipped bool `json:"import_skipped,omitempty"`
 }
@@ -375,11 +377,12 @@ type NotifyOutput struct {
 // the output tree) are returned as non-retryable so Temporal does not burn the
 // retry budget on inputs that cannot recover.
 //
-// When the arr service reports the media item is no longer in its library, the
-// import can never succeed. That is an expected, benign outcome rather than a
-// failure: Notify records it, returns NotifyOutput{ImportSkipped: true} with a
-// nil error so the workflow proceeds to Cleanup (which removes the orphaned
-// output file), and avoids both the retry budget and the failure webhook.
+// When the arr service reports the media item is no longer in its library, or
+// rejects the release because its existing file is already an equal or better
+// version, the import can never succeed. That is an expected, benign outcome
+// rather than a failure: Notify records it, returns NotifyOutput{ImportSkipped:
+// true} with a nil error so the workflow proceeds to Cleanup (which removes the
+// orphaned output file), and avoids both the retry budget and the failure webhook.
 func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode TranscodeOutput) (NotifyOutput, error) {
 	start := time.Now()
 
@@ -426,6 +429,18 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 			return NotifyOutput{ImportSkipped: true}, nil
 		}
 
+		// The arr service rejected the import because its existing file is already
+		// an equal or better version. Like the not-in-library case, the import can
+		// never succeed, so skip it rather than retrying or firing the webhook.
+		if errors.Is(err, medialib.ErrNotUpgrade) {
+			activity.GetLogger(ctx).Info("library already has an equal or better file; skipping import",
+				"file", input.FilePath, "import_path", importPath)
+			activity.GetMetricsHandler(ctx).WithTags(baseTags(input)).Counter(metricImportSkippedNotUpgrade).Inc(1)
+			logStepResult(ctx, "notify", input.FilePath, start, nil)
+
+			return NotifyOutput{ImportSkipped: true}, nil
+		}
+
 		wrappedErr := fmt.Errorf("notify library: %w", err)
 		logStepResult(ctx, "notify", input.FilePath, start, wrappedErr)
 
@@ -447,8 +462,9 @@ func (a *Activities) Notify(ctx context.Context, input MediaInput, transcode Tra
 // source has already been removed by Probe (RunCleanup is a near-no-op),
 // transcode.DestFilePath is empty, and output pruning is skipped.
 // When notify.ImportSkipped is set (the media item is no longer in the arr
-// library), the arr service will not move the transcoded file into its
-// library, so the orphaned output file is removed here before pruning.
+// library, or the library already holds an equal or better file), the arr
+// service will not move the transcoded file into its library, so the orphaned
+// output file is removed here before pruning.
 func (a *Activities) Cleanup(ctx context.Context, input MediaInput, transcode TranscodeOutput, notify NotifyOutput) error {
 	start := time.Now()
 

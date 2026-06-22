@@ -586,6 +586,121 @@ func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, medialib.ErrNotFound)
 }
 
+// TestImportByFilePath_NotUpgradeReturnsNotUpgrade verifies that when a scan
+// finishes with no successful imports and the episode's queue record reports
+// the release was rejected because the existing library file is already as good
+// or better, ImportByFilePath returns medialib.ErrNotUpgrade rather than the
+// generic "no successful imports" error. The caller relies on this sentinel to
+// skip the import as a benign no-op instead of retrying for the full retry
+// budget. The rejection is checked before the size post-check, so a stored
+// file whose size differs from expectedSize must not mask it.
+func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
+	const expectedSize int64 = 12345
+
+	parseResp := &sonarrlib.ParseOutput{
+		Title: "Breaking Bad",
+		ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{
+			SeriesTitle:    "Breaking Bad",
+			SeasonNumber:   1,
+			EpisodeNumbers: []int{1},
+		},
+		Episodes: []*sonarrlib.Episode{
+			{ID: 200, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1},
+		},
+	}
+
+	notUpgradeMsgs := []*starr.StatusMessage{{
+		Title: "king.of.the.hill.s14e09.mkv",
+		Messages: []string{
+			"Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)",
+		},
+	}}
+
+	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.Contains(t, err.Error(), "no successful imports")
+	}
+
+	tests := []struct {
+		name         string
+		queueRecords []*sonarrlib.QueueRecord
+		episodeByID  *sonarrlib.Episode
+		episodeFile  *sonarrlib.EpisodeFile
+		errFunc      require.ErrorAssertionFunc
+	}{
+		{
+			name:         "custom format non-upgrade rejection",
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: notUpgradeMsgs}},
+		},
+		{
+			name: "quality non-upgrade rejection",
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
+				Title:    "king.of.the.hill.s14e09.mkv",
+				Messages: []string{"Not an upgrade for existing episode file(s)"},
+			}}}},
+		},
+		{
+			name: "rejection on the attached download",
+			queueRecords: []*sonarrlib.QueueRecord{
+				{EpisodeID: 200, DownloadID: "current", StatusMessages: notUpgradeMsgs},
+			},
+		},
+		{
+			name: "unrelated status message falls through to size post-check",
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
+				Title:    "king.of.the.hill.s14e09.mkv",
+				Messages: []string{"Unable to parse file"},
+			}}}},
+			// Episode has a stored file whose size differs from expectedSize, so
+			// the size post-check cannot recover and the generic error propagates.
+			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
+			episodeFile: &sonarrlib.EpisodeFile{ID: 7, Size: expectedSize + 1},
+			errFunc:     propagatesUnsuccessful,
+		},
+		{
+			name: "rejection on a different download does not skip the current import",
+			queueRecords: []*sonarrlib.QueueRecord{
+				// The pending download the scan attaches to (found first by
+				// findTrackedDownloadID) carries no rejection.
+				{EpisodeID: 200, DownloadID: "current", TrackedDownloadState: "importPending"},
+				// A stale record for the same episode carries an old not-upgrade
+				// rejection; it must not be mistaken for this import's outcome.
+				{EpisodeID: 200, DownloadID: "stale", StatusMessages: notUpgradeMsgs},
+			},
+			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: false},
+			errFunc:     propagatesUnsuccessful,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseResp:            parseResp,
+				episodeByID:          test.episodeByID,
+				episodeFile:          test.episodeFile,
+				queueResp:            &sonarrlib.Queue{Records: test.queueRecords},
+				commandStatuses:      []string{"completed"},
+				commandResult:        "unsuccessful",
+				commandStatusMessage: "Failed to import",
+			})
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/tv/Breaking.Bad.S01E01.mkv", expectedSize)
+
+			if test.errFunc != nil {
+				test.errFunc(t, err)
+				assert.NotErrorIs(t, err, medialib.ErrNotUpgrade)
+
+				return
+			}
+
+			require.ErrorIs(t, err, medialib.ErrNotUpgrade)
+		})
+	}
+}
+
 func TestGetInfo(t *testing.T) {
 	knownParseOutput := &sonarrlib.ParseOutput{
 		Title: "Breaking Bad",
