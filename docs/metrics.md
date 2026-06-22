@@ -18,6 +18,8 @@ scrape_configs:
       - targets: ["worker:9090", "watcher:9091"]
 ```
 
+A ready-to-import Grafana dashboard covering the metrics below lives at [`deploy/grafana/media-processor-dashboard.json`](../deploy/grafana/media-processor-dashboard.json) (see [`deploy/grafana/README.md`](../deploy/grafana/README.md) for import steps).
+
 ### Scrape on shutdown
 
 When a worker pod shuts down, the binary holds the `/metrics` endpoint open after activity drain to give Prometheus one final scrape covering end-of-lifecycle samples. The wait is bounded by `METRICS_SCRAPE_WAIT_TIMEOUT` (Go duration string, default `60s`); set it to `0s` to disable the gate. The endpoint then closes and the process exits.
