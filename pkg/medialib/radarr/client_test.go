@@ -397,52 +397,73 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 
 	knownMovie := &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}
 
+	notUpgradeMsgs := []*starr.StatusMessage{{
+		Title: "The.Matrix.1999.mkv",
+		Messages: []string{
+			"Not a Custom Format upgrade for existing movie file(s). New: [Scene] (90000) do not improve on Existing: [BluRay] (101075)",
+		},
+	}}
+
+	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.Contains(t, err.Error(), "no successful imports")
+	}
+
 	tests := []struct {
-		name       string
-		statusMsgs []*starr.StatusMessage
-		movieByID  *radarrlib.Movie
-		errFunc    require.ErrorAssertionFunc
+		name         string
+		queueRecords []*radarrlib.QueueRecord
+		movieByID    *radarrlib.Movie
+		errFunc      require.ErrorAssertionFunc
 	}{
 		{
-			name: "custom format non-upgrade rejection",
-			statusMsgs: []*starr.StatusMessage{{
-				Title: "The.Matrix.1999.mkv",
-				Messages: []string{
-					"Not a Custom Format upgrade for existing movie file(s). New: [Scene] (90000) do not improve on Existing: [BluRay] (101075)",
-				},
-			}},
+			name:         "custom format non-upgrade rejection",
+			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: notUpgradeMsgs}},
 		},
 		{
 			name: "quality non-upgrade rejection",
-			statusMsgs: []*starr.StatusMessage{{
+			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: []*starr.StatusMessage{{
 				Title:    "The.Matrix.1999.mkv",
 				Messages: []string{"Not an upgrade for existing movie file(s)"},
-			}},
+			}}}},
+		},
+		{
+			name: "rejection on the attached download",
+			queueRecords: []*radarrlib.QueueRecord{
+				{MovieID: 42, DownloadID: "current", StatusMessages: notUpgradeMsgs},
+			},
 		},
 		{
 			name: "unrelated status message falls through to size post-check",
-			statusMsgs: []*starr.StatusMessage{{
+			queueRecords: []*radarrlib.QueueRecord{{MovieID: 42, StatusMessages: []*starr.StatusMessage{{
 				Title:    "The.Matrix.1999.mkv",
 				Messages: []string{"Unable to parse file"},
-			}},
+			}}}},
 			// Movie has a stored file whose size differs from expectedSize, so the
 			// size post-check cannot recover and the generic error propagates.
 			movieByID: &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: expectedSize + 1}},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				assert.Contains(t, err.Error(), "no successful imports")
+			errFunc:   propagatesUnsuccessful,
+		},
+		{
+			name: "rejection on a different download does not skip the current import",
+			queueRecords: []*radarrlib.QueueRecord{
+				// The pending download the scan attaches to (found first by
+				// findTrackedDownloadID) carries no rejection.
+				{MovieID: 42, DownloadID: "current", TrackedDownloadState: "importPending"},
+				// A stale record for the same movie carries an old not-upgrade
+				// rejection; it must not be mistaken for this import's outcome.
+				{MovieID: 42, DownloadID: "stale", StatusMessages: notUpgradeMsgs},
 			},
+			movieByID: &radarrlib.Movie{ID: 42, HasFile: false},
+			errFunc:   propagatesUnsuccessful,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			srv := newTestServerWithConfig(t, testServerConfig{
-				parseResp: &parseResponse{Movie: knownMovie},
-				movieByID: test.movieByID,
-				queueResp: &radarrlib.Queue{Records: []*radarrlib.QueueRecord{
-					{MovieID: 42, StatusMessages: test.statusMsgs},
-				}},
+				parseResp:            &parseResponse{Movie: knownMovie},
+				movieByID:            test.movieByID,
+				queueResp:            &radarrlib.Queue{Records: test.queueRecords},
 				commandStatuses:      []string{"completed"},
 				commandResult:        "unsuccessful",
 				commandStatusMessage: "Failed to import",

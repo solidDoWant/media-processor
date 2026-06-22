@@ -215,7 +215,7 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 			// because its existing file is already as good or better ("not an
 			// upgrade"), the scan can never succeed — surface ErrNotUpgrade so the
 			// caller treats it as a benign skip rather than burning the retry budget.
-			if c.rejectedAsNotUpgrade(ctx, filePath) {
+			if c.rejectedAsNotUpgrade(ctx, filePath, downloadClientID) {
 				slog.InfoContext(ctx, "radarr scan reported no imports because the existing movie file is already an equal or better version; skipping import",
 					"file_path", filePath)
 
@@ -269,7 +269,12 @@ func (c *Client) movieFileSize(ctx context.Context, filePath string) (int64, boo
 // "not a Custom Format upgrade"). An unidentifiable movie, API errors, and a
 // missing record all return false so the caller falls back to its normal
 // failure handling.
-func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath string) bool {
+//
+// downloadClientID is the tracked download the scan was attached to. When set,
+// only that download's record is inspected so a stale or unrelated record for
+// the same movie cannot turn a retryable failure into a permanent skip; when
+// empty (no tracked download was found), records are matched by movie alone.
+func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath, downloadClientID string) bool {
 	movie, err := c.getMovieByFilePath(ctx, filePath)
 	if err != nil {
 		return false
@@ -285,6 +290,17 @@ func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath string) bool
 
 		for _, record := range curr.Records {
 			if record.MovieID == 0 || record.MovieID != movie.GetID() {
+				continue
+			}
+
+			// Skip records that aren't the download the scan was attached to, and
+			// records Radarr already imported on its own — neither reflects the
+			// outcome of this import attempt.
+			if downloadClientID != "" && record.DownloadID != "" && record.DownloadID != downloadClientID {
+				continue
+			}
+
+			if strings.EqualFold(record.TrackedDownloadState, "imported") {
 				continue
 			}
 

@@ -609,55 +609,76 @@ func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
 		},
 	}
 
+	notUpgradeMsgs := []*starr.StatusMessage{{
+		Title: "king.of.the.hill.s14e09.mkv",
+		Messages: []string{
+			"Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)",
+		},
+	}}
+
+	propagatesUnsuccessful := func(t require.TestingT, err error, msgAndArgs ...any) {
+		require.Error(t, err, msgAndArgs...)
+		assert.Contains(t, err.Error(), "no successful imports")
+	}
+
 	tests := []struct {
-		name        string
-		statusMsgs  []*starr.StatusMessage
-		episodeByID *sonarrlib.Episode
-		episodeFile *sonarrlib.EpisodeFile
-		errFunc     require.ErrorAssertionFunc
+		name         string
+		queueRecords []*sonarrlib.QueueRecord
+		episodeByID  *sonarrlib.Episode
+		episodeFile  *sonarrlib.EpisodeFile
+		errFunc      require.ErrorAssertionFunc
 	}{
 		{
-			name: "custom format non-upgrade rejection",
-			statusMsgs: []*starr.StatusMessage{{
-				Title: "king.of.the.hill.s14e09.mkv",
-				Messages: []string{
-					"Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)",
-				},
-			}},
+			name:         "custom format non-upgrade rejection",
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: notUpgradeMsgs}},
 		},
 		{
 			name: "quality non-upgrade rejection",
-			statusMsgs: []*starr.StatusMessage{{
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
 				Title:    "king.of.the.hill.s14e09.mkv",
 				Messages: []string{"Not an upgrade for existing episode file(s)"},
-			}},
+			}}}},
+		},
+		{
+			name: "rejection on the attached download",
+			queueRecords: []*sonarrlib.QueueRecord{
+				{EpisodeID: 200, DownloadID: "current", StatusMessages: notUpgradeMsgs},
+			},
 		},
 		{
 			name: "unrelated status message falls through to size post-check",
-			statusMsgs: []*starr.StatusMessage{{
+			queueRecords: []*sonarrlib.QueueRecord{{EpisodeID: 200, StatusMessages: []*starr.StatusMessage{{
 				Title:    "king.of.the.hill.s14e09.mkv",
 				Messages: []string{"Unable to parse file"},
-			}},
+			}}}},
 			// Episode has a stored file whose size differs from expectedSize, so
 			// the size post-check cannot recover and the generic error propagates.
 			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: true, EpisodeFileID: 7},
 			episodeFile: &sonarrlib.EpisodeFile{ID: 7, Size: expectedSize + 1},
-			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
-				require.Error(t, err, msgAndArgs...)
-				assert.Contains(t, err.Error(), "no successful imports")
+			errFunc:     propagatesUnsuccessful,
+		},
+		{
+			name: "rejection on a different download does not skip the current import",
+			queueRecords: []*sonarrlib.QueueRecord{
+				// The pending download the scan attaches to (found first by
+				// findTrackedDownloadID) carries no rejection.
+				{EpisodeID: 200, DownloadID: "current", TrackedDownloadState: "importPending"},
+				// A stale record for the same episode carries an old not-upgrade
+				// rejection; it must not be mistaken for this import's outcome.
+				{EpisodeID: 200, DownloadID: "stale", StatusMessages: notUpgradeMsgs},
 			},
+			episodeByID: &sonarrlib.Episode{ID: 200, HasFile: false},
+			errFunc:     propagatesUnsuccessful,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
-				parseResp:   parseResp,
-				episodeByID: test.episodeByID,
-				episodeFile: test.episodeFile,
-				queueResp: &sonarrlib.Queue{Records: []*sonarrlib.QueueRecord{
-					{EpisodeID: 200, StatusMessages: test.statusMsgs},
-				}},
+				parseResp:            parseResp,
+				episodeByID:          test.episodeByID,
+				episodeFile:          test.episodeFile,
+				queueResp:            &sonarrlib.Queue{Records: test.queueRecords},
 				commandStatuses:      []string{"completed"},
 				commandResult:        "unsuccessful",
 				commandStatusMessage: "Failed to import",
