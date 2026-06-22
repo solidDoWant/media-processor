@@ -174,3 +174,54 @@ func TestWait_ZeroIntervalUsesDefault(t *testing.T) {
 	require.NoError(t, arrcommand.Wait(t.Context(), fetcher, 1, 0, "arrtest"))
 	require.NoError(t, arrcommand.Wait(t.Context(), fetcher, 1, -1, "arrtest"))
 }
+
+func TestIsNotUpgradeRejection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		messages []string
+		expected bool
+	}{
+		{
+			name: "custom format non-upgrade rejection",
+			messages: []string{
+				"Not a Custom Format upgrade for existing episode file(s). New: [Scene] (90000) do not improve on Existing: [DSNP] (101075)",
+			},
+			expected: true,
+		},
+		{
+			name:     "quality non-upgrade rejection",
+			messages: []string{"Not an upgrade for existing movie file(s)"},
+			expected: true,
+		},
+		{
+			name:     "match is case-insensitive",
+			messages: []string{"NOT AN UPGRADE FOR EXISTING EPISODE FILE(S)"},
+			expected: true,
+		},
+		{
+			name:     "rejection found among multiple messages",
+			messages: []string{"Sample file detected", "Not an upgrade for existing episode file(s)"},
+			expected: true,
+		},
+		{
+			name:     "unrelated import error",
+			messages: []string{"Unable to parse file", "No files found are eligible for import"},
+			expected: false,
+		},
+		{
+			name:     "no messages",
+			messages: nil,
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, test.expected, arrcommand.IsNotUpgradeRejection(test.messages...))
+		})
+	}
+}

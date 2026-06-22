@@ -195,8 +195,19 @@ func (c *Client) ImportByFilePath(ctx context.Context, filePath string, expected
 				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotFound)
 			}
 
-			// The episode is still in the library, so fall through to the
-			// benign-race size post-check documented on expectedSize above.
+			// The episode is still in the library. If Sonarr rejected the import
+			// because its existing file is already as good or better ("not an
+			// upgrade"), the scan can never succeed — surface ErrNotUpgrade so the
+			// caller treats it as a benign skip rather than burning the retry budget.
+			if c.rejectedAsNotUpgrade(ctx, filePath) {
+				slog.InfoContext(ctx, "sonarr scan reported no imports because the existing episode file is already an equal or better version; skipping import",
+					"file_path", filePath)
+
+				return fmt.Errorf("import %q: %w", filePath, medialib.ErrNotUpgrade)
+			}
+
+			// Otherwise fall through to the benign-race size post-check
+			// documented on expectedSize above.
 			if expectedSize > 0 {
 				if size, ok := c.episodeFileSize(ctx, filePath); !ok {
 					slog.WarnContext(ctx, "sonarr scan reported no imports and episode file lookup failed; cannot recover",
@@ -241,6 +252,51 @@ func (c *Client) episodeFileSize(ctx context.Context, filePath string) (int64, b
 	}
 
 	return files[0].Size, true
+}
+
+// rejectedAsNotUpgrade reports whether the episode identified by filePath has a
+// queue record whose status messages indicate Sonarr refused the import because
+// the existing library file is already as good or better ("not an upgrade" /
+// "not a Custom Format upgrade"). An unidentifiable episode, API errors, and a
+// missing record all return false so the caller falls back to its normal
+// failure handling.
+func (c *Client) rejectedAsNotUpgrade(ctx context.Context, filePath string) bool {
+	episode, err := c.getEpisodeByFilePath(ctx, filePath)
+	if err != nil {
+		return false
+	}
+
+	const pageSize = 100
+
+	for page, fetched := 1, 0; ; page++ {
+		curr, err := c.sonarr.GetQueuePageContext(ctx, &starr.PageReq{PageSize: pageSize, Page: page})
+		if err != nil {
+			return false
+		}
+
+		for _, record := range curr.Records {
+			if record.EpisodeID == 0 || record.EpisodeID != episode.GetID() {
+				continue
+			}
+
+			for _, statusMessage := range record.StatusMessages {
+				if statusMessage == nil {
+					continue
+				}
+
+				if arrcommand.IsNotUpgradeRejection(statusMessage.Messages...) {
+					return true
+				}
+			}
+		}
+
+		fetched += len(curr.Records)
+		if fetched >= curr.TotalRecords || len(curr.Records) == 0 {
+			break
+		}
+	}
+
+	return false
 }
 
 // fetchCommandStatus implements arrcommand.Fetcher. It hits Sonarr's

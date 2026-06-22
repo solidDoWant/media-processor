@@ -35,6 +35,7 @@ type parseResponse struct {
 type testServerConfig struct {
 	parseResp *parseResponse
 	movieByID *radarrlib.Movie // response for /api/v3/movie/{id}
+	queueResp *radarrlib.Queue // single-page queue response; nil returns empty queue
 	imageBody []byte           // raw bytes served at image paths
 	imageType string           // Content-Type for image responses
 	// commandStatuses is the sequence of status values returned by GET
@@ -120,6 +121,16 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(body))
+	})
+
+	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, r *http.Request) {
+		q := cfg.queueResp
+		if q == nil {
+			q = &radarrlib.Queue{Records: []*radarrlib.QueueRecord{}}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(q))
 	})
 
 	mux.HandleFunc("/api/v3/movie/", func(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +382,87 @@ func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 
 	err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", expectedSize)
 	require.ErrorIs(t, err, medialib.ErrNotFound)
+}
+
+// TestImportByFilePath_NotUpgradeReturnsNotUpgrade verifies that when a scan
+// finishes with no successful imports and the movie's queue record reports the
+// release was rejected because the existing library file is already as good or
+// better, ImportByFilePath returns medialib.ErrNotUpgrade rather than the
+// generic "no successful imports" error. The caller relies on this sentinel to
+// skip the import as a benign no-op instead of retrying for the full retry
+// budget. The rejection is checked before the size post-check, so a stored file
+// whose size differs from expectedSize must not mask it.
+func TestImportByFilePath_NotUpgradeReturnsNotUpgrade(t *testing.T) {
+	const expectedSize int64 = 67890
+
+	knownMovie := &radarrlib.Movie{ID: 42, Title: "The Matrix", Year: 1999}
+
+	tests := []struct {
+		name       string
+		statusMsgs []*starr.StatusMessage
+		movieByID  *radarrlib.Movie
+		errFunc    require.ErrorAssertionFunc
+	}{
+		{
+			name: "custom format non-upgrade rejection",
+			statusMsgs: []*starr.StatusMessage{{
+				Title: "The.Matrix.1999.mkv",
+				Messages: []string{
+					"Not a Custom Format upgrade for existing movie file(s). New: [Scene] (90000) do not improve on Existing: [BluRay] (101075)",
+				},
+			}},
+		},
+		{
+			name: "quality non-upgrade rejection",
+			statusMsgs: []*starr.StatusMessage{{
+				Title:    "The.Matrix.1999.mkv",
+				Messages: []string{"Not an upgrade for existing movie file(s)"},
+			}},
+		},
+		{
+			name: "unrelated status message falls through to size post-check",
+			statusMsgs: []*starr.StatusMessage{{
+				Title:    "The.Matrix.1999.mkv",
+				Messages: []string{"Unable to parse file"},
+			}},
+			// Movie has a stored file whose size differs from expectedSize, so the
+			// size post-check cannot recover and the generic error propagates.
+			movieByID: &radarrlib.Movie{ID: 42, HasFile: true, MovieFile: &radarrlib.MovieFile{Size: expectedSize + 1}},
+			errFunc: func(t require.TestingT, err error, msgAndArgs ...any) {
+				require.Error(t, err, msgAndArgs...)
+				assert.Contains(t, err.Error(), "no successful imports")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newTestServerWithConfig(t, testServerConfig{
+				parseResp: &parseResponse{Movie: knownMovie},
+				movieByID: test.movieByID,
+				queueResp: &radarrlib.Queue{Records: []*radarrlib.QueueRecord{
+					{MovieID: 42, StatusMessages: test.statusMsgs},
+				}},
+				commandStatuses:      []string{"completed"},
+				commandResult:        "unsuccessful",
+				commandStatusMessage: "Failed to import",
+			})
+			t.Cleanup(srv.Close)
+
+			client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), "/movies/The.Matrix.1999.mkv", expectedSize)
+
+			if test.errFunc != nil {
+				test.errFunc(t, err)
+				assert.NotErrorIs(t, err, medialib.ErrNotUpgrade)
+
+				return
+			}
+
+			require.ErrorIs(t, err, medialib.ErrNotUpgrade)
+		})
+	}
 }
 
 func TestGetInfo_UsesFileStemAsTitleParam(t *testing.T) {

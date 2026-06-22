@@ -11,6 +11,13 @@ import (
 // ErrNotFound is returned when a media item is not found in the library.
 var ErrNotFound = errors.New("not found in library")
 
+// ErrNotUpgrade is returned when an import scan reports no successful imports
+// because the file already in the library is as good or better than the file
+// being imported (the arr service rejected the release as "not an upgrade" /
+// "not a Custom Format upgrade"). The import can never succeed, so callers
+// should treat this as a benign skip rather than a retryable failure.
+var ErrNotUpgrade = errors.New("existing library file is already an equal or better version")
+
 // MediaType identifies whether a media file is a movie or a TV show episode.
 type MediaType string
 
@@ -153,8 +160,10 @@ type ArrLibrary interface {
 	//
 	// Returns ErrNotFound when the scan reports no successful imports and the
 	// media item is no longer in the library (removed or no longer monitored),
-	// so the import can never succeed. Callers should treat this as a benign
-	// skip rather than a retryable failure.
+	// so the import can never succeed. Returns ErrNotUpgrade when the scan
+	// reports no successful imports because the library already holds an equal
+	// or better file (the release was rejected as "not an upgrade"). Callers
+	// should treat both as a benign skip rather than a retryable failure.
 	ImportByFilePath(ctx context.Context, path string, expectedSize int64) error
 	// GetInfo returns structured media metadata for the item at path.
 	// Returns ErrNotFound if no item is identified.
