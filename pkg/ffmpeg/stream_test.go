@@ -82,12 +82,39 @@ func TestMonotonicDtsClamp(t *testing.T) {
 			wantClamped:    true,
 		},
 		{
-			name:           "packet has no DTS — pass through unchanged",
+			name:           "packet has no DTS with a previous DTS — synthesize one past the previous",
 			lastWrittenDts: 100,
 			encDts:         astiav.NoPtsValue,
 			encPts:         200,
-			wantDts:        astiav.NoPtsValue,
+			wantDts:        101,
 			wantPts:        200,
+			wantClamped:    true,
+		},
+		{
+			name:           "first packet has no DTS — anchor synthesized DTS to its PTS",
+			lastWrittenDts: astiav.NoPtsValue,
+			encDts:         astiav.NoPtsValue,
+			encPts:         200,
+			wantDts:        200,
+			wantPts:        200,
+			wantClamped:    true,
+		},
+		{
+			name:           "synthesized DTS past previous lands ahead of an earlier PTS — PTS clamped up",
+			lastWrittenDts: 100,
+			encDts:         astiav.NoPtsValue,
+			encPts:         83,
+			wantDts:        101,
+			wantPts:        101,
+			wantClamped:    true,
+		},
+		{
+			name:           "first packet has neither DTS nor PTS — nothing to synthesize from",
+			lastWrittenDts: astiav.NoPtsValue,
+			encDts:         astiav.NoPtsValue,
+			encPts:         astiav.NoPtsValue,
+			wantDts:        astiav.NoPtsValue,
+			wantPts:        astiav.NoPtsValue,
 			wantClamped:    false,
 		},
 		{
@@ -181,6 +208,52 @@ func TestMonotonicDtsClamp_FMABFailureSequence(t *testing.T) {
 	// pts: 400071}) carries a PTS behind its own (already-monotonic) DTS — the
 	// clamp repairs that too so the muxer does not reject it with EINVAL.
 	assert.Equal(t, 4, clampedCount, "clamp must fire on every regressing or pts-behind-dts packet")
+
+	for i := 1; i < len(muxedDts); i++ {
+		assert.Greater(t, muxedDts[i], muxedDts[i-1],
+			"muxed DTS must be strictly monotonic at packet %d (got %d after %d)",
+			i, muxedDts[i], muxedDts[i-1])
+	}
+}
+
+// TestMonotonicDtsClamp_MissingDtsSequence replays the leading packets of a
+// production NF 2160p HEVC WEB-DL (The Haunting S01E06) copied into matroska.
+// The first reordered B-frames carry no DTS at all (AV_NOPTS_VALUE) while their
+// PTS is set. Forwarding the missing DTS to the muxer made libavformat derive
+// one from the PTS, which ran backwards across the reordered frames and was
+// rejected ("non monotonically increasing dts to muxer in stream 0: 85 >= 83").
+// Verifies the clamp synthesizes a strictly monotonic DTS for the whole run.
+func TestMonotonicDtsClamp_MissingDtsSequence(t *testing.T) {
+	const noDts = astiav.NoPtsValue
+
+	type srcPkt struct{ dts, pts int64 }
+	// Source packet timestamps as demuxed (matroska 1/1000 timebase), in file
+	// order. Packets 1 and 2 have no DTS; their PTS (167, 83) is the value the
+	// muxer would otherwise derive a regressing DTS from.
+	sourcePackets := []srcPkt{
+		{dts: 0, pts: 0},
+		{dts: noDts, pts: 167},
+		{dts: noDts, pts: 83},
+		{dts: 42, pts: 42},
+		{dts: 83, pts: 125},
+		{dts: 125, pts: 334},
+		{dts: 167, pts: 250},
+		{dts: 209, pts: 209},
+	}
+
+	lastWritten := int64(astiav.NoPtsValue)
+	muxedDts := make([]int64, 0, len(sourcePackets))
+
+	for _, sourcePacket := range sourcePackets {
+		newDts, newPts, _ := monotonicDtsClamp(lastWritten, sourcePacket.dts, sourcePacket.pts)
+
+		require.NotEqual(t, int64(astiav.NoPtsValue), newDts,
+			"every muxed packet must carry a DTS — the muxer rejects unset timestamps")
+		assert.GreaterOrEqual(t, newPts, newDts, "PTS must never sit behind its own DTS")
+
+		muxedDts = append(muxedDts, newDts)
+		lastWritten = newDts
+	}
 
 	for i := 1; i < len(muxedDts); i++ {
 		assert.Greater(t, muxedDts[i], muxedDts[i-1],
@@ -414,4 +487,114 @@ func TestCopyStreamState_processPacket_RepairsPtsBehindDts(t *testing.T) {
 		"the pts < dts repair must be recorded as a clamp")
 
 	require.NoError(t, outputFmt.WriteTrailer())
+}
+
+// TestCopyStreamState_processPacket_SynthesizesMissingDts verifies that the
+// pure-copy packet path synthesizes a monotonic DTS for packets that arrive
+// with no DTS at all (AV_NOPTS_VALUE) before submitting them to the muxer.
+//
+// The motivating production failure is a copied HEVC video stream (stream 0)
+// of a 2160p NF WEB-DL whose leading reordered B-frames carry no DTS while
+// their PTS is set. Forwarding the unset DTS made libavformat derive one from
+// the PTS, which ran backwards across the reordered frames — the matroska muxer
+// rejected the third packet with "Application provided invalid, non
+// monotonically increasing dts to muxer in stream 0: 85 >= 83" (EINVAL,
+// surfaced as "writing remuxed packet for stream 0: Invalid argument"). The
+// ffmpeg CLI fills a running DTS estimate on its stream-copy path; our
+// in-process transcoder reaches the muxer directly, so the synthesis must
+// happen here.
+func TestCopyStreamState_processPacket_SynthesizesMissingDts(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.mkv")
+
+	inputFmt := astiav.AllocFormatContext()
+	require.NotNil(t, inputFmt)
+
+	defer inputFmt.Free()
+
+	require.NoError(t, inputFmt.OpenInput("testdata/video_with_subrip_subtitle.mkv", nil, nil))
+	defer inputFmt.CloseInput()
+
+	require.NoError(t, inputFmt.FindStreamInfo(nil))
+
+	var inAudioStream *astiav.Stream
+
+	for _, stream := range inputFmt.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
+			inAudioStream = stream
+			break
+		}
+	}
+
+	require.NotNil(t, inAudioStream, "test fixture must carry an audio stream")
+
+	outputFmt, err := astiav.AllocOutputFormatContext(nil, "matroska", outputPath)
+	require.NoError(t, err)
+
+	defer outputFmt.Free()
+
+	outStream := outputFmt.NewStream(nil)
+	require.NotNil(t, outStream)
+	require.NoError(t, inAudioStream.CodecParameters().Copy(outStream.CodecParameters()))
+	outStream.CodecParameters().SetCodecTag(0)
+	outStream.SetTimeBase(inAudioStream.TimeBase())
+
+	ioCtx, err := astiav.OpenIOContext(outputPath, astiav.NewIOContextFlags(astiav.IOContextFlagWrite), nil, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = ioCtx.Close() }()
+
+	outputFmt.SetPb(ioCtx)
+
+	require.NoError(t, outputFmt.WriteHeader(nil))
+
+	css := &copyStreamState{inStream: inAudioStream}
+	css.setOutputStream(outStream)
+
+	pkt := astiav.AllocPacket()
+	defer pkt.Free()
+
+	readAudioPacket := func() {
+		t.Helper()
+
+		for {
+			err := inputFmt.ReadFrame(pkt)
+			require.NoError(t, err, "input must supply enough audio packets for the test")
+
+			if pkt.StreamIndex() == inAudioStream.Index() {
+				return
+			}
+
+			pkt.Unref()
+		}
+	}
+
+	// First packet: well-formed, establishes the baseline DTS.
+	readAudioPacket()
+	pkt.SetDts(0)
+	pkt.SetPts(0)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"first packet (monotonic DTS) must be accepted by the muxer")
+
+	pkt.Unref()
+
+	// Next two packets carry no DTS, with PTS that would derive a regressing DTS
+	// (167 then 83) if forwarded unset. The synthesis must keep them monotonic.
+	for _, pts := range []int64{167, 83} {
+		readAudioPacket()
+		pkt.SetDts(astiav.NoPtsValue)
+		pkt.SetPts(pts)
+
+		require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+			"a packet with no DTS must get a synthesized monotonic DTS so the matroska muxer accepts it")
+
+		pkt.Unref()
+	}
+
+	require.NoError(t, outputFmt.WriteTrailer())
+
+	assert.Equal(t, int64(2), css.clampedCount,
+		"each missing-DTS packet must be recorded as a clamp")
+	assert.Greater(t, css.lastWrittenDts, int64(0),
+		"the synthesized DTS must advance strictly past the baseline packet's DTS")
 }

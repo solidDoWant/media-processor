@@ -214,27 +214,54 @@ func (css *copyStreamState) logClampSummary() {
 }
 
 // monotonicDtsClamp computes the DTS and PTS for an outgoing packet so that
-// (1) its DTS is strictly greater than the previous packet's DTS on the same
-// stream and (2) its PTS is not behind its own DTS. clamped is true when either
-// invariant had to be repaired. Pure function — no I/O, no logging — so it can
-// be unit-tested without a hardware encoder or a live FormatContext. Inputs and
-// outputs are in the muxer's stream timebase. AV_NOPTS_VALUE sentinels
-// short-circuit each repair (first-packet case and packets without DTS pass the
-// monotonicity check unchanged; packets without PTS skip the pts >= dts check).
+// (1) it carries a DTS at all, (2) that DTS is strictly greater than the
+// previous packet's DTS on the same stream, and (3) its PTS is not behind its
+// own DTS. clamped is true when any invariant had to be repaired. Pure
+// function — no I/O, no logging — so it can be unit-tested without a hardware
+// encoder or a live FormatContext. Inputs and outputs are in the muxer's stream
+// timebase.
 //
-// The pts >= dts repair matters independently of the DTS clamp: libavformat
-// rejects any packet with pts < dts (EINVAL, surfaced as "Invalid argument"),
-// and a source stream can carry such packets with an already-monotonic DTS — in
-// which case the monotonicity branch leaves the packet untouched and only this
-// second repair keeps the muxer happy. The ffmpeg CLI performs the same clamp
-// at its stream-output layer, which is why the CLI tolerates these sources.
-// Well-formed sources (pts >= dts, monotonic DTS) are returned unchanged, so
+// Three repairs, each independently necessary for the copy path to survive
+// real-world sources, all mirroring clamps the FFmpeg CLI performs at its
+// stream-output layer (which is why the CLI tolerates these sources):
+//
+//   - Missing DTS: a source packet can carry no DTS at all — seen on the leading
+//     reordered frames of some WEB-DL HEVC streams, where the demuxer cannot yet
+//     compute a decode time. Forwarding AV_NOPTS_VALUE to the muxer makes
+//     libavformat derive a DTS from the PTS, which on reordered B-frames runs
+//     backwards and is rejected ("non monotonically increasing dts"). We instead
+//     synthesize a monotonic DTS just past the previous one — mirroring the CLI's
+//     stream-copy path (of_streamcopy), which fills a running DTS estimate when
+//     the source DTS is absent. The first packet, having no prior anchor, falls
+//     back to its own PTS.
+//   - Non-monotonic DTS: an encoder (notably hevc_qsv on VFR sources) or a
+//     copy-path source can emit a DTS that regresses below the previous one;
+//     bump it just past.
+//   - PTS behind DTS: libavformat rejects any packet with pts < dts (EINVAL,
+//     surfaced as "Invalid argument"); a source can carry such packets with an
+//     already-monotonic DTS, so this repair stands on its own.
+//
+// matroska stores PTS as the block timecode and does not persist DTS, so the
+// synthesized/bumped DTS values are invisible in the output. Well-formed sources
+// (every packet has a DTS, DTS monotonic, pts >= dts) are returned unchanged, so
 // they still produce bit-identical output.
 func monotonicDtsClamp(lastWrittenDts, encDts, encPts int64) (newDts, newPts int64, clamped bool) {
 	newDts = encDts
 	newPts = encPts
 
-	if lastWrittenDts != astiav.NoPtsValue && encDts != astiav.NoPtsValue && encDts <= lastWrittenDts {
+	switch {
+	case encDts == astiav.NoPtsValue:
+		// Synthesize a DTS so the muxer never sees AV_NOPTS_VALUE. Advance past
+		// the previous packet when there is one; otherwise anchor to the PTS.
+		switch {
+		case lastWrittenDts != astiav.NoPtsValue:
+			newDts = lastWrittenDts + 1
+			clamped = true
+		case encPts != astiav.NoPtsValue:
+			newDts = encPts
+			clamped = true
+		}
+	case lastWrittenDts != astiav.NoPtsValue && encDts <= lastWrittenDts:
 		newDts = lastWrittenDts + 1
 		clamped = true
 	}
