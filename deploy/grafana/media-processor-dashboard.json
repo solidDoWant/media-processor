@@ -40,9 +40,19 @@
         "type": "datasource"
       },
       {
+        "current": { "selected": false, "text": "exported_namespace", "value": "exported_namespace" },
+        "description": "Prometheus label carrying the Temporal namespace. 'exported_namespace' matches the prod scrape, which relabels the colliding 'namespace' target label; change to 'namespace' if your scrape has no collision.",
+        "hide": 2,
+        "label": "Namespace label",
+        "name": "namespace_label",
+        "query": "exported_namespace",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
         "current": {},
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "definition": "label_values(media_worker_activity_enabled, namespace)",
+        "definition": "label_values(media_worker_activity_enabled, ${namespace_label})",
         "hide": 0,
         "includeAll": true,
         "allValue": ".*",
@@ -52,7 +62,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(media_worker_activity_enabled, namespace)",
+          "query": "label_values(media_worker_activity_enabled, ${namespace_label})",
           "refId": "namespace"
         },
         "refresh": 2,
@@ -172,7 +182,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(temporal_workflow_endtoend_latency_seconds_count{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval]))",
+          "expr": "sum(rate(temporal_workflow_endtoend_latency_seconds_count{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval]))",
           "legendFormat": "completed/s",
           "refId": "A"
         }
@@ -214,7 +224,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -257,7 +267,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_destination_file_size_bytes_sum{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) / sum(rate(media_workflow_source_file_size_bytes_sum{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_destination_file_size_bytes_sum{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) / sum(rate(media_workflow_source_file_size_bytes_sum{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "out/in",
           "refId": "A"
         }
@@ -301,7 +311,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\", hardware_accelerated=\"true\"}[$__rate_interval])) / sum(rate(media_workflow_transcode_duration_seconds_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\", hardware_accelerated=\"true\"}[$__rate_interval])) / sum(rate(media_workflow_transcode_duration_seconds_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "hw fraction",
           "refId": "A"
         }
@@ -342,7 +352,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_invalid_files_total{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_invalid_files_total{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "invalid/s",
           "refId": "A"
         }
@@ -391,21 +401,21 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -454,7 +464,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le, activity_type))",
+          "expr": "histogram_quantile(0.95, sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval])) by (le, activity_type))",
           "legendFormat": "{{activity_type}} p95",
           "refId": "A"
         }
@@ -511,14 +521,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_transcode_duration_seconds_bucket{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le, hardware_accelerated))",
+          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_transcode_duration_seconds_bucket{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le, hardware_accelerated))",
           "legendFormat": "p50 hw_accel={{hardware_accelerated}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(media_workflow_transcode_duration_seconds_bucket{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le, hardware_accelerated))",
+          "expr": "histogram_quantile(0.95, sum(rate(media_workflow_transcode_duration_seconds_bucket{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le, hardware_accelerated))",
           "legendFormat": "p95 hw_accel={{hardware_accelerated}}",
           "refId": "B"
         }
@@ -567,7 +577,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (hardware_accelerated)",
+          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (hardware_accelerated)",
           "legendFormat": "hw_accel={{hardware_accelerated}}",
           "refId": "A"
         }
@@ -616,14 +626,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_source_file_size_bytes_bucket{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_source_file_size_bytes_bucket{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le))",
           "legendFormat": "source p50",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_destination_file_size_bytes_bucket{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(media_workflow_destination_file_size_bytes_bucket{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (le))",
           "legendFormat": "destination p50",
           "refId": "B"
         }
@@ -656,7 +666,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (destination_codec)",
+          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (destination_codec)",
           "legendFormat": "{{destination_codec}}",
           "refId": "A"
         }
@@ -693,7 +703,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (mapping_name)",
+          "expr": "sum(rate(media_workflow_transcode_duration_seconds_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval])) by (mapping_name)",
           "legendFormat": "{{mapping_name}}",
           "refId": "A"
         }
@@ -750,7 +760,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(media_worker_transcode_slots_in_flight{namespace=~\"$namespace\", task_queue=~\"$task_queue\"})",
+          "expr": "sum(media_worker_transcode_slots_in_flight{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"})",
           "legendFormat": "in flight (total)",
           "refId": "A"
         }
@@ -801,8 +811,8 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "media_worker_transcode_load_utilization{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}",
-          "legendFormat": "{{namespace}}/{{task_queue}}",
+          "expr": "media_worker_transcode_load_utilization{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}",
+          "legendFormat": "{{${namespace_label}}}/{{task_queue}}",
           "refId": "A"
         }
       ],
@@ -850,7 +860,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_worker_transcode_slots_blocked_seconds_total{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_worker_transcode_slots_blocked_seconds_total{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}[$__rate_interval]))",
           "legendFormat": "blocked s/s",
           "refId": "A"
         }
@@ -904,7 +914,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(media_worker_transcode_admission_mode{namespace=~\"$namespace\", task_queue=~\"$task_queue\"} == 1) by (mode)",
+          "expr": "sum(media_worker_transcode_admission_mode{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"} == 1) by (mode)",
           "legendFormat": "{{mode}}",
           "refId": "A"
         }
@@ -953,8 +963,8 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "media_worker_idle_exit_seconds_remaining{namespace=~\"$namespace\", task_queue=~\"$task_queue\"}",
-          "legendFormat": "{{namespace}}/{{task_queue}}",
+          "expr": "media_worker_idle_exit_seconds_remaining{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"}",
+          "legendFormat": "{{${namespace_label}}}/{{task_queue}}",
           "refId": "A"
         }
       ],
@@ -1010,35 +1020,35 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_invalid_files_total{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_invalid_files_total{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "invalid files",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_import_skipped_not_in_library_total{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_import_skipped_not_in_library_total{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "import skipped: not in library",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_import_skipped_not_upgrade_total{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_import_skipped_not_upgrade_total{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}[$__rate_interval]))",
           "legendFormat": "import skipped: not an upgrade",
           "refId": "C"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_artwork_fetch_skipped_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_artwork_fetch_skipped_total{${namespace_label}=~\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "artwork fetch skipped",
           "refId": "D"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum(rate(media_workflow_metrics_errors_total{namespace=~\"$namespace\"}[$__rate_interval]))",
+          "expr": "sum(rate(media_workflow_metrics_errors_total{${namespace_label}=~\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "metrics lookup errors",
           "refId": "E"
         }
@@ -1087,14 +1097,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "max(media_workflow_audio_track_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}) by (media_type)",
+          "expr": "max(media_workflow_audio_track_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}) by (media_type)",
           "legendFormat": "audio tracks ({{media_type}})",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "max(media_workflow_subtitle_track_count{namespace=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}) by (media_type)",
+          "expr": "max(media_workflow_subtitle_track_count{${namespace_label}=~\"$namespace\", mapping_name=~\"$mapping_name\", media_type=~\"$media_type\"}) by (media_type)",
           "legendFormat": "subtitle tracks ({{media_type}})",
           "refId": "B"
         }
@@ -1372,7 +1382,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum by (activity) (media_worker_activity_enabled{namespace=~\"$namespace\", task_queue=~\"$task_queue\"} == 1)",
+          "expr": "sum by (activity) (media_worker_activity_enabled{${namespace_label}=~\"$namespace\", task_queue=~\"$task_queue\"} == 1)",
           "legendFormat": "{{activity}}",
           "refId": "A"
         }

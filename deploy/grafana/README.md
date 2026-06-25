@@ -23,6 +23,14 @@ The dashboard is organised into rows:
 
 `namespace`, `task_queue`, `mapping_name`, and `media_type` are populated from label values and default to *All*. Use them to scope the view to a single Temporal namespace/task queue or a single watch mapping.
 
+### Namespace label name (`namespace_label`)
+
+The Temporal SDK emits a `namespace` label, but Prometheus renames a scraped label to `exported_namespace` when it collides with a target label of the same name (commonly the Kubernetes pod namespace applied during service discovery). To stay portable, every query references the namespace through a hidden `constant` variable (`namespace_label`) rather than a hard-coded label name.
+
+The committed value is `exported_namespace`, matching the prod scrape. It is a hidden variable, not a user-facing dropdown. If your environment has no collision (the scraped label is preserved as-is), change the `namespace_label` constant's `query`/`current` value to `namespace`.
+
+If you import the dashboard into multiple environments that disagree on the label name, render an environment-specific copy at publish time (e.g. `jq`/`envsubst` rewriting that one value) rather than editing the variable in each place — the grafana-operator does not substitute non-datasource inputs for raw-JSON (`url`/`json`/`configMapRef`) dashboard sources.
+
 ## Notes
 
 - Temporal SDK panels (end-to-end latency, schedule-to-start latency) depend on the Temporal Go SDK Prometheus instruments. The exact instrument set varies by SDK version — see the [Temporal SDK metrics reference](https://docs.temporal.io/references/sdk-metrics).
