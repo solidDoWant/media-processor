@@ -180,11 +180,13 @@ func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
 	}
 
 	if css.clampedCount == 0 {
-		slog.Warn("ffmpeg: clamping non-monotonic DTS",
+		slog.Warn("ffmpeg: clamping packet timestamps",
 			slog.Int("stream", css.outStream.Index()),
 			slog.Int64("packet_dts", pkt.Dts()),
 			slog.Int64("previous_dts", css.lastWrittenDts),
 			slog.Int64("corrected_dts", newDts),
+			slog.Int64("packet_pts", pkt.Pts()),
+			slog.Int64("corrected_pts", newPts),
 		)
 	}
 
@@ -205,7 +207,7 @@ func (css *copyStreamState) logClampSummary() {
 		return
 	}
 
-	slog.Warn("ffmpeg: clamped non-monotonic DTS on stream",
+	slog.Warn("ffmpeg: clamped packet timestamps on stream",
 		slog.Int("stream", css.outStream.Index()),
 		slog.Int64("total_clamps", css.clampedCount),
 	)
