@@ -99,6 +99,33 @@ func TestMonotonicDtsClamp(t *testing.T) {
 			wantPts:        astiav.NoPtsValue,
 			wantClamped:    true,
 		},
+		{
+			name:           "monotonic DTS but PTS behind DTS — PTS clamped up to DTS",
+			lastWrittenDts: 100,
+			encDts:         150,
+			encPts:         120,
+			wantDts:        150,
+			wantPts:        150,
+			wantClamped:    true,
+		},
+		{
+			name:           "first packet with PTS behind DTS — PTS clamped up to DTS",
+			lastWrittenDts: astiav.NoPtsValue,
+			encDts:         150,
+			encPts:         120,
+			wantDts:        150,
+			wantPts:        150,
+			wantClamped:    true,
+		},
+		{
+			name:           "monotonic DTS and PTS ahead — pass through unchanged",
+			lastWrittenDts: 100,
+			encDts:         150,
+			encPts:         300,
+			wantDts:        150,
+			wantPts:        300,
+			wantClamped:    false,
+		},
 	}
 
 	for _, test := range tests {
@@ -150,7 +177,10 @@ func TestMonotonicDtsClamp_FMABFailureSequence(t *testing.T) {
 		lastWritten = newDts
 	}
 
-	assert.Equal(t, 3, clampedCount, "clamp must fire on every regressing packet")
+	// Three packets regress the DTS, and one earlier packet ({dts: 400113,
+	// pts: 400071}) carries a PTS behind its own (already-monotonic) DTS — the
+	// clamp repairs that too so the muxer does not reject it with EINVAL.
+	assert.Equal(t, 4, clampedCount, "clamp must fire on every regressing or pts-behind-dts packet")
 
 	for i := 1; i < len(muxedDts); i++ {
 		assert.Greater(t, muxedDts[i], muxedDts[i-1],
@@ -277,4 +307,111 @@ func TestCopyStreamState_processPacket_RepairsNonMonotonicSourceDts(t *testing.T
 		"copyStreamState.lastWrittenDts must advance strictly past the previous packet's DTS after the repair")
 	assert.Equal(t, int64(2), css.clampedCount,
 		"clampedCount must accumulate across every repaired packet so the summary log reflects the true total")
+}
+
+// TestCopyStreamState_processPacket_RepairsPtsBehindDts verifies that the
+// pure-copy packet path repairs a packet whose PTS is behind its own DTS
+// before submitting it to the muxer, even when the DTS is monotonic (so the
+// non-monotonic-DTS clamp does not fire). libavformat rejects a packet with
+// pts < dts with EINVAL ("Invalid argument") in av_interleaved_write_frame.
+//
+// The motivating production failure is a copied HEVC video stream (stream 0)
+// of a 2160p WEB-DL whose authored packet timestamps include pts < dts. The
+// ffmpeg CLI tolerates this by clamping pts up to dts at its stream-output
+// layer; our in-process transcoder reaches the muxer directly, so the activity
+// failed with "ffmpeg: writing remuxed packet for stream 0: Invalid argument".
+// The DTS here is strictly increasing, so the existing non-monotonic-DTS clamp
+// leaves the packet untouched — only the dedicated pts >= dts repair prevents
+// the rejection.
+func TestCopyStreamState_processPacket_RepairsPtsBehindDts(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.mkv")
+
+	inputFmt := astiav.AllocFormatContext()
+	require.NotNil(t, inputFmt)
+
+	defer inputFmt.Free()
+
+	require.NoError(t, inputFmt.OpenInput("testdata/video_with_subrip_subtitle.mkv", nil, nil))
+	defer inputFmt.CloseInput()
+
+	require.NoError(t, inputFmt.FindStreamInfo(nil))
+
+	var inAudioStream *astiav.Stream
+
+	for _, stream := range inputFmt.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
+			inAudioStream = stream
+			break
+		}
+	}
+
+	require.NotNil(t, inAudioStream, "test fixture must carry an audio stream")
+
+	outputFmt, err := astiav.AllocOutputFormatContext(nil, "matroska", outputPath)
+	require.NoError(t, err)
+
+	defer outputFmt.Free()
+
+	outStream := outputFmt.NewStream(nil)
+	require.NotNil(t, outStream)
+	require.NoError(t, inAudioStream.CodecParameters().Copy(outStream.CodecParameters()))
+	outStream.CodecParameters().SetCodecTag(0)
+	outStream.SetTimeBase(inAudioStream.TimeBase())
+
+	ioCtx, err := astiav.OpenIOContext(outputPath, astiav.NewIOContextFlags(astiav.IOContextFlagWrite), nil, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = ioCtx.Close() }()
+
+	outputFmt.SetPb(ioCtx)
+
+	require.NoError(t, outputFmt.WriteHeader(nil))
+
+	css := &copyStreamState{inStream: inAudioStream}
+	css.setOutputStream(outStream)
+
+	pkt := astiav.AllocPacket()
+	defer pkt.Free()
+
+	readAudioPacket := func() {
+		t.Helper()
+
+		for {
+			err := inputFmt.ReadFrame(pkt)
+			require.NoError(t, err, "input must supply enough audio packets for the test")
+
+			if pkt.StreamIndex() == inAudioStream.Index() {
+				return
+			}
+
+			pkt.Unref()
+		}
+	}
+
+	// First packet: well-formed (pts == dts), establishes the baseline DTS.
+	readAudioPacket()
+	pkt.SetDts(100)
+	pkt.SetPts(100)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"first packet (pts == dts) must be accepted by the muxer")
+
+	pkt.Unref()
+
+	// Second packet: DTS is strictly monotonic (150 > 100) so the
+	// non-monotonic-DTS clamp does not fire, but PTS (120) is behind DTS (150).
+	// Without the pts >= dts repair the matroska muxer rejects this with EINVAL.
+	readAudioPacket()
+	pkt.SetDts(150)
+	pkt.SetPts(120)
+
+	require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+		"a packet whose PTS is behind its monotonic DTS must be repaired so the matroska muxer accepts it")
+
+	pkt.Unref()
+
+	assert.Equal(t, int64(1), css.clampedCount,
+		"the pts < dts repair must be recorded as a clamp")
+
+	require.NoError(t, outputFmt.WriteTrailer())
 }

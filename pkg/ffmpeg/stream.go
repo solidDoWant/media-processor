@@ -163,14 +163,16 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 	}
 }
 
-// repairNonMonotonicDts rewrites pkt's DTS (and PTS, if needed to keep
-// DTS <= PTS) so that it is strictly greater than the last DTS written to the
-// output stream. Mirrors the clamp in fftools/ffmpeg_mux.c::mux_fixup_ts that
-// lets the FFmpeg CLI tolerate non-monotonic DTS — both from encoders that
-// emit out-of-order DTS (notably hevc_qsv on VFR sources) and from copy-path
-// sources whose authored timestamps regress. No-op on the first packet, on
-// packets without a DTS value, or when the incoming DTS is already
-// monotonic — so well-formed sources produce bit-identical output.
+// repairNonMonotonicDts rewrites pkt's DTS so that it is strictly greater than
+// the last DTS written to the output stream, and rewrites pkt's PTS so that it
+// is never behind its own DTS. Mirrors the clamp in
+// fftools/ffmpeg_mux.c::mux_fixup_ts that lets the FFmpeg CLI tolerate both
+// non-monotonic DTS — from encoders that emit out-of-order DTS (notably
+// hevc_qsv on VFR sources) and from copy-path sources whose authored timestamps
+// regress — and packets whose authored PTS sits behind their DTS, which
+// libavformat otherwise rejects with EINVAL ("Invalid argument"). No-op when
+// the incoming DTS is already monotonic and its PTS is not behind it — so
+// well-formed sources produce bit-identical output.
 func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
 	newDts, newPts, clamped := monotonicDtsClamp(css.lastWrittenDts, pkt.Dts(), pkt.Pts())
 	if !clamped {
@@ -178,11 +180,13 @@ func (css *copyStreamState) repairNonMonotonicDts(pkt *astiav.Packet) {
 	}
 
 	if css.clampedCount == 0 {
-		slog.Warn("ffmpeg: clamping non-monotonic DTS",
+		slog.Warn("ffmpeg: clamping packet timestamps",
 			slog.Int("stream", css.outStream.Index()),
 			slog.Int64("packet_dts", pkt.Dts()),
 			slog.Int64("previous_dts", css.lastWrittenDts),
 			slog.Int64("corrected_dts", newDts),
+			slog.Int64("packet_pts", pkt.Pts()),
+			slog.Int64("corrected_pts", newPts),
 		)
 	}
 
@@ -203,32 +207,44 @@ func (css *copyStreamState) logClampSummary() {
 		return
 	}
 
-	slog.Warn("ffmpeg: clamped non-monotonic DTS on stream",
+	slog.Warn("ffmpeg: clamped packet timestamps on stream",
 		slog.Int("stream", css.outStream.Index()),
 		slog.Int64("total_clamps", css.clampedCount),
 	)
 }
 
 // monotonicDtsClamp computes the DTS and PTS for an outgoing packet so that
-// its DTS is strictly greater than the previous packet's DTS on the same
-// stream. clamped is true when the encoder's DTS was non-monotonic and had to
-// be rewritten. Pure function — no I/O, no logging — so it can be unit-tested
-// without a hardware encoder or a live FormatContext. Inputs and outputs are
-// in the muxer's stream timebase. AV_NOPTS_VALUE sentinels short-circuit the
-// clamp (first-packet case and packets without DTS pass through unchanged).
+// (1) its DTS is strictly greater than the previous packet's DTS on the same
+// stream and (2) its PTS is not behind its own DTS. clamped is true when either
+// invariant had to be repaired. Pure function — no I/O, no logging — so it can
+// be unit-tested without a hardware encoder or a live FormatContext. Inputs and
+// outputs are in the muxer's stream timebase. AV_NOPTS_VALUE sentinels
+// short-circuit each repair (first-packet case and packets without DTS pass the
+// monotonicity check unchanged; packets without PTS skip the pts >= dts check).
+//
+// The pts >= dts repair matters independently of the DTS clamp: libavformat
+// rejects any packet with pts < dts (EINVAL, surfaced as "Invalid argument"),
+// and a source stream can carry such packets with an already-monotonic DTS — in
+// which case the monotonicity branch leaves the packet untouched and only this
+// second repair keeps the muxer happy. The ffmpeg CLI performs the same clamp
+// at its stream-output layer, which is why the CLI tolerates these sources.
+// Well-formed sources (pts >= dts, monotonic DTS) are returned unchanged, so
+// they still produce bit-identical output.
 func monotonicDtsClamp(lastWrittenDts, encDts, encPts int64) (newDts, newPts int64, clamped bool) {
-	if lastWrittenDts == astiav.NoPtsValue || encDts == astiav.NoPtsValue || encDts > lastWrittenDts {
-		return encDts, encPts, false
-	}
-
-	newDts = lastWrittenDts + 1
+	newDts = encDts
 	newPts = encPts
 
-	if encPts != astiav.NoPtsValue && encPts < newDts {
-		newPts = newDts
+	if lastWrittenDts != astiav.NoPtsValue && encDts != astiav.NoPtsValue && encDts <= lastWrittenDts {
+		newDts = lastWrittenDts + 1
+		clamped = true
 	}
 
-	return newDts, newPts, true
+	if newDts != astiav.NoPtsValue && newPts != astiav.NoPtsValue && newPts < newDts {
+		newPts = newDts
+		clamped = true
+	}
+
+	return newDts, newPts, clamped
 }
 
 // sendProgress emits a non-blocking progress update on ch.
