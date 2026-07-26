@@ -77,6 +77,13 @@ type copyStreamState struct {
 	// clamp on a stream logs a detailed warn line, and logClampSummary later
 	// emits the total. Pathological sources can regress on thousands of packets.
 	clampedCount int64
+	// requireADTSFrames makes processPacket discard packets that are not
+	// well-formed ADTS frames. Set only for AAC copy streams carrying no
+	// extradata; see needsADTSFraming.
+	requireADTSFrames bool
+	// droppedCount counts packets discarded by dropMalformedADTS, and caps its
+	// log volume the same way clampedCount does for the DTS repair.
+	droppedCount int64
 }
 
 func (css *copyStreamState) inputStream() *astiav.Stream  { return css.inStream }
@@ -85,12 +92,17 @@ func (css *copyStreamState) setOutputStream(out *astiav.Stream) {
 	css.outStream = out
 	css.lastWrittenDts = astiav.NoPtsValue
 	css.clampedCount = 0
+	css.droppedCount = 0
 }
 
 func (css *copyStreamState) setupEncoder(_ HWAccel, _ *astiav.FormatContext) error { return nil }
 func (css *copyStreamState) encoderContext() *astiav.CodecContext                  { return nil }
 
 func (css *copyStreamState) processPacket(packet *astiav.Packet, outputFmt *astiav.FormatContext, progressCh chan<- Progress, totalDuration int64) error {
+	if css.dropMalformedADTS(packet) {
+		return nil
+	}
+
 	packet.RescaleTs(css.inStream.TimeBase(), css.outStream.TimeBase())
 	packet.SetStreamIndex(css.outStream.Index())
 	css.repairNonMonotonicDts(packet)
@@ -125,6 +137,7 @@ func (css *copyStreamState) applyOutputOverrides(_ *astiav.Stream) error { retur
 // summary is emitted exactly once per stream.
 func (css *copyStreamState) free() {
 	css.logClampSummary()
+	css.logDropSummary()
 }
 
 // receiveAndWritePackets drains encoded packets from the encoder context and
@@ -161,6 +174,80 @@ func (css *copyStreamState) receiveAndWritePackets(encCtx *astiav.CodecContext, 
 
 		encPkt.Unref()
 	}
+}
+
+// adtsHeaderSize is the length in bytes of an ADTS frame header without the
+// optional 2-byte CRC. It is the smallest payload that can carry the profile,
+// sampling-frequency index, and channel configuration that the ADTS → ASC
+// conversion needs.
+const adtsHeaderSize = 7
+
+// isADTSFrame reports whether payload begins with an ADTS frame header: the
+// 12-bit syncword 0xFFF in the top bits of the first two bytes, followed by
+// enough bytes to hold the rest of the fixed header.
+func isADTSFrame(payload []byte) bool {
+	return len(payload) >= adtsHeaderSize && payload[0] == 0xFF && payload[1]&0xF0 == 0xF0
+}
+
+// needsADTSFraming reports whether a stream copied with these codec parameters
+// must have its packets validated as ADTS frames before they reach the muxer.
+//
+// AAC carried in MPEG-TS is ADTS-framed and so has no AudioSpecificConfig
+// extradata, which matroska (and mp4) require in order to record the track's
+// sample rate. libavformat covers that gap by auto-inserting the
+// aac_adtstoasc bitstream filter, which derives the config from an ADTS header
+// and hands it to the muxer as new extradata — but the matroska muxer only
+// arms that filter when the *first* packet submitted for the stream carries an
+// ADTS syncword (mkv_check_bitstream). Every packet after it must be
+// ADTS-framed too, since the filter treats an unparsable header as fatal.
+//
+// An AAC stream that already carries extradata (any mp4/matroska source) holds
+// raw AAC frames with no syncword, so it must be left alone — filtering there
+// would discard the entire track.
+func needsADTSFraming(params *astiav.CodecParameters) bool {
+	return params.CodecID() == astiav.CodecIDAac && len(params.ExtraData()) == 0
+}
+
+// dropMalformedADTS discards pkt when the stream requires ADTS framing and pkt
+// is not a well-formed ADTS frame, reporting whether it did so. It only ever
+// fires on streams flagged by needsADTSFraming.
+//
+// The motivating source is an off-air MPEG-TS recording whose capture began
+// mid-frame: the demuxer's AAC parser emits everything preceding the first
+// syncword as a packet of its own, so the stream opens with a fragment of an
+// ADTS frame. That fragment is undecodable audio on its own, and forwarding it
+// leaves matroska with no way to learn the sample rate — the muxer then rejects
+// the first packet it is asked to write with EINVAL ("Invalid argument").
+// Dropping it lets the auto-inserted filter arm on the first intact frame.
+func (css *copyStreamState) dropMalformedADTS(pkt *astiav.Packet) bool {
+	if !css.requireADTSFrames || isADTSFrame(pkt.Data()) {
+		return false
+	}
+
+	if css.droppedCount == 0 {
+		slog.Warn("ffmpeg: dropping packet that is not a well-formed ADTS frame",
+			slog.Int("stream", css.outStream.Index()),
+			slog.Int("packet_size", pkt.Size()),
+			slog.Int64("packet_dts", pkt.Dts()),
+		)
+	}
+
+	css.droppedCount++
+
+	return true
+}
+
+// logDropSummary mirrors logClampSummary: the single-drop case is skipped
+// because dropMalformedADTS already logged that packet in detail.
+func (css *copyStreamState) logDropSummary() {
+	if css.droppedCount <= 1 || css.outStream == nil {
+		return
+	}
+
+	slog.Warn("ffmpeg: dropped packets that were not well-formed ADTS frames on stream",
+		slog.Int("stream", css.outStream.Index()),
+		slog.Int64("total_dropped", css.droppedCount),
+	)
 }
 
 // repairNonMonotonicDts rewrites pkt's DTS so that it is strictly greater than

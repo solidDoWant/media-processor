@@ -618,7 +618,10 @@ func (t *Transcoder) buildStreamStates(inputFmt *astiav.FormatContext, hwAccel H
 					sourceTimeBase:  inStream.TimeBase(),
 				}
 			} else {
-				s = &copyStreamState{inStream: inStream}
+				s = &copyStreamState{
+					inStream:          inStream,
+					requireADTSFrames: needsADTSFraming(inStream.CodecParameters()),
+				}
 			}
 		}
 

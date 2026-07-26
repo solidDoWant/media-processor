@@ -598,3 +598,245 @@ func TestCopyStreamState_processPacket_SynthesizesMissingDts(t *testing.T) {
 	assert.Greater(t, css.lastWrittenDts, int64(0),
 		"the synthesized DTS must advance strictly past the baseline packet's DTS")
 }
+
+// testADTSAACSourcePath is an MPEG-TS clip whose AAC track is ADTS-framed and
+// therefore carries no AudioSpecificConfig extradata — the shape every off-air
+// TS recording has. See testdata/README.md.
+const testADTSAACSourcePath = "testdata/video_adts_aac.ts"
+
+// firstAudioStream returns the first audio stream of an opened input, failing
+// the test when the fixture has none.
+func firstAudioStream(t *testing.T, inputFmt *astiav.FormatContext) *astiav.Stream {
+	t.Helper()
+
+	for _, stream := range inputFmt.Streams() {
+		if stream.CodecParameters().MediaType() == astiav.MediaTypeAudio {
+			return stream
+		}
+	}
+
+	require.FailNow(t, "test fixture must carry an audio stream")
+
+	return nil
+}
+
+// TestIsADTSFrame covers the syncword check that decides whether a copied AAC
+// packet is a frame the ADTS → AudioSpecificConfig conversion can parse. The
+// syncword is the top 12 bits of the first two bytes, so the low nibble of the
+// second byte (MPEG version, layer, protection-absent) must not participate.
+func TestIsADTSFrame(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		expected bool
+	}{
+		{
+			name:     "MPEG-4 ADTS frame without CRC",
+			payload:  []byte{0xFF, 0xF1, 0x50, 0x40, 0x23, 0xFF, 0xFC},
+			expected: true,
+		},
+		{
+			name:     "MPEG-2 ADTS frame with CRC",
+			payload:  []byte{0xFF, 0xF8, 0x4C, 0xA0, 0x52, 0x41, 0x6C},
+			expected: true,
+		},
+		{
+			name:     "fragment of a frame captured mid-stream",
+			payload:  []byte{0xD3, 0xAF, 0x79, 0x5B, 0x46, 0xEF, 0xFA, 0x69},
+			expected: false,
+		},
+		{
+			name:     "syncword truncated to a header too short to parse",
+			payload:  []byte{0xFF, 0xF1, 0x50, 0x40, 0x23, 0xFF},
+			expected: false,
+		},
+		{
+			name:     "raw AAC frame from a matroska or mp4 source",
+			payload:  []byte{0x21, 0x1A, 0x8F, 0x20, 0x63, 0xC0, 0x00},
+			expected: false,
+		},
+		{
+			name:     "empty payload",
+			payload:  nil,
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.expected, isADTSFrame(test.payload))
+		})
+	}
+}
+
+// TestNeedsADTSFraming verifies which copied AAC streams get their packets
+// validated as ADTS frames. The distinction is the presence of extradata: an
+// ADTS-framed source has none, while an mp4/matroska source carries the
+// AudioSpecificConfig and holds raw AAC frames that would all be discarded if
+// they were held to the syncword check.
+func TestNeedsADTSFraming(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "ADTS AAC in MPEG-TS has no extradata",
+			path:     testADTSAACSourcePath,
+			expected: true,
+		},
+		{
+			name:     "AAC in matroska carries its AudioSpecificConfig",
+			path:     "testdata/video_with_subrip_subtitle.mkv",
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputFmt := astiav.AllocFormatContext()
+			require.NotNil(t, inputFmt)
+
+			defer inputFmt.Free()
+
+			require.NoError(t, inputFmt.OpenInput(test.path, nil, nil))
+			defer inputFmt.CloseInput()
+
+			require.NoError(t, inputFmt.FindStreamInfo(nil))
+
+			assert.Equal(t, test.expected,
+				needsADTSFraming(firstAudioStream(t, inputFmt).CodecParameters()))
+		})
+	}
+}
+
+// TestCopyStreamState_processPacket_DropsPartialLeadingADTSFrame verifies that
+// the copy path discards a leading packet that is not a well-formed ADTS frame
+// so that the AAC track still reaches matroska with a usable sample rate.
+//
+// The motivating production failure is an off-air MPEG-TS recording whose
+// capture began mid-frame. The demuxer's AAC parser emits everything before the
+// first syncword as a packet of its own, so the stream opens with a fragment of
+// an ADTS frame. matroska needs an AudioSpecificConfig to record the track's
+// sample rate and gets it by auto-inserting the aac_adtstoasc bitstream filter
+// — but only when the first packet submitted for the stream carries a syncword.
+// The fragment suppressed that, leaving the muxer with no sample rate, and it
+// rejected the first packet it was asked to write with EINVAL ("Invalid
+// argument"). Because the muxer interleaves, that rejection surfaced on an
+// unrelated stream's write, as "ffmpeg: writing encoded packet: Invalid
+// argument" from the video encoder.
+func TestCopyStreamState_processPacket_DropsPartialLeadingADTSFrame(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "out.mkv")
+
+	inputFmt := astiav.AllocFormatContext()
+	require.NotNil(t, inputFmt)
+
+	defer inputFmt.Free()
+
+	require.NoError(t, inputFmt.OpenInput(testADTSAACSourcePath, nil, nil))
+	defer inputFmt.CloseInput()
+
+	require.NoError(t, inputFmt.FindStreamInfo(nil))
+
+	inAudioStream := firstAudioStream(t, inputFmt)
+	require.Empty(t, inAudioStream.CodecParameters().ExtraData(),
+		"fixture's AAC track must be ADTS-framed, so it carries no extradata")
+
+	outputFmt, err := astiav.AllocOutputFormatContext(nil, "matroska", outputPath)
+	require.NoError(t, err)
+
+	defer outputFmt.Free()
+
+	outStream := outputFmt.NewStream(nil)
+	require.NotNil(t, outStream)
+	require.NoError(t, inAudioStream.CodecParameters().Copy(outStream.CodecParameters()))
+	outStream.CodecParameters().SetCodecTag(0)
+	outStream.SetTimeBase(inAudioStream.TimeBase())
+
+	ioCtx, err := astiav.OpenIOContext(outputPath, astiav.NewIOContextFlags(astiav.IOContextFlagWrite), nil, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = ioCtx.Close() }()
+
+	outputFmt.SetPb(ioCtx)
+
+	require.NoError(t, outputFmt.WriteHeader(nil))
+
+	css := &copyStreamState{
+		inStream:          inAudioStream,
+		requireADTSFrames: needsADTSFraming(inAudioStream.CodecParameters()),
+	}
+	css.setOutputStream(outStream)
+
+	pkt := astiav.AllocPacket()
+	defer pkt.Free()
+
+	readAudioPacket := func() bool {
+		t.Helper()
+
+		for {
+			if err := inputFmt.ReadFrame(pkt); err != nil {
+				return false
+			}
+
+			if pkt.StreamIndex() == inAudioStream.Index() {
+				return true
+			}
+
+			pkt.Unref()
+		}
+	}
+
+	// Rebuild the leading fragment the demuxer produces from a mid-frame
+	// capture: a real ADTS frame with its header sliced off, so the payload
+	// starts partway into the frame and carries no syncword.
+	require.True(t, readAudioPacket(), "fixture must supply at least one audio packet")
+
+	fragment := astiav.AllocPacket()
+	require.NotNil(t, fragment)
+
+	defer fragment.Free()
+
+	require.NoError(t, fragment.CopyProperties(pkt))
+	require.NoError(t, fragment.FromData(pkt.Data()[adtsHeaderSize+1:]))
+
+	pkt.Unref()
+
+	require.NoError(t, css.processPacket(fragment, outputFmt, nil, 0),
+		"a leading packet that is not a well-formed ADTS frame must be dropped, not muxed")
+
+	written := 0
+
+	for readAudioPacket() {
+		require.NoError(t, css.processPacket(pkt, outputFmt, nil, 0),
+			"every intact ADTS frame must be accepted by the muxer")
+
+		written++
+
+		pkt.Unref()
+	}
+
+	require.NoError(t, outputFmt.WriteTrailer())
+
+	assert.Equal(t, int64(1), css.droppedCount,
+		"only the malformed leading packet must be dropped")
+	assert.Positive(t, written, "the intact frames must still reach the muxer")
+
+	// The muxed track must carry the AudioSpecificConfig that the ADTS
+	// conversion derived; without it players have no sample rate to decode with.
+	muxedFmt := astiav.AllocFormatContext()
+	require.NotNil(t, muxedFmt)
+
+	defer muxedFmt.Free()
+
+	require.NoError(t, muxedFmt.OpenInput(outputPath, nil, nil))
+	defer muxedFmt.CloseInput()
+
+	require.NoError(t, muxedFmt.FindStreamInfo(nil))
+
+	muxedAudio := firstAudioStream(t, muxedFmt)
+	assert.NotEmpty(t, muxedAudio.CodecParameters().ExtraData(),
+		"matroska output must carry the AAC AudioSpecificConfig")
+	assert.Equal(t, inAudioStream.CodecParameters().SampleRate(), muxedAudio.CodecParameters().SampleRate(),
+		"muxed track must record the source sample rate")
+}

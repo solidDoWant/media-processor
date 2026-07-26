@@ -85,6 +85,22 @@ ffmpeg -y -i main.mp4 -i sub.srt -map 0 -map 1 -c copy -c:s srt \
        pkg/ffmpeg/testdata/video_with_subrip_subtitle.mkv
 ```
 
+## video_adts_aac.ts
+
+A synthetic MPEG-TS with a 0.5 s 160x120 H.264 video and a 0.5 s AAC audio track. Unlike the mp4 and matroska fixtures, the AAC here is ADTS-framed, so the track carries no `AudioSpecificConfig` extradata — the shape every off-air TS recording has. matroska needs that config to record the track's sample rate and derives it by auto-inserting the `aac_adtstoasc` bitstream filter, but only when the first packet submitted for the stream starts with an ADTS syncword. Used to regression-test that a leading packet which is *not* a well-formed ADTS frame (what the demuxer's AAC parser emits when a capture began mid-frame) is dropped instead of suppressing that filter and leaving the muxer to reject packets with "Invalid argument".
+
+Generation command:
+
+```bash
+ffmpeg -y -f lavfi -i color=c=blue:s=160x120:rate=24:duration=0.5 \
+       -f lavfi -i sine=frequency=440:duration=0.5 \
+       -c:v libx264 -preset ultrafast -crf 35 -pix_fmt yuv420p \
+       -c:a aac -b:a 64k \
+       pkg/ffmpeg/testdata/video_adts_aac.ts
+```
+
+The fixture's packets are all intact frames; the malformed leading packet is rebuilt in the test by slicing the header off a real one, so the regression is precisely controlled rather than dependent on a hand-built transport stream.
+
 ## video_with_data_stream.mp4
 
 A synthetic mp4 with a 0.5 s 160x120 H.264 video, a 0.5 s AAC audio track, and a QuickTime timecode (`tmcd`) track that ffmpeg surfaces as a data stream (`codec_type=data`). matroska's track muxer rejects anything other than audio/video/subtitle ("Only audio, video, and subtitles are supported for Matroska"), so this fixture regression-tests that the transcoder drops matroska-incompatible streams instead of letting them reach WriteHeader. The same data-stream class shows up in many real-world mp4 sources as `bin_data` from QuickTime metadata, chapter, or index tracks.

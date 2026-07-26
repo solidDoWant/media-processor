@@ -3,6 +3,7 @@
 package media
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,17 @@ func dialTemporal(t *testing.T) (client.Client, string) {
 func newTestActivities(t *testing.T, taskQueue string, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) *Activities {
 	t.Helper()
 
-	a, err := NewActivities(MediaWorkflowConfig{TaskQueuePrefix: taskQueue}, radarr, sonarr, wh)
+	return newTestActivitiesWithConfig(t, MediaWorkflowConfig{TaskQueuePrefix: taskQueue}, radarr, sonarr, wh)
+}
+
+// newTestActivitiesWithConfig builds an *Activities from an explicit config, for
+// tests that need to override a default NewActivities would otherwise fill in —
+// e.g. the Notify retry policy, whose production schedule spans ~9 minutes and
+// is far too slow for a test that deliberately fails the import.
+func newTestActivitiesWithConfig(t *testing.T, cfg MediaWorkflowConfig, radarr, sonarr medialib.ArrLibrary, wh *webhook.Client) *Activities {
+	t.Helper()
+
+	a, err := NewActivities(cfg, radarr, sonarr, wh)
 	require.NoError(t, err)
 
 	return a
@@ -325,7 +336,40 @@ func TestMediaWorkflow_SplitWorkers_TranscodeOnDedicatedPool(t *testing.T) {
 	require.Len(t, restPoolRadarr.importCalls, 1, "Notify must run exactly once on the rest pool")
 }
 
-func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
+// TestMediaWorkflow_NotifyFailureCausesWorkflowToFail covers a library import
+// that fails for a reason the arr service could still recover from (here, an
+// unreachable service). Once the retry budget is exhausted the workflow fails
+// and the source file is left in place so a later run can reprocess it. The
+// retry budget is pinned to a single attempt because the production default
+// retries for ~9 minutes.
+func TestMediaWorkflow_NotifyFailureCausesWorkflowToFail(t *testing.T) {
+	if os.Getenv("TEMPORAL_ADDRESS") == "" {
+		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")
+	}
+
+	c, taskQueue := dialTemporal(t)
+
+	inputPath := copyTestVideo(t)
+	outputDir := t.TempDir()
+
+	radarrStub := &stubLibraryClient{err: errors.New("radarr unreachable")}
+	cfg := MediaWorkflowConfig{TaskQueuePrefix: taskQueue, NotifyMaximumAttempts: 1}
+	a := newTestActivitiesWithConfig(t, cfg, radarrStub, &stubLibraryClient{}, &webhook.Client{})
+	startMediaWorker(t, c, taskQueue, a)
+
+	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
+	assert.Error(t, err, "workflow should fail when the library import fails")
+
+	_, statErr := os.Stat(inputPath)
+	assert.NoError(t, statErr, "source file should not be deleted when notify fails")
+}
+
+// TestMediaWorkflow_NotInLibrarySkipsImportAndCompletes covers the benign-skip
+// path end-to-end: when the arr service reports the media item is no longer in
+// its library, the import can never succeed, so the workflow completes without
+// failing, the source is cleaned up as usual, and the orphaned transcoded
+// output — which a successful import would have consumed — is removed.
+func TestMediaWorkflow_NotInLibrarySkipsImportAndCompletes(t *testing.T) {
 	if os.Getenv("TEMPORAL_ADDRESS") == "" {
 		t.Skip("TEMPORAL_ADDRESS not set; bring up a Temporal server first")
 	}
@@ -340,8 +384,14 @@ func TestMediaWorkflow_RefreshFailureCausesWorkflowToFail(t *testing.T) {
 	startMediaWorker(t, c, taskQueue, a)
 
 	err := runMediaWorkflow(t, c, taskQueue, MediaInput{FilePath: inputPath, MediaType: medialib.MovieType, OutputPath: outputDir})
-	assert.Error(t, err, "workflow should fail when the movie is not found in Radarr")
+	require.NoError(t, err, "a media item no longer in the library is a benign skip, not a workflow failure")
+
+	require.Len(t, radarrStub.importCalls, 1, "the import should be attempted exactly once, with no retry")
 
 	_, statErr := os.Stat(inputPath)
-	assert.NoError(t, statErr, "source file should not be deleted when notify fails")
+	assert.True(t, os.IsNotExist(statErr), "source file should be deleted by Cleanup activity")
+
+	entries, readErr := os.ReadDir(outputDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "orphaned transcoded output should be removed when the import is skipped")
 }
