@@ -179,3 +179,24 @@ Generation command:
 ```
 ffmpeg -f lavfi -i "color=black:size=320x180:rate=24:duration=0.5" -c:v libx264 -crf 0 -y pkg/ffmpeg/testdata/video_all_black.mp4
 ```
+
+## video_shifted_ts.ts
+
+A 2 s 160x120 MPEG-TS clip whose container start time is 10001.4 s, with its audio stream starting 0.3 s after its video stream. It stands in for an off-air recording, which routinely begins at an arbitrary PTS rather than near zero. Used to regression-test that output timestamps are rebased onto a zero-based timeline: without the rebase the output inherits the source's start time, so a 2 s clip reports a duration of 10003.4 s, players show hours of nothing before the content, progress reporting is pinned at 100% from the first packet, and the transcode reuse check never matches. The deliberate 0.3 s gap between the streams is what makes the A/V sync assertion falsifiable — a per-stream offset would collapse both streams onto zero and pass a fixture whose streams start together.
+
+Generation command:
+
+```bash
+ffmpeg -y -i pkg/ffprobe/testdata/video.mp4 -itsoffset 0.3 -i pkg/ffprobe/testdata/video.mp4 \
+       -map 0:v:0 -map 1:a:0 -t 2 -vf scale=160:120 \
+       -c:v libx264 -preset veryslow -crf 32 -c:a aac -b:a 32k -ac 1 \
+       -output_ts_offset 10000 -f mpegts \
+       pkg/ffmpeg/testdata/video_shifted_ts.ts
+```
+
+The second input is the same file read with a 0.3 s input offset, which is what puts the audio stream behind the video one. `-output_ts_offset` then shifts the whole muxed timeline forward.
+
+- **Source**: [Big Buck Bunny](https://peach.blender.org/) by Blender Foundation
+- **License**: [Creative Commons Attribution 3.0 (CC BY 3.0)](https://creativecommons.org/licenses/by/3.0/)
+- **Copyright**: © 2008, Blender Foundation
+- **Attribution**: "Big Buck Bunny" by Blender Foundation (https://www.blender.org)

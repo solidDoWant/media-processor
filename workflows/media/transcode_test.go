@@ -1058,3 +1058,62 @@ func TestRunTranscode_ProgressLogging_CopyPathReports100Percent(t *testing.T) {
 
 	assert.InDelta(t, 100.0, percentComplete, 0.001, "copy/remux final log must report 100%% completion")
 }
+
+// testShiftedTSVideoPath points to an MPEG-TS clip whose container start time
+// is 10001.4 s, standing in for an off-air recording. See
+// pkg/ffmpeg/testdata/README.md.
+const testShiftedTSVideoPath = "../../pkg/ffmpeg/testdata/video_shifted_ts.ts"
+
+// TestRunTranscode_ShiftedSource_OutputIsReusedOnRerun verifies that a source
+// whose container start time is well above zero produces an output the reuse
+// check recognises, so reprocessing the same file skips the transcode instead
+// of redoing it.
+//
+// reuseExistingOutput reuses an existing output only when its duration is
+// within 1% of the source's. Before output timestamps were rebased to zero, the
+// output of a 2 s clip starting at 10001.4 s reported a duration of 10003.4 s,
+// which never matched — so every retry of an already-completed file re-ran the
+// full transcode.
+func TestRunTranscode_ShiftedSource_OutputIsReusedOnRerun(t *testing.T) {
+	src, err := os.ReadFile(testShiftedTSVideoPath)
+	require.NoError(t, err)
+
+	inputPath := filepath.Join(t.TempDir(), "recording.ts")
+	require.NoError(t, os.WriteFile(inputPath, src, 0o600))
+
+	sourceInfo, err := ffprobe.Probe(t.Context(), inputPath)
+	require.NoError(t, err)
+
+	outputDir := t.TempDir()
+	request := TranscodeRequest{
+		FilePath:  inputPath,
+		OutputDir: outputDir,
+		Probe: ProbeOutput{
+			IsValidMedia:    true,
+			VideoCodec:      "h264",
+			Format:          "mpegts",
+			DurationSeconds: sourceInfo.Duration.Seconds(),
+			AudioStreams:    []AudioStreamInfo{audioStreamInfo(1, "und", 1)},
+		},
+	}
+
+	first, err := RunTranscode(t.Context(), request)
+	require.NoError(t, err)
+	require.Equal(t, "hevc", first.DestCodec, "first run must transcode the source")
+
+	finalPath := filepath.Join(outputDir, mkvOutputName(inputPath))
+
+	transcoded, err := os.ReadFile(finalPath)
+	require.NoError(t, err)
+
+	second, err := RunTranscode(t.Context(), request)
+	require.NoError(t, err)
+
+	assert.Zero(t, second.TranscodeDurationSeconds,
+		"second run must reuse the existing output instead of re-transcoding it")
+	assert.Equal(t, "hevc", second.DestCodec, "reused output's codec should be reported")
+
+	rerunContents, err := os.ReadFile(finalPath)
+	require.NoError(t, err)
+	assert.Equal(t, transcoded, rerunContents, "reused output must be preserved byte-for-byte")
+}
