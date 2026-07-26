@@ -949,6 +949,8 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 		defer downmixPkt.Free()
 	}
 
+	rebase := newTimestampRebase(inputFmt)
+
 	for {
 		if err := inputFmt.ReadFrame(packet); err != nil {
 			if errors.Is(err, astiav.ErrEof) {
@@ -961,6 +963,12 @@ func (t *Transcoder) readAllPackets(ctx context.Context, inputFmt, outputFmt *as
 
 			return fmt.Errorf("ffmpeg: reading frame: %w", err)
 		}
+
+		// Shift the packet onto a zero-based timeline before anything else
+		// touches it, so that every downstream path — copy, encode, subtitle
+		// rewrite, downmix clone — and the progress calculation all work from
+		// the rebased timestamps. See timestampRebase.
+		rebase.apply(packet)
 
 		// If this packet feeds the downmix pipeline, clone it first so that
 		// the downmix decoder can rescale timestamps independently.

@@ -1198,6 +1198,184 @@ func TestTranscode_H265_VideoTimestampsValid(t *testing.T) {
 	}
 }
 
+// testShiftedTSSourcePath is a 2 s MPEG-TS clip whose container start time is
+// 10001.4 s, with its audio stream starting 0.3 s after its video stream. It
+// stands in for an off-air recording, which routinely opens at an arbitrary
+// PTS. See testdata/README.md for the regeneration procedure.
+const testShiftedTSSourcePath = "testdata/video_shifted_ts.ts"
+
+// timelineInfo captures the container-level timing a rebased output has to get
+// right: where the file starts, how long it runs, and where each stream starts
+// relative to the others. ffprobe.MediaInfo exposes none of the start times, so
+// these come from go-astiav directly.
+type timelineInfo struct {
+	startTime time.Duration
+	duration  time.Duration
+	// streamStarts holds each stream's start time keyed by media type. Both
+	// fixtures used here carry exactly one video and one audio stream.
+	streamStarts map[astiav.MediaType]time.Duration
+}
+
+// avOffset returns how far the audio stream starts after the video stream.
+func (ti timelineInfo) avOffset() time.Duration {
+	return ti.streamStarts[astiav.MediaTypeAudio] - ti.streamStarts[astiav.MediaTypeVideo]
+}
+
+// probeTimeline reads the container and per-stream timing of the media file at
+// path. Stream start times are rescaled from their own timebase into
+// microseconds so that sources and outputs with different timebases compare
+// directly.
+func probeTimeline(t *testing.T, path string) timelineInfo {
+	t.Helper()
+
+	fmtCtx := astiav.AllocFormatContext()
+	require.NotNil(t, fmtCtx, "failed to allocate format context")
+
+	defer fmtCtx.Free()
+
+	require.NoError(t, fmtCtx.OpenInput(path, nil, nil))
+	defer fmtCtx.CloseInput()
+
+	require.NoError(t, fmtCtx.FindStreamInfo(nil))
+
+	info := timelineInfo{
+		startTime:    time.Duration(fmtCtx.StartTime()) * time.Microsecond,
+		duration:     time.Duration(fmtCtx.Duration()) * time.Microsecond,
+		streamStarts: make(map[astiav.MediaType]time.Duration),
+	}
+
+	for _, stream := range fmtCtx.Streams() {
+		require.NotEqual(t, astiav.NoPtsValue, stream.StartTime(),
+			"stream %d in %s has no start time", stream.Index(), path)
+
+		micros := astiav.RescaleQ(stream.StartTime(), stream.TimeBase(), astiav.TimeBaseQ)
+		info.streamStarts[stream.CodecParameters().MediaType()] = time.Duration(micros) * time.Microsecond
+	}
+
+	return info
+}
+
+// TestTranscode_ShiftedSource_TimestampsRebasedToZero verifies that a source
+// whose container start time is well above zero produces an output on a
+// zero-based timeline whose duration reflects the real runtime, and that the
+// spacing between its streams survives the shift.
+//
+// Without the rebase the output inherits the source's start time, so a 2 s clip
+// starting at 10001.4 s reports a duration of 10003.4 s: players show hours of
+// nothing before the content and media servers index the bogus runtime.
+func TestTranscode_ShiftedSource_TimestampsRebasedToZero(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testShiftedTSSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	source := probeTimeline(t, testShiftedTSSourcePath)
+	transcoded := probeTimeline(t, output)
+
+	require.Greater(t, source.startTime, time.Hour,
+		"fixture must start well above zero for this test to mean anything")
+
+	assert.InDelta(t, 0, transcoded.startTime.Seconds(), 0.05,
+		"output must start at or near zero, got %s", transcoded.startTime)
+	assert.InEpsilon(t, source.duration.Seconds(), transcoded.duration.Seconds(), 0.01,
+		"output duration %s must be within 1%% of the source's %s", transcoded.duration, source.duration)
+
+	// A single shared offset preserves the gap between streams; a per-stream
+	// offset would collapse both onto zero and destroy A/V sync.
+	assert.InDelta(t, source.avOffset().Seconds(), transcoded.avOffset().Seconds(), 0.01,
+		"audio-to-video offset must be preserved: source %s, output %s",
+		source.avOffset(), transcoded.avOffset())
+}
+
+// TestTranscode_ZeroStartSource_TimestampsUnchanged verifies that a source
+// already on a zero-based timeline is left exactly as it was: the rebase offset
+// is zero for such a source, so no timestamp is touched.
+func TestTranscode_ZeroStartSource_TimestampsUnchanged(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+
+	err := ffmpeg.NewTranscode(testVideoPath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+
+	source := probeTimeline(t, testVideoPath)
+	transcoded := probeTimeline(t, output)
+
+	require.Zero(t, source.startTime, "fixture must already start at zero for this test to mean anything")
+
+	assert.Zero(t, transcoded.startTime, "output start time must be unchanged")
+
+	for _, mediaType := range []astiav.MediaType{astiav.MediaTypeVideo, astiav.MediaTypeAudio} {
+		assert.Equal(t, source.streamStarts[mediaType], transcoded.streamStarts[mediaType],
+			"%s stream start time must be unchanged", mediaType)
+	}
+}
+
+// TestTranscode_ShiftedSource_ProgressIsNotPinnedAt100 verifies that progress
+// reporting tracks a shifted source's real position in the file.
+//
+// sendProgress divides a packet's PTS by the input's duration, so before the
+// rebase the very first packet of a source starting at 10001.4 s already
+// exceeded the duration and every update was clamped to 100%, making the
+// operator-facing progress signal useless for this class of source.
+func TestTranscode_ShiftedSource_ProgressIsNotPinnedAt100(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "out.mkv")
+	progressCh := make(chan ffmpeg.Progress, 4096)
+
+	err := ffmpeg.NewTranscode(testShiftedTSSourcePath, output).
+		ToVideoCodec(ffmpeg.CodecH265).
+		ToContainer(ffmpeg.ContainerMKV).
+		WithProgressChan(progressCh).
+		Build().
+		Run(t.Context())
+	require.NoError(t, err)
+	close(progressCh)
+
+	var updates []ffmpeg.Progress
+	for update := range progressCh {
+		updates = append(updates, update)
+	}
+
+	require.NotEmpty(t, updates, "must receive at least one progress update")
+
+	// The fixture's audio stream starts 0.3 s into a 2 s clip, so its first
+	// packet legitimately reports 15%. What matters is that the first update
+	// reflects where that packet actually sits rather than the 100% clamp.
+	assert.Less(t, updates[0].PercentComplete, float64(25),
+		"first progress update must report its packet's real position, got %.2f%%", updates[0].PercentComplete)
+
+	minSeen, maxSeen, nearComplete := 100.0, 0.0, 0
+
+	for _, update := range updates {
+		assert.GreaterOrEqual(t, update.PercentComplete, float64(0))
+		assert.LessOrEqual(t, update.PercentComplete, float64(100))
+
+		minSeen = min(minSeen, update.PercentComplete)
+		maxSeen = max(maxSeen, update.PercentComplete)
+
+		if update.PercentComplete >= 90 {
+			nearComplete++
+		}
+	}
+
+	assert.Less(t, minSeen, float64(5),
+		"progress must start at the beginning of the timeline, lowest reading was %.2f%%", minSeen)
+	assert.GreaterOrEqual(t, maxSeen, float64(90),
+		"progress must climb to near completion, peaked at %.2f%%", maxSeen)
+
+	// Only the tail of the run should be reporting the file as good as
+	// finished. Before the rebase every single update read 100%.
+	assert.Less(t, nearComplete, len(updates)/4,
+		"%d of %d updates reported at least 90%% — progress is sitting at the clamp rather than climbing",
+		nearComplete, len(updates))
+}
+
 // TestGetHardwareEncoder_ValidResult verifies that GetHardwareEncoder returns
 // only valid HWAccel constants for each supported codec. The test is
 // self-adapting: it passes whether or not hardware is present (HWAccelNone is
