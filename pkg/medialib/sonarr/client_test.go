@@ -60,6 +60,12 @@ type sonarrTestServerConfig struct {
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
 	onParse func(t *testing.T, r *http.Request)
+	// parseByTitle, when set, picks the /api/v3/parse response by the title
+	// query parameter. Titles not in the map get an empty (unparseable)
+	// response. Takes priority over parseResp.
+	parseByTitle map[string]*sonarrlib.ParseOutput
+	// onQueueDelete is called with the request when DELETE /api/v3/queue/{id} is hit.
+	onQueueDelete func(t *testing.T, r *http.Request)
 }
 
 func newSonarrTestServer(t *testing.T, parseResp *sonarrlib.ParseOutput) *httptest.Server {
@@ -77,8 +83,24 @@ func newSonarrTestServerWithConfig(t *testing.T, cfg sonarrTestServerConfig) *ht
 			cfg.onParse(t, r)
 		}
 
+		resp := cfg.parseResp
+		if cfg.parseByTitle != nil {
+			resp = cfg.parseByTitle[r.URL.Query().Get("title")]
+			if resp == nil {
+				resp = &sonarrlib.ParseOutput{}
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	})
+
+	mux.HandleFunc("/api/v3/queue/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && cfg.onQueueDelete != nil {
+			cfg.onQueueDelete(t, r)
+		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, r *http.Request) {
@@ -584,10 +606,12 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 	const expectedSize int64 = 12345
 
-	// An empty ParseOutput makes Sonarr's /parse report no episode — the
-	// episode is no longer in the library.
+	// Sonarr parses the release but matches no series: the series is no
+	// longer in the library.
 	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
-		parseResp:            &sonarrlib.ParseOutput{},
+		parseResp: &sonarrlib.ParseOutput{
+			ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{SeriesTitle: "Breaking Bad", SeasonNumber: 1, EpisodeNumbers: []int{1}},
+		},
 		commandStatuses:      []string{"completed"},
 		commandResult:        "unsuccessful",
 		commandStatusMessage: "no eligible files",
@@ -911,4 +935,173 @@ func TestGetInfo_ErrNotFoundSentinel(t *testing.T) {
 
 	_, err := client.GetInfo(t.Context(), "/no/such/file.mkv")
 	require.True(t, errors.Is(err, medialib.ErrNotFound), "expected ErrNotFound, got %v", err)
+}
+
+// obfuscatedEpisode is a release whose file has an obfuscated name. Sonarr
+// can't parse the file name, but the release folder name and the queue entry
+// both identify the episode.
+const (
+	obfuscatedRelease = "Fargo.S05E10.Bisquik.2160p.HULU.WEB-DL.DDP5.1.H.265-NTb"
+	obfuscatedPath    = "/mnt/complete/" + obfuscatedRelease + "/xumq7TyZCqJpYDTTnZkk.mkv"
+)
+
+func obfuscatedReleaseParse() map[string]*sonarrlib.ParseOutput {
+	return map[string]*sonarrlib.ParseOutput{
+		obfuscatedRelease: {
+			Title:             "Fargo",
+			ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{SeriesTitle: "Fargo", SeasonNumber: 5, EpisodeNumbers: []int{10}},
+			Episodes:          []*sonarrlib.Episode{{ID: 1964, SeriesID: 7, SeasonNumber: 5, EpisodeNumber: 10, Title: "Bisquik"}},
+		},
+	}
+}
+
+// TestImportByFilePath_ObfuscatedFileUsesQueueEntryForItsFolder verifies that
+// a file with an unparseable name is still tied to its download: the queue
+// entry whose output folder contains the file supplies the download client ID,
+// even when no name parses at all.
+func TestImportByFilePath_ObfuscatedFileUsesQueueEntryForItsFolder(t *testing.T) {
+	var gotCmd struct {
+		DownloadClientId string `json:"downloadClientId"`
+	}
+
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+		parseByTitle: map[string]*sonarrlib.ParseOutput{},
+		queueResp: &sonarrlib.Queue{TotalRecords: 2, Records: []*sonarrlib.QueueRecord{
+			{ID: 1, EpisodeID: 50, DownloadID: "nzb-other", OutputPath: "/mnt/complete/Other.Show.S01E01-GRP", TrackedDownloadState: "importPending"},
+			{ID: 2, EpisodeID: 1964, DownloadID: "nzb-fargo", OutputPath: "/mnt/complete/" + obfuscatedRelease, TrackedDownloadState: "importPending"},
+		}},
+		onCommand: func(t *testing.T, r *http.Request) {
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
+		},
+	})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	require.NoError(t, client.ImportByFilePath(t.Context(), obfuscatedPath, 0))
+	assert.Equal(t, "nzb-fargo", gotCmd.DownloadClientId)
+}
+
+// TestImportByFilePath_UnparseableFileIsNotTreatedAsNotInLibrary verifies that
+// when an import finds nothing and neither the file name nor the folder name
+// parses, the result is an ordinary failure, not medialib.ErrNotFound. An
+// unparseable name says nothing about the library, and ErrNotFound makes the
+// caller skip the import and delete the transcoded file.
+func TestImportByFilePath_UnparseableFileIsNotTreatedAsNotInLibrary(t *testing.T) {
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+		parseByTitle:         map[string]*sonarrlib.ParseOutput{},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), "/mnt/complete/abc123/xumq7TyZCqJpYDTTnZkk.mkv", 12345)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, medialib.ErrNotFound)
+	assert.NotErrorIs(t, err, medialib.ErrNotUpgrade)
+}
+
+// TestImportByFilePath_QueuedDownloadIsNeverNotInLibrary verifies that when the
+// file belongs to a download in Sonarr's queue, a failed import is never
+// reported as "not in the library", even if the release name parses to a
+// series Sonarr doesn't know. A queue entry always refers to a library episode;
+// the parser being wrong must not cause the output to be deleted.
+func TestImportByFilePath_QueuedDownloadIsNeverNotInLibrary(t *testing.T) {
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+		parseResp: &sonarrlib.ParseOutput{
+			ParsedEpisodeInfo: &sonarrlib.ParsedEpisodeInfo{SeriesTitle: "Fargo 2026", SeasonNumber: 5, EpisodeNumbers: []int{10}},
+		},
+		queueResp: &sonarrlib.Queue{TotalRecords: 1, Records: []*sonarrlib.QueueRecord{
+			{ID: 2, EpisodeID: 1964, DownloadID: "nzb-fargo", OutputPath: "/mnt/complete/" + obfuscatedRelease, TrackedDownloadState: "importPending"},
+		}},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), obfuscatedPath, 12345)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, medialib.ErrNotFound)
+}
+
+// TestGetInfo_FallsBackToFolderName verifies that a file with an unparseable
+// name is identified from its release folder name.
+func TestGetInfo_FallsBackToFolderName(t *testing.T) {
+	srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{parseByTitle: obfuscatedReleaseParse()})
+	t.Cleanup(srv.Close)
+
+	client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key"})
+
+	info, err := client.GetInfo(t.Context(), obfuscatedPath)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1964), info.GetID())
+	assert.Equal(t, 5, info.GetSeasonNumber())
+	assert.Equal(t, 10, info.GetEpisodeNumber())
+}
+
+// TestImportByFilePath_NotUpgradeRemovesQueueEntry verifies what happens to
+// Sonarr's queue when an import is skipped as "not an upgrade". The transcoded
+// file is deleted afterwards, so a queue entry left behind would stay stuck
+// forever. A single-episode download is removed from the queue, keeping the
+// download client's copy and without blocklisting. A multi-episode download
+// (season pack) is left alone, because removing it would drop the other
+// episodes too.
+func TestImportByFilePath_NotUpgradeRemovesQueueEntry(t *testing.T) {
+	fargoRecord := func(id, episodeID int64) *sonarrlib.QueueRecord {
+		return &sonarrlib.QueueRecord{
+			ID: id, EpisodeID: episodeID, DownloadID: "nzb-fargo",
+			OutputPath: "/mnt/complete/" + obfuscatedRelease, TrackedDownloadState: "importPending",
+		}
+	}
+
+	tests := []struct {
+		name        string
+		records     []*sonarrlib.QueueRecord
+		wantDeleted bool
+	}{
+		{name: "single-episode download is removed", records: []*sonarrlib.QueueRecord{fargoRecord(2, 1964)}, wantDeleted: true},
+		{name: "season pack is left alone", records: []*sonarrlib.QueueRecord{fargoRecord(2, 1964), fargoRecord(3, 1965)}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var deletes []*http.Request
+
+			srv := newSonarrTestServerWithConfig(t, sonarrTestServerConfig{
+				parseByTitle: obfuscatedReleaseParse(),
+				queueResp:    &sonarrlib.Queue{TotalRecords: len(test.records), Records: test.records},
+				manualImport: []*sonarrlib.ManualImportOutput{{
+					Path:       obfuscatedPath,
+					Rejections: []*sonarrlib.Rejection{{Reason: "Not an upgrade for existing episode file(s)", Type: "permanent"}},
+				}},
+				commandStatuses: []string{"completed"},
+				commandResult:   "unsuccessful",
+				onQueueDelete: func(_ *testing.T, r *http.Request) {
+					deletes = append(deletes, r)
+				},
+			})
+			t.Cleanup(srv.Close)
+
+			client := sonarr.New(sonarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+			err := client.ImportByFilePath(t.Context(), obfuscatedPath, 12345)
+			require.ErrorIs(t, err, medialib.ErrNotUpgrade)
+
+			if !test.wantDeleted {
+				assert.Empty(t, deletes)
+				return
+			}
+
+			require.Len(t, deletes, 1)
+			assert.Equal(t, "/api/v3/queue/2", deletes[0].URL.Path)
+			assert.Equal(t, "false", deletes[0].URL.Query().Get("removeFromClient"))
+			assert.NotEqual(t, "true", deletes[0].URL.Query().Get("blocklist"))
+		})
+	}
 }
