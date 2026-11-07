@@ -28,7 +28,10 @@ const fastPollInterval = time.Millisecond
 
 // parseResponse mirrors the shape of Radarr's /api/v3/parse response.
 type parseResponse struct {
-	Movie *radarrlib.Movie `json:"movie"`
+	// ParsedMovieInfo is non-nil when Radarr could parse the title as a
+	// release. Only its presence matters to the client.
+	ParsedMovieInfo *struct{}        `json:"parsedMovieInfo,omitempty"`
+	Movie           *radarrlib.Movie `json:"movie"`
 }
 
 // testServerConfig holds configuration for test HTTP servers.
@@ -59,6 +62,14 @@ type testServerConfig struct {
 	onCommand func(t *testing.T, r *http.Request)
 	// onParse is called with the raw parse request when /api/v3/parse is hit.
 	onParse func(t *testing.T, r *http.Request)
+	// parseByTitle, when set, picks the /api/v3/parse response by the title
+	// query parameter. Titles not in the map get an empty (unparseable)
+	// response. Takes priority over parseResp.
+	parseByTitle map[string]*parseResponse
+	// queueRecords is the single-page queue returned by GET /api/v3/queue.
+	queueRecords []*radarrlib.QueueRecord
+	// onQueueDelete is called with the request when DELETE /api/v3/queue/{id} is hit.
+	onQueueDelete func(t *testing.T, r *http.Request)
 }
 
 func newTestServer(t *testing.T, parseResp *parseResponse) *httptest.Server {
@@ -76,8 +87,24 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 			cfg.onParse(t, r)
 		}
 
+		resp := cfg.parseResp
+		if cfg.parseByTitle != nil {
+			resp = cfg.parseByTitle[r.URL.Query().Get("title")]
+			if resp == nil {
+				resp = &parseResponse{}
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(cfg.parseResp))
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	})
+
+	mux.HandleFunc("/api/v3/queue/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && cfg.onQueueDelete != nil {
+			cfg.onQueueDelete(t, r)
+		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +155,13 @@ func newTestServerWithConfig(t *testing.T, cfg testServerConfig) *httptest.Serve
 
 	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.Queue{Records: []*radarrlib.QueueRecord{}}))
+
+		records := cfg.queueRecords
+		if records == nil {
+			records = []*radarrlib.QueueRecord{}
+		}
+
+		require.NoError(t, json.NewEncoder(w).Encode(&radarrlib.Queue{TotalRecords: len(records), Records: records}))
 	})
 
 	mux.HandleFunc("/api/v3/manualimport", func(w http.ResponseWriter, r *http.Request) {
@@ -376,10 +409,10 @@ func TestImportByFilePath_UnsuccessfulRecoversOnSizeMatch(t *testing.T) {
 func TestImportByFilePath_NotInLibraryReturnsNotFound(t *testing.T) {
 	const expectedSize int64 = 67890
 
-	// parseResp with a nil movie makes Radarr's /parse report no match — the
-	// movie is no longer in the library.
+	// Radarr parses the release but matches no movie: the movie is no longer
+	// in the library.
 	srv := newTestServerWithConfig(t, testServerConfig{
-		parseResp:            &parseResponse{Movie: nil},
+		parseResp:            &parseResponse{ParsedMovieInfo: &struct{}{}},
 		commandStatuses:      []string{"completed"},
 		commandResult:        "unsuccessful",
 		commandStatusMessage: "no eligible files",
@@ -696,4 +729,127 @@ func TestGetInfo_ErrNotFoundSentinel(t *testing.T) {
 
 	_, err := client.GetInfo(t.Context(), "/no/such/file.mkv")
 	require.True(t, errors.Is(err, medialib.ErrNotFound), "expected ErrNotFound, got %v", err)
+}
+
+// A movie release whose file has an obfuscated name and whose folder name
+// Radarr mis-parses (the doubled year makes it look for "Resident Evil 2026").
+const (
+	misparsedRelease = "Resident.Evil.2026.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-KyoGo-4P"
+	misparsedPath    = "/mnt/complete/" + misparsedRelease + "/JA46YvUcxnLC.mkv"
+)
+
+func misparsedReleaseParse() map[string]*parseResponse {
+	return map[string]*parseResponse{misparsedRelease: {ParsedMovieInfo: &struct{}{}}}
+}
+
+func residentEvilRecord(id int64) *radarrlib.QueueRecord {
+	return &radarrlib.QueueRecord{
+		ID: id, MovieID: 42, DownloadID: "nzb-re", OutputPath: "/mnt/complete/" + misparsedRelease,
+		TrackedDownloadState: "importPending",
+	}
+}
+
+// TestImportByFilePath_UsesQueueEntryForTheFilesFolder verifies that the
+// download client ID comes from the queue entry whose output folder contains
+// the file, even when neither the file name nor the folder name identifies
+// the movie.
+func TestImportByFilePath_UsesQueueEntryForTheFilesFolder(t *testing.T) {
+	var gotCmd struct {
+		DownloadClientId string `json:"downloadClientId"`
+	}
+
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseByTitle: misparsedReleaseParse(),
+		queueRecords: []*radarrlib.QueueRecord{
+			{ID: 1, MovieID: 7, DownloadID: "nzb-other", OutputPath: "/mnt/complete/Other.Movie.2020", TrackedDownloadState: "importPending"},
+			residentEvilRecord(2),
+		},
+		onCommand: func(t *testing.T, r *http.Request) {
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&gotCmd))
+		},
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	require.NoError(t, client.ImportByFilePath(t.Context(), misparsedPath, 0))
+	assert.Equal(t, "nzb-re", gotCmd.DownloadClientId)
+}
+
+// TestImportByFilePath_QueuedDownloadIsNeverNotInLibrary verifies that when the
+// file belongs to a download in Radarr's queue, a failed import is never
+// reported as "not in the library", even though the folder name parses to a
+// movie Radarr doesn't know. A queue entry always refers to a library movie;
+// the parser being wrong must not cause the output to be deleted.
+func TestImportByFilePath_QueuedDownloadIsNeverNotInLibrary(t *testing.T) {
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseByTitle:         misparsedReleaseParse(),
+		queueRecords:         []*radarrlib.QueueRecord{residentEvilRecord(2)},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), misparsedPath, 12345)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, medialib.ErrNotFound)
+}
+
+// TestImportByFilePath_UnparseableFileIsNotTreatedAsNotInLibrary verifies that
+// when an import finds nothing and neither the file name nor the folder name
+// parses, the result is an ordinary failure, not medialib.ErrNotFound. An
+// unparseable name says nothing about the library, and ErrNotFound makes the
+// caller skip the import and delete the transcoded file.
+func TestImportByFilePath_UnparseableFileIsNotTreatedAsNotInLibrary(t *testing.T) {
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseByTitle:         map[string]*parseResponse{},
+		commandStatuses:      []string{"completed"},
+		commandResult:        "unsuccessful",
+		commandStatusMessage: "no eligible files",
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), "/mnt/complete/abc123/JA46YvUcxnLC.mkv", 12345)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, medialib.ErrNotFound)
+	assert.NotErrorIs(t, err, medialib.ErrNotUpgrade)
+}
+
+// TestImportByFilePath_NotUpgradeRemovesQueueEntry verifies that when an import
+// is skipped as "not an upgrade", the download is removed from Radarr's queue.
+// The transcoded file is deleted afterwards, so a queue entry left behind would
+// stay stuck forever. The download client's copy is kept (torrents keep
+// seeding) and the release is not blocklisted.
+func TestImportByFilePath_NotUpgradeRemovesQueueEntry(t *testing.T) {
+	var deletes []*http.Request
+
+	srv := newTestServerWithConfig(t, testServerConfig{
+		parseByTitle: misparsedReleaseParse(),
+		queueRecords: []*radarrlib.QueueRecord{residentEvilRecord(2)},
+		manualImport: []*radarrlib.ManualImportOutput{{
+			Path:       misparsedPath,
+			Rejections: []*radarrlib.Rejection{{Reason: "Not a Custom Format upgrade for existing movie file(s)", Type: "permanent"}},
+		}},
+		commandStatuses: []string{"completed"},
+		commandResult:   "unsuccessful",
+		onQueueDelete: func(_ *testing.T, r *http.Request) {
+			deletes = append(deletes, r)
+		},
+	})
+	t.Cleanup(srv.Close)
+
+	client := radarr.New(radarr.Config{URL: srv.URL, APIKey: "test-key", CommandPollInterval: fastPollInterval})
+
+	err := client.ImportByFilePath(t.Context(), misparsedPath, 12345)
+	require.ErrorIs(t, err, medialib.ErrNotUpgrade)
+
+	require.Len(t, deletes, 1)
+	assert.Equal(t, "/api/v3/queue/2", deletes[0].URL.Path)
+	assert.Equal(t, "false", deletes[0].URL.Query().Get("removeFromClient"))
+	assert.NotEqual(t, "true", deletes[0].URL.Query().Get("blocklist"))
 }

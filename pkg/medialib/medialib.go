@@ -158,9 +158,11 @@ type ArrLibrary interface {
 	// because the arr service's own completed-download handler raced our
 	// scan). A non-positive expectedSize disables the post-check.
 	//
-	// Returns ErrNotFound when the scan reports no successful imports and the
-	// media item is no longer in the library (removed or no longer monitored),
-	// so the import can never succeed. Returns ErrNotUpgrade when the scan
+	// Returns ErrNotFound when the scan reports no successful imports, the arr
+	// has no queue entry for the download, and the release name parses but
+	// matches nothing in the library (removed or no longer monitored), so the
+	// import can never succeed. A name that can't be parsed at all is not
+	// reported as ErrNotFound: that says nothing about the library. Returns ErrNotUpgrade when the scan
 	// reports no successful imports because the library already holds an equal
 	// or better file (the release was rejected as "not an upgrade"). Callers
 	// should treat both as a benign skip rather than a retryable failure.
