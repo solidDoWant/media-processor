@@ -1,0 +1,28 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  description: "Approval gates and version holds for what Renovate can't regenerate",
+  packageRules: [
+    {
+      description: "Major updates wait for a Dependency Dashboard checkbox",
+      matchUpdateTypes: ["major"],
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: "This repository's own images (the chart's watcher image is tagged from the chart's appVersion)",
+      matchDatasources: ["docker"],
+      matchPackageNames: ["ghcr.io/soliddowant/**"],
+      enabled: false,
+    },
+    {
+      description: "No digest pins: flake.lock already pins nixpkgs, and a preset ref can't carry both tag and SHA",
+      matchManagers: ["nix", "renovate-config"],
+      pinDigests: false,
+    },
+    {
+      description: "The Go toolchain comes from nixpkgs (go_1_26 in flake.nix); a go/toolchain bump past it breaks the Nix build",
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang", "toolchain"],
+      enabled: false,
+    },
+  ],
+}
