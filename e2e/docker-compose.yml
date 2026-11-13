@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18
+    image: postgres:18@sha256:b9f6b8ff03b62f3cfd9d9ba3fe56226a9991c79d3fb46fd46536263bf02be553
     hostname: postgres
     environment:
       POSTGRES_USER: temporal
@@ -218,7 +218,7 @@ services:
         condition: service_completed_successfully
 
   radarr:
-    image: ghcr.io/home-operations/radarr:6.1.2
+    image: ghcr.io/home-operations/radarr:6.1.2@sha256:9967e56263a3c67eeaede5824103ee4c1c1f1511abd5965ac1e294bfd9b76dbb
     # Run as the host user so volume-mounted directories are owned by the
     # current user and can be cleaned up without requiring elevated privileges.
     user: "${UID}:${GID}"
@@ -235,7 +235,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   sonarr:
-    image: ghcr.io/home-operations/sonarr:4.0.17
+    image: ghcr.io/home-operations/sonarr:4.0.17@sha256:1989718e9fceb3fd35b4e73f61696c68f8959b8f09981cf137fdef8e6338b85f
     # Run as the host user so volume-mounted directories are owned by the
     # current user and can be cleaned up without requiring elevated privileges.
     user: "${UID}:${GID}"
