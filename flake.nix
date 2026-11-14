@@ -8,7 +8,7 @@
     # in the public binary cache at this revision — no local compilation needed.
     # To upgrade: verify intel-gmmlib-22.10.0 works first, then run nix flake update.
     # Test command for QSV support: `ffmpeg -f lavfi -i testsrc -c:v h264_qsv -t 1 -f null -`
-    nixpkgs.url = "github:NixOS/nixpkgs/6214c690786d058d96962a791bf6d39c8c0276cf";
+    nixpkgs.url = "github:NixOS/nixpkgs/19cb7128c50d099ae56dbc3e8b6a821b1c382249";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
