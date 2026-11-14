@@ -218,7 +218,7 @@ services:
         condition: service_completed_successfully
 
   radarr:
-    image: ghcr.io/home-operations/radarr:6.1.2
+    image: ghcr.io/home-operations/radarr:6.4.4@sha256:1902ad2c08e9bac276ff9a1429af2eaa2f3c635a51f138f1b3eb734995171537
     # Run as the host user so volume-mounted directories are owned by the
     # current user and can be cleaned up without requiring elevated privileges.
     user: "${UID}:${GID}"
