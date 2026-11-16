@@ -17,7 +17,7 @@ services:
       start_period: 30s
 
   temporal-setup:
-    image: temporalio/admin-tools:1.31.0
+    image: temporalio/admin-tools:1.32.2@sha256:4a95866efba29d7e17ab012df5232795e8b0ad0f7d5f9d1ec4df321f7792a754
     restart: "on-failure:6"
     environment:
       DB: postgres12
@@ -35,7 +35,7 @@ services:
         condition: service_healthy
 
   temporal:
-    image: temporalio/server:1.31.0
+    image: temporalio/server:1.32.2@sha256:7bf69188a6232fea14869b9cef3d94aa82a1601d99517f7e86c71f22da4e0670
     restart: on-failure
     environment:
       DB: postgres12
@@ -60,7 +60,7 @@ services:
       retries: 60
 
   temporal-create-namespace:
-    image: temporalio/admin-tools:1.31.0
+    image: temporalio/admin-tools:1.32.2@sha256:4a95866efba29d7e17ab012df5232795e8b0ad0f7d5f9d1ec4df321f7792a754
     restart: "on-failure:5"
     environment:
       TEMPORAL_ADDRESS: temporal:7233
